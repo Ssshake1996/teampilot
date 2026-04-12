@@ -544,12 +544,13 @@ onMounted(loadProjects)
 .sl { font-size: 11px; color: #909399; margin-top: 2px; }
 
 .ptree { display: flex; flex-direction: column; gap: 2px; }
-.pblock { background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+.pblock { background: #fff; border-radius: 6px; overflow-x: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
 
 /* Grid: 8 columns */
 .prow, .trow, .thead {
   display: grid;
-  grid-template-columns: 32px minmax(120px,1fr) minmax(60px,0.6fr) 80px 42px 90px 96px 156px;
+  grid-template-columns: 32px 1fr 120px 80px 46px 90px 112px 130px;
+  min-width: 900px;
   align-items: center; padding: 0 8px; min-height: 40px; gap: 2px;
 }
 .prow { background: #fafbfc; border-left: 4px solid #409EFF; cursor: pointer; min-height: 48px; }
@@ -581,7 +582,7 @@ onMounted(loadProjects)
 .ptxt { font-size: 10px; color: #909399; white-space: nowrap; margin-left: 4px; }
 .col-dl { font-size: 11px; color: #909399; }
 .col-act { font-size: 11px; }
-.col-act.center { text-align: center; display: flex; align-items: center; justify-content: center; gap: 2px; }
+.col-act.center { text-align: center; display: flex; align-items: center; justify-content: center; gap: 2px; white-space: nowrap; flex-wrap: nowrap; }
 .ovd { color: #F56C6C !important; font-weight: 600; }
 
 /* Inline controls */
@@ -594,7 +595,7 @@ onMounted(loadProjects)
 .ihrs :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0; }
 .ihrs :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
 .ihrs :deep(.el-input__inner) { font-size: 11px; text-align: center; }
-.idl { width: 92px; }
+.idl { width: 108px; }
 .idl :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0 2px; }
 .idl :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
 .idl :deep(.el-input__inner) { font-size: 11px; }
