@@ -30,6 +30,7 @@ const subtaskParent = ref<{ id: string; title: string; projectId: string } | nul
 const subtaskForm = ref({ title: '', description: '', assignee_id: '', estimated_hours: null as number | null, deadline: '' })
 const creatingSubtask = ref(false)
 const aiEstimating = ref(false)
+const aiStatusMsg = ref('')
 const aiRecommendations = ref<{ user_id: string; name: string; score: number; reason: string }[]>([])
 const aiEstimateInfo = ref<{ estimated_hours: number; reasoning: string; confidence: string } | null>(null)
 
@@ -187,17 +188,23 @@ async function handleAiEstimate() {
   if (!subtaskForm.value.title.trim()) { ElMessage.warning('请先输入任务标题'); return }
   if (!subtaskParent.value) return
   aiEstimating.value = true
+  aiStatusMsg.value = '正在启动 AI 分析...'
   try {
-    const res = await aiApi.estimateTask(subtaskParent.value.projectId, subtaskForm.value.title, subtaskForm.value.description)
-    const data = res.data as any
+    const data = await aiApi.estimateTask(
+      subtaskParent.value.projectId,
+      subtaskForm.value.title,
+      subtaskForm.value.description,
+      (msg: string) => { aiStatusMsg.value = msg },
+    )
     aiEstimateInfo.value = { estimated_hours: data.estimated_hours, reasoning: data.reasoning, confidence: data.confidence }
     aiRecommendations.value = data.recommended_assignees || []
-    // Auto-fill
     if (data.estimated_hours && !subtaskForm.value.estimated_hours) {
       subtaskForm.value.estimated_hours = data.estimated_hours
     }
+    aiStatusMsg.value = ''
     ElMessage.success('AI 分析完成')
   } catch {
+    aiStatusMsg.value = ''
     ElMessage.error('AI 分析失败，请检查 AI 配置')
   } finally {
     aiEstimating.value = false
@@ -421,9 +428,12 @@ onMounted(loadProjects)
           <el-input v-model="subtaskForm.description" type="textarea" :rows="2" placeholder="简要描述任务内容(可选,有助于 AI 更准确推荐)" />
         </el-form-item>
         <el-form-item>
-          <el-button type="warning" :loading="aiEstimating" @click="handleAiEstimate" :disabled="!subtaskForm.title.trim()">
-            AI 推荐人选 + 预估工时
-          </el-button>
+          <div class="ai-action-row">
+            <el-button type="warning" :loading="aiEstimating" @click="handleAiEstimate" :disabled="!subtaskForm.title.trim()">
+              AI 推荐人选 + 预估工时
+            </el-button>
+            <span v-if="aiStatusMsg" class="ai-status-text">{{ aiStatusMsg }}</span>
+          </div>
         </el-form-item>
 
         <!-- AI Recommendations -->
@@ -575,4 +585,8 @@ onMounted(loadProjects)
 .rec-rank { font-weight: 700; color: #e6a23c; font-size: 13px; }
 .rec-name { font-weight: 500; font-size: 13px; }
 .rec-reason { font-size: 12px; color: #909399; width: 100%; margin: 2px 0; }
+
+.ai-action-row { display: flex; align-items: center; gap: 12px; }
+.ai-status-text { font-size: 13px; color: #e6a23c; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 </style>

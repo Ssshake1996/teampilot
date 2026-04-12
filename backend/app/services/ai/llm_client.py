@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import AsyncIterator
 
 import httpx
 
@@ -24,33 +25,79 @@ class LLMClient:
         self.temperature = temperature
         self._http = httpx.AsyncClient(timeout=180.0)
 
+    def _build_payload(self, messages: list[dict], stream: bool = False, **kwargs) -> dict:
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "temperature": kwargs.get("temperature", self.temperature),
+        }
+        if stream:
+            payload["stream"] = True
+        return payload
+
+    def _headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
     async def chat(self, messages: list[dict], **kwargs) -> str:
-        """Send a chat completion request. Returns the assistant content."""
+        """Non-streaming chat. Returns the assistant content."""
         resp = await self._http.post(
             f"{self.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "messages": messages,
-                "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-                "temperature": kwargs.get("temperature", self.temperature),
-            },
+            headers=self._headers(),
+            json=self._build_payload(messages, **kwargs),
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
+    async def chat_stream(self, messages: list[dict], **kwargs) -> AsyncIterator[str]:
+        """Streaming chat. Yields content delta strings as they arrive."""
+        async with self._http.stream(
+            "POST",
+            f"{self.base_url}/chat/completions",
+            headers=self._headers(),
+            json=self._build_payload(messages, stream=True, **kwargs),
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data.strip() == "[DONE]":
+                    return
+                try:
+                    chunk = json.loads(data)
+                    delta = chunk["choices"][0].get("delta", {})
+                    # Only yield actual content, skip reasoning_content (thinking)
+                    content = delta.get("content")
+                    if content:
+                        yield content
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
+
+    async def chat_stream_collect(self, messages: list[dict], **kwargs) -> str:
+        """Streaming chat that collects all content into a single string.
+        Benefit: keeps the connection alive as long as tokens flow,
+        no fixed timeout risk."""
+        parts = []
+        async for chunk in self.chat_stream(messages, **kwargs):
+            parts.append(chunk)
+        return "".join(parts)
+
     async def chat_json(self, messages: list[dict], **kwargs) -> dict:
-        """Chat expecting a JSON response. Parses from markdown fences if needed."""
-        content = await self.chat(messages, **kwargs)
-        # Try direct JSON parse
+        """Chat expecting JSON. Uses streaming internally to avoid timeout."""
+        content = await self.chat_stream_collect(messages, **kwargs)
+        return self._parse_json(content)
+
+    @staticmethod
+    def _parse_json(content: str) -> dict:
+        """Parse JSON from LLM output, handling markdown fences."""
         try:
             return json.loads(content)
         except json.JSONDecodeError:
             pass
-        # Try extracting from ```json ... ``` fences
         if "```json" in content:
             start = content.index("```json") + 7
             end = content.index("```", start)
@@ -62,7 +109,6 @@ class LLMClient:
         raise ValueError(f"Could not parse JSON from LLM response: {content[:200]}")
 
     async def test_connection(self) -> bool:
-        """Test if the API endpoint is reachable and configured correctly."""
         try:
             result = await self.chat(
                 [{"role": "user", "content": "Say 'OK' and nothing else."}],

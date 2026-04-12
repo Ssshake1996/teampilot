@@ -179,10 +179,13 @@ async function saveSkills(updatedSkills: UserSkill[]) {
   }
 }
 
+const aiStatusMsg = ref('')
+
 async function analyzeCapability() {
   analyzing.value = true
+  aiStatusMsg.value = '正在启动...'
   try {
-    await aiApi.analyzeCapability(userId.value)
+    await aiApi.analyzeCapability(userId.value, (msg: string) => { aiStatusMsg.value = msg })
     ElMessage.success('AI 能力分析已完成')
     const capRes = await capabilitiesApi.get(userId.value)
     capability.value = capRes.data
@@ -190,6 +193,7 @@ async function analyzeCapability() {
     ElMessage.error('AI 能力分析失败，请稍后重试')
   } finally {
     analyzing.value = false
+    aiStatusMsg.value = ''
   }
 }
 
@@ -217,13 +221,10 @@ onMounted(() => {
             </div>
           </div>
           <div class="profile-actions">
-            <el-button
-              type="primary"
-              :loading="analyzing"
-              @click="analyzeCapability"
-            >
+            <el-button type="primary" :loading="analyzing" @click="analyzeCapability">
               AI 能力分析
             </el-button>
+            <div v-if="aiStatusMsg" class="ai-status-text">{{ aiStatusMsg }}</div>
           </div>
         </div>
       </el-card>
@@ -389,7 +390,17 @@ onMounted(() => {
 
 .profile-actions {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
 }
+.ai-status-text {
+  font-size: 13px;
+  color: #e6a23c;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 .stats-row {
   display: grid;
