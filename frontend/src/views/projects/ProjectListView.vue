@@ -66,9 +66,8 @@ async function archiveProject(projectId: string) {
   }
 }
 
-function toggleArchived() {
-  showArchived.value = !showArchived.value
-  // Clear cached trees
+function onArchivedChange() {
+  // v-model already toggled the value, just refresh
   taskTrees.value = {}
   expandedProjects.value.clear()
   loadProjects()
@@ -263,7 +262,7 @@ onMounted(loadProjects)
         <span class="summary-value" :class="{ warning: summaryStats.overallRate < 50 }">{{ summaryStats.overallRate }}%</span>
         <span class="summary-label">整体完成率</span>
       </div>
-      <el-switch v-model="showArchived" active-text="含归档" inactive-text="" style="margin-left:auto" @change="toggleArchived" />
+      <el-switch v-model="showArchived" active-text="含归档" inactive-text="" style="margin-left:auto" @change="onArchivedChange" />
       <el-button type="primary" @click="createDialogVisible = true">新建项目</el-button>
     </div>
 

@@ -36,7 +36,10 @@
       "Skill(gstack:*)",
       "Bash(python seed_new_projects.py)",
       "Bash(python -c ':*)",
-      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'Count: {d[\\\\\"total\\\\\"]}'\\)\")"
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'Count: {d[\\\\\"total\\\\\"]}'\\)\")",
+      "Bash(curl -s http://localhost:8000/api/v1/auth/login -X POST -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -w \"\\\\nHTTP:%{http_code}\" \"http://localhost:5173/api/v1/projects?page=1&page_size=100&include_archived=false\" -H \"Authorization: Bearer $\\(curl -s http://localhost:8000/api/v1/auth/login -X POST -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"admin123\"}')",
+      "Bash(npx vue-tsc:*)"
     ]
   }
 }
