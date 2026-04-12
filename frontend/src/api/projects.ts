@@ -26,4 +26,7 @@ export const projectsApi = {
   removeMember(id: string, userId: string) {
     return http.delete(`/projects/${id}/members/${userId}`)
   },
+  getTaskTree(id: string) {
+    return http.get(`/projects/${id}/task-tree`)
+  },
 }

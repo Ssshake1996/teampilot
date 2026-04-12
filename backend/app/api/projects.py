@@ -81,6 +81,16 @@ async def delete_project(
     return {"message": "Project archived"}
 
 
+@router.get("/{project_id}/task-tree")
+async def get_project_task_tree(
+    project_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get project tasks in a tree structure (parent tasks with subtask children)."""
+    return await project_service.get_project_task_tree(db, project_id)
+
+
 @router.get("/{project_id}/members", response_model=list[ProjectMemberOut])
 async def get_members(
     project_id: uuid.UUID,

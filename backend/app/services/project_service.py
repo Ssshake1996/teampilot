@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime, timezone
 
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project, ProjectMember, ProjectStatus
@@ -104,3 +105,60 @@ async def remove_project_member(db: AsyncSession, project_id: uuid.UUID, user_id
         )
     )
     await db.flush()
+
+
+async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list[dict]:
+    """Get parent tasks with subtask children, assignee info, and progress."""
+    now = datetime.utcnow()  # naive UTC for SQLite compatibility
+
+    # All tasks for this project, joined with assignee
+    result = await db.execute(
+        select(Task, User.full_name)
+        .outerjoin(User, Task.assignee_id == User.id)
+        .where(Task.project_id == project_id)
+        .order_by(Task.sort_order, Task.created_at)
+    )
+    rows = result.all()
+
+    # Build lookup: task_id -> task dict, and parent_id -> children list
+    all_tasks = {}
+    children_map: dict[str, list] = {}
+    for t, assignee_name in rows:
+        td = {
+            "id": str(t.id),
+            "title": t.title,
+            "status": t.status.value,
+            "priority": t.priority.value,
+            "assignee_id": str(t.assignee_id) if t.assignee_id else None,
+            "assignee_name": assignee_name,
+            "estimated_hours": float(t.estimated_hours) if t.estimated_hours else None,
+            "actual_hours": float(t.actual_hours) if t.actual_hours else None,
+            "deadline": t.deadline.isoformat() if t.deadline else None,
+            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            "parent_task_id": str(t.parent_task_id) if t.parent_task_id else None,
+            "is_overdue": bool(t.deadline and t.deadline.replace(tzinfo=None) < now and t.status.value != "done"),
+            "children": [],
+        }
+        all_tasks[str(t.id)] = td
+        if t.parent_task_id:
+            pid = str(t.parent_task_id)
+            children_map.setdefault(pid, []).append(td)
+
+    # Assemble tree: attach children, compute parent progress from children
+    roots = []
+    for tid, td in all_tasks.items():
+        td["children"] = children_map.get(tid, [])
+        if td["parent_task_id"] is None:
+            # Compute progress: if has children, use children completion ratio
+            if td["children"]:
+                done_children = sum(1 for c in td["children"] if c["status"] == "done")
+                td["progress_pct"] = round(done_children / len(td["children"]) * 100)
+                td["subtask_total"] = len(td["children"])
+                td["subtask_done"] = done_children
+            else:
+                td["progress_pct"] = 100 if td["status"] == "done" else 0
+                td["subtask_total"] = 0
+                td["subtask_done"] = 0
+            roots.append(td)
+
+    return roots
