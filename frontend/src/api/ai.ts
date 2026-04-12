@@ -94,6 +94,12 @@ export const aiApi = {
   getConfig() {
     return http.get('/ai/config')
   },
+  getPrompts() {
+    return http.get('/ai/prompts')
+  },
+  updatePrompt(key: string, value: string) {
+    return http.put('/ai/prompts', { key, value })
+  },
   updateConfig(data: { api_base_url: string; api_key: string; model_name: string; max_tokens: number; temperature: number }) {
     return http.put('/ai/config', data)
   },

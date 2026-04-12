@@ -8,7 +8,8 @@ from app.models.user import User
 from app.models.project import ProjectMember
 from app.models.skill import UserSkill, Skill
 from app.services.ai.llm_client import LLMClient
-from app.services.ai.prompts import TASK_ESTIMATE_SYSTEM, TASK_ESTIMATE_USER
+from app.services.ai.prompts import TASK_ESTIMATE_USER
+from app.services.ai.prompt_loader import get_system_prompt
 
 
 async def estimate_task(
@@ -51,7 +52,8 @@ async def estimate_task(
         team_members="\n".join(members_text_parts) or "无成员",
     )
 
+    sys_prompt = await get_system_prompt(db, "estimate")
     return await llm.chat_json([
-        {"role": "system", "content": TASK_ESTIMATE_SYSTEM},
+        {"role": "system", "content": sys_prompt},
         {"role": "user", "content": prompt},
     ])

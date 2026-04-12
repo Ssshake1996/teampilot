@@ -317,3 +317,72 @@ async def test_connection(
         return {"success": ok, "message": "Connection successful" if ok else "Connection failed"}
     finally:
         await llm.close()
+
+
+# ── Prompt Configuration (admin only) ──
+
+PROMPT_FIELDS = ["prompt_task_assign", "prompt_capability", "prompt_risk", "prompt_estimate", "prompt_decompose"]
+PROMPT_LABELS = {
+    "prompt_task_assign": "任务分配推荐",
+    "prompt_capability": "能力分析",
+    "prompt_risk": "风险评估",
+    "prompt_estimate": "工时预估与人选推荐",
+    "prompt_decompose": "任务拆解",
+}
+
+
+@router.get("/prompts")
+async def get_prompts(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Get all custom system prompts. Returns defaults from prompts.py if not customized."""
+    from app.services.ai import prompts as default_prompts
+
+    result = await db.execute(select(AIConfig).where(AIConfig.id == 1))
+    config = result.scalar_one_or_none()
+
+    defaults = {
+        "prompt_task_assign": default_prompts.TASK_ASSIGNMENT_SYSTEM,
+        "prompt_capability": default_prompts.CAPABILITY_ANALYSIS_SYSTEM,
+        "prompt_risk": default_prompts.RISK_ANALYSIS_SYSTEM,
+        "prompt_estimate": default_prompts.TASK_ESTIMATE_SYSTEM,
+        "prompt_decompose": default_prompts.TASK_DECOMPOSE_SYSTEM,
+    }
+
+    items = []
+    for field in PROMPT_FIELDS:
+        custom = getattr(config, field, None) if config else None
+        items.append({
+            "key": field,
+            "label": PROMPT_LABELS[field],
+            "value": custom or "",
+            "default": defaults[field],
+            "is_custom": bool(custom),
+        })
+    return items
+
+
+class PromptUpdate(BaseModel):
+    key: str
+    value: str
+
+
+@router.put("/prompts")
+async def update_prompt(
+    data: PromptUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    if data.key not in PROMPT_FIELDS:
+        raise HTTPException(status_code=400, detail=f"Invalid prompt key: {data.key}")
+
+    result = await db.execute(select(AIConfig).where(AIConfig.id == 1))
+    config = result.scalar_one_or_none()
+    if not config:
+        raise HTTPException(status_code=400, detail="AI config not initialized")
+
+    # Empty value = reset to default
+    setattr(config, data.key, data.value.strip() or None)
+    await db.flush()
+    return {"message": f"Prompt '{PROMPT_LABELS[data.key]}' updated"}

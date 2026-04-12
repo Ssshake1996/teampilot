@@ -239,23 +239,18 @@ onMounted(() => {
         </div>
       </el-card>
 
-      <!-- Stats Cards -->
+      <!-- Stats Row -->
       <div class="stats-row">
-        <el-card class="stat-card">
-          <div class="stat-value">{{ workload?.assigned_tasks ?? 0 }}</div>
-          <div class="stat-label">待完成任务</div>
-        </el-card>
-        <el-card class="stat-card">
-          <div class="stat-value" style="color:#E6A23C">{{ workload?.in_progress_tasks ?? 0 }}</div>
-          <div class="stat-label">进行中</div>
-        </el-card>
-        <el-card class="stat-card">
-          <div class="stat-value" style="color:#67C23A">{{ workload?.completed_tasks ?? 0 }}</div>
-          <div class="stat-label">已完成</div>
-        </el-card>
-        <el-card class="stat-card">
-          <div class="stat-value" :style="{ color: (workload?.overdue_tasks ?? 0) > 0 ? '#F56C6C' : '#303133' }">{{ workload?.overdue_tasks ?? 0 }}</div>
-          <div class="stat-label">已逾期</div>
+        <el-card class="stat-card task-stats-card">
+          <div class="task-stats-inner">
+            <div class="ts-item"><span class="ts-val">{{ workload?.assigned_tasks ?? 0 }}</span><span class="ts-lbl">待完成</span></div>
+            <div class="ts-div"></div>
+            <div class="ts-item"><span class="ts-val" style="color:#E6A23C">{{ workload?.in_progress_tasks ?? 0 }}</span><span class="ts-lbl">进行中</span></div>
+            <div class="ts-div"></div>
+            <div class="ts-item"><span class="ts-val" style="color:#67C23A">{{ workload?.completed_tasks ?? 0 }}</span><span class="ts-lbl">已完成</span></div>
+            <div class="ts-div"></div>
+            <div class="ts-item"><span class="ts-val" :style="{ color: (workload?.overdue_tasks ?? 0) > 0 ? '#F56C6C' : '#303133' }">{{ workload?.overdue_tasks ?? 0 }}</span><span class="ts-lbl">已逾期</span></div>
+          </div>
         </el-card>
         <el-card class="stat-card">
           <div class="stat-value">{{ onTimeRateDisplay }}</div>
@@ -356,8 +351,12 @@ onMounted(() => {
         <template #header>
           <span>当前任务</span>
         </template>
-        <el-table v-if="userTasks.length" :data="userTasks" stripe size="small" style="width:100%">
-          <el-table-column label="任务名称" prop="title" min-width="200" show-overflow-tooltip />
+        <el-table v-if="userTasks.length" :data="userTasks" stripe size="small" style="width:100%" :row-style="{ cursor: 'pointer' }" @row-click="(row: any) => $router.push('/projects/' + row.project_id + '/board')">
+          <el-table-column label="任务名称" min-width="200" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span style="color:#409EFF">{{ row.title }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="所属项目" prop="project_name" min-width="160" show-overflow-tooltip />
           <el-table-column label="状态" width="90" align="center">
             <template #default="{ row }">
@@ -442,10 +441,16 @@ onMounted(() => {
 
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: 2fr 1fr 1fr;
   gap: 12px;
   margin-bottom: 20px;
 }
+.task-stats-card :deep(.el-card__body) { padding: 16px; }
+.task-stats-inner { display: flex; align-items: center; justify-content: space-around; }
+.ts-item { display: flex; flex-direction: column; align-items: center; }
+.ts-val { font-size: 24px; font-weight: 700; color: #303133; }
+.ts-lbl { font-size: 12px; color: #909399; margin-top: 2px; }
+.ts-div { width: 1px; height: 32px; background: #ebeef5; }
 
 .stat-card {
   text-align: center;

@@ -8,7 +8,8 @@ from app.models.user import User
 from app.models.project import ProjectMember
 from app.models.skill import UserSkill, Skill
 from app.services.ai.llm_client import LLMClient
-from app.services.ai.prompts import TASK_DECOMPOSE_SYSTEM, TASK_DECOMPOSE_USER
+from app.services.ai.prompts import TASK_DECOMPOSE_USER
+from app.services.ai.prompt_loader import get_system_prompt
 
 
 async def decompose_task(db: AsyncSession, task_id: uuid.UUID, llm: LLMClient) -> dict:
@@ -51,8 +52,9 @@ async def decompose_task(db: AsyncSession, task_id: uuid.UUID, llm: LLMClient) -
         team_members="\n".join(members_text_parts) or "无成员数据",
     )
 
+    sys_prompt = await get_system_prompt(db, "decompose")
     result = await llm.chat_json([
-        {"role": "system", "content": TASK_DECOMPOSE_SYSTEM},
+        {"role": "system", "content": sys_prompt},
         {"role": "user", "content": prompt},
     ])
     return result

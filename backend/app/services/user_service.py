@@ -120,6 +120,7 @@ async def get_user_tasks(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
             "title": t.title,
             "status": t.status.value,
             "priority": t.priority.value,
+            "project_id": str(t.project_id),
             "project_name": pname,
             "estimated_hours": float(t.estimated_hours) if t.estimated_hours else None,
             "deadline": t.deadline.isoformat() if t.deadline else None,

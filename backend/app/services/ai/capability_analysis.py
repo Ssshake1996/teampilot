@@ -9,7 +9,8 @@ from app.models.skill import UserSkill, Skill
 from app.models.user import User
 from app.models.capability_profile import CapabilityProfile
 from app.services.ai.llm_client import LLMClient
-from app.services.ai.prompts import CAPABILITY_ANALYSIS_SYSTEM, CAPABILITY_ANALYSIS_USER
+from app.services.ai.prompts import CAPABILITY_ANALYSIS_USER
+from app.services.ai.prompt_loader import get_system_prompt
 
 
 async def analyze_capability(db: AsyncSession, user_id: uuid.UUID, llm: LLMClient) -> dict:
@@ -77,8 +78,9 @@ async def analyze_capability(db: AsyncSession, user_id: uuid.UUID, llm: LLMClien
         recent_tasks=recent_text,
     )
 
+    sys_prompt = await get_system_prompt(db, "capability")
     result = await llm.chat_json([
-        {"role": "system", "content": CAPABILITY_ANALYSIS_SYSTEM},
+        {"role": "system", "content": sys_prompt},
         {"role": "user", "content": prompt},
     ])
 

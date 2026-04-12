@@ -204,6 +204,35 @@ function handleCategoryFilterChange() {
   loadSkills()
 }
 
+// ==================== AI Prompt Config ====================
+const prompts = ref<{ key: string; label: string; value: string; default: string; is_custom: boolean }[]>([])
+const promptsLoading = ref(false)
+const savingPromptKey = ref('')
+
+async function loadPrompts() {
+  promptsLoading.value = true
+  try {
+    const res = await aiApi.getPrompts()
+    prompts.value = res.data
+  } catch { /* not configured */ }
+  finally { promptsLoading.value = false }
+}
+
+async function savePrompt(p: any) {
+  savingPromptKey.value = p.key
+  try {
+    await aiApi.updatePrompt(p.key, p.value)
+    p.is_custom = !!p.value.trim()
+    ElMessage.success(`"${p.label}" 已保存`)
+  } catch { ElMessage.error('保存失败') }
+  finally { savingPromptKey.value = '' }
+}
+
+function resetPrompt(p: any) {
+  p.value = ''
+  savePrompt(p)
+}
+
 // ==================== Tab Change ====================
 function handleTabChange(name: string | number) {
   const tab = String(name)
@@ -213,6 +242,8 @@ function handleTabChange(name: string | number) {
     loadUsers()
   } else if (tab === 'skill-management') {
     loadSkills()
+  } else if (tab === 'ai-prompts') {
+    loadPrompts()
   }
 }
 
@@ -417,6 +448,39 @@ onMounted(() => {
             <el-button type="primary" @click="saveSkill">确定</el-button>
           </template>
         </el-dialog>
+      </el-tab-pane>
+
+      <!-- AI Prompt Config Tab -->
+      <el-tab-pane label="AI Prompt" name="ai-prompts">
+        <el-card v-loading="promptsLoading">
+          <div style="margin-bottom:12px;color:#909399;font-size:13px">
+            自定义各 AI 功能的 System Prompt。留空则使用系统默认值。
+          </div>
+          <el-collapse v-if="prompts.length">
+            <el-collapse-item v-for="p in prompts" :key="p.key" :name="p.key">
+              <template #title>
+                <span style="font-weight:600">{{ p.label }}</span>
+                <el-tag v-if="p.is_custom" type="warning" size="small" style="margin-left:8px">已自定义</el-tag>
+                <el-tag v-else type="info" size="small" effect="plain" style="margin-left:8px">默认</el-tag>
+              </template>
+              <div style="margin-bottom:8px">
+                <el-input
+                  v-model="p.value"
+                  type="textarea"
+                  :rows="8"
+                  :placeholder="p.default"
+                  style="font-family:monospace;font-size:13px"
+                />
+              </div>
+              <div style="display:flex;gap:8px">
+                <el-button type="primary" size="small" :loading="savingPromptKey === p.key" @click="savePrompt(p)">保存</el-button>
+                <el-button size="small" @click="resetPrompt(p)">恢复默认</el-button>
+                <el-button size="small" type="info" link @click="p.value = p.default">查看默认值</el-button>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+          <el-empty v-else description="请先配置 AI 连接" />
+        </el-card>
       </el-tab-pane>
     </el-tabs>
   </div>

@@ -8,7 +8,8 @@ from app.models.skill import Skill, UserSkill
 from app.models.user import User
 from app.models.project import ProjectMember
 from app.services.ai.llm_client import LLMClient
-from app.services.ai.prompts import TASK_ASSIGNMENT_SYSTEM, TASK_ASSIGNMENT_USER
+from app.services.ai.prompts import TASK_ASSIGNMENT_USER
+from app.services.ai.prompt_loader import get_system_prompt
 
 
 async def recommend_assignee(db: AsyncSession, task_id: uuid.UUID, llm: LLMClient) -> dict:
@@ -68,8 +69,9 @@ async def recommend_assignee(db: AsyncSession, task_id: uuid.UUID, llm: LLMClien
         candidates="\n".join(candidates_text),
     )
 
+    sys_prompt = await get_system_prompt(db, "task_assign")
     result = await llm.chat_json([
-        {"role": "system", "content": TASK_ASSIGNMENT_SYSTEM},
+        {"role": "system", "content": sys_prompt},
         {"role": "user", "content": prompt},
     ])
 

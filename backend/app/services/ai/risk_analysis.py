@@ -8,7 +8,8 @@ from app.models.project import Project
 from app.models.task import Task, TaskStatus
 from app.models.user import User
 from app.services.ai.llm_client import LLMClient
-from app.services.ai.prompts import RISK_ANALYSIS_SYSTEM, RISK_ANALYSIS_USER
+from app.services.ai.prompts import RISK_ANALYSIS_USER
+from app.services.ai.prompt_loader import get_system_prompt
 
 
 async def analyze_project_risk(db: AsyncSession, project_id: uuid.UUID, llm: LLMClient) -> dict:
@@ -99,8 +100,9 @@ async def analyze_project_risk(db: AsyncSession, project_id: uuid.UUID, llm: LLM
         blocked_detail=blocked_text,
     )
 
+    sys_prompt = await get_system_prompt(db, "risk")
     result = await llm.chat_json([
-        {"role": "system", "content": RISK_ANALYSIS_SYSTEM},
+        {"role": "system", "content": sys_prompt},
         {"role": "user", "content": prompt},
     ])
     return result
