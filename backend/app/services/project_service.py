@@ -146,21 +146,44 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
             pid = str(t.parent_task_id)
             children_map.setdefault(pid, []).append(td)
 
-    # Assemble tree: attach children, compute parent progress from children
+    # Get latest progress_pct per task from task_progress table
+    from app.models.task_progress import TaskProgress
+    progress_map: dict[str, int] = {}
+    prog_result = await db.execute(
+        select(TaskProgress.task_id, TaskProgress.progress_pct)
+        .join(Task, TaskProgress.task_id == Task.id)
+        .where(Task.project_id == project_id)
+        .order_by(TaskProgress.created_at.desc())
+    )
+    for tid_raw, pct in prog_result.all():
+        tid_str = str(tid_raw)
+        if tid_str not in progress_map:  # first = latest (ordered desc)
+            progress_map[tid_str] = pct
+
+    # Assemble tree: attach children, compute progress
     roots = []
     for tid, td in all_tasks.items():
         td["children"] = children_map.get(tid, [])
-        if td["parent_task_id"] is None:
-            # Compute progress: if has children, use children completion ratio
-            if td["children"]:
-                done_children = sum(1 for c in td["children"] if c["status"] == "done")
-                td["progress_pct"] = round(done_children / len(td["children"]) * 100)
-                td["subtask_total"] = len(td["children"])
-                td["subtask_done"] = done_children
+        children = td["children"]
+
+        if children:
+            done_children = sum(1 for c in children if c["status"] == "done")
+            td["progress_pct"] = round(done_children / len(children) * 100)
+            td["subtask_total"] = len(children)
+            td["subtask_done"] = done_children
+        else:
+            # Leaf task: use logged progress, or 100 if done, 0 if not
+            logged = progress_map.get(tid)
+            if td["status"] == "done":
+                td["progress_pct"] = 100
+            elif logged is not None:
+                td["progress_pct"] = logged
             else:
-                td["progress_pct"] = 100 if td["status"] == "done" else 0
-                td["subtask_total"] = 0
-                td["subtask_done"] = 0
+                td["progress_pct"] = 0
+            td["subtask_total"] = 0
+            td["subtask_done"] = 0
+
+        if td["parent_task_id"] is None:
             roots.append(td)
 
     return roots
