@@ -116,7 +116,7 @@ async function handleAssigneeChange(task: any, newId: string) {
     task.assignee_name = userName(newId)
     ElMessage.success('负责人已更新')
   } catch {
-    ElMessage.error('更新失��')
+    ElMessage.error('更新失败')
   }
 }
 
@@ -243,7 +243,7 @@ function projectProgress(p: Project) {
 function statusType(s: string) { return ({ planning: 'info', active: '', paused: 'warning', completed: 'success', archived: 'danger' } as any)[s] || 'info' }
 function statusLabel(s: string) { return ({ planning: '规划中', active: '进行中', paused: '已暂停', completed: '已完成', archived: '已归档' } as any)[s] || s }
 function taskStatusType(s: string) { return ({ backlog: 'info', todo: '', in_progress: 'warning', in_review: '', done: 'success' } as any)[s] || 'info' }
-function taskStatusLabel(s: string) { return ({ backlog: '待办池', todo: '待处理', in_progress: '��行中', in_review: '审核中', done: '已完成' } as any)[s] || s }
+function taskStatusLabel(s: string) { return ({ backlog: '待办池', todo: '待处理', in_progress: '进行中', in_review: '审核中', done: '已完成' } as any)[s] || s }
 function formatDate(d: string | null) { return d ? d.slice(0, 10) : '-' }
 function goToBoard(pid: string) { router.push(`/projects/${pid}/board`) }
 function depthIndent(depth: number) { return depth === 1 ? '└ ' : depth === 2 ? '└ ' : '' }
@@ -265,12 +265,12 @@ onMounted(loadProjects)
     <!-- Summary Bar -->
     <div class="summary-bar">
       <div class="summary-item"><span class="summary-value">{{ summaryStats.total }}</span><span class="summary-label">项目总数</span></div>
-      <div class="summary-item"><span class="summary-value active">{{ summaryStats.active }}</span><span class="summary-label">进���中</span></div>
+      <div class="summary-item"><span class="summary-value active">{{ summaryStats.active }}</span><span class="summary-label">进行中</span></div>
       <div class="summary-item"><span class="summary-value">{{ summaryStats.totalTasks }}</span><span class="summary-label">总任务数</span></div>
       <div class="summary-item"><span class="summary-value done">{{ summaryStats.doneTasks }}</span><span class="summary-label">已完成</span></div>
       <div class="summary-item"><span class="summary-value" :class="{ warning: summaryStats.overallRate < 50 }">{{ summaryStats.overallRate }}%</span><span class="summary-label">整体完成率</span></div>
       <el-switch v-model="showArchived" active-text="含归档" inactive-text="" style="margin-left:auto" @change="onArchivedChange" />
-      <el-button type="primary" @click="createDialogVisible = true">新建项���</el-button>
+      <el-button type="primary" @click="createDialogVisible = true">新建项目</el-button>
     </div>
 
     <!-- Project Tree -->
@@ -370,7 +370,7 @@ onMounted(loadProjects)
         <el-form-item label="项目名称"><el-input v-model="createForm.name" placeholder="请输入项目名称" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="createForm.description" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="开始日期"><el-date-picker v-model="createForm.start_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
-        <el-form-item label="截止���期"><el-date-picker v-model="createForm.end_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
+        <el-form-item label="截止日期"><el-date-picker v-model="createForm.end_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
@@ -388,7 +388,7 @@ onMounted(loadProjects)
           </el-select>
         </el-form-item>
         <el-form-item label="预估工时"><el-input-number v-model="subtaskForm.estimated_hours" :min="0" :max="999" :precision="1" style="width:100%" /></el-form-item>
-        <el-form-item label="截止日���"><el-date-picker v-model="subtaskForm.deadline" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
+        <el-form-item label="截止日期"><el-date-picker v-model="subtaskForm.deadline" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="subtaskDialogVisible = false">取消</el-button>
@@ -411,7 +411,7 @@ onMounted(loadProjects)
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="progressDialogVisible = false">���消</el-button>
+        <el-button @click="progressDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="confirmStatusChange">确认</el-button>
       </template>
     </el-dialog>
