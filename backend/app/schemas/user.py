@@ -12,6 +12,7 @@ class UserOut(BaseModel):
     email: str
     full_name: str
     role: UserRole
+    department: str | None = None
     avatar_url: str | None = None
     is_active: bool
     created_at: datetime
@@ -24,6 +25,7 @@ class UserUpdate(BaseModel):
     email: str | None = None
     avatar_url: str | None = None
     role: UserRole | None = None
+    department: str | None = None
 
 
 class UserWorkload(BaseModel):

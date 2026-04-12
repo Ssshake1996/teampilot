@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_admin
 from app.models.user import User
 from app.schemas.user import UserOut, UserUpdate, UserWorkload
 from app.schemas.skill import UserSkillUpdate, UserSkillOut
@@ -17,16 +17,44 @@ router = APIRouter(prefix="/users", tags=["用户"])
 async def list_users(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=500),
+    search: str = Query("", description="Search by name/username"),
+    department: str = Query("", description="Filter by department"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    users, total = await user_service.list_users(db, page, page_size)
+    users, total = await user_service.list_users(db, page, page_size, search, department)
     return {
         "items": [UserOut.model_validate(u) for u in users],
         "total": total,
         "page": page,
         "page_size": page_size,
     }
+
+
+@router.get("/departments")
+async def list_departments(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await user_service.list_departments(db)
+
+
+@router.post("", status_code=201)
+async def create_user(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    return await user_service.create_user(db, data)
+
+
+@router.delete("/{user_id}")
+async def deactivate_user(
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    return await user_service.deactivate_user(db, user_id)
 
 
 @router.get("/{user_id}", response_model=UserOut)

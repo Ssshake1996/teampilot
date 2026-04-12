@@ -2,11 +2,10 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { aiApi } from '@/api/ai'
-import { usersApi } from '@/api/users'
 import { skillsApi } from '@/api/skills'
+import http from '@/api/index'
 import { useAuthStore } from '@/stores/auth'
-import type { User, Skill } from '@/types/models'
-import { UserRole } from '@/types/enums'
+import type { Skill } from '@/types/models'
 
 const authStore = useAuthStore()
 const activeTab = ref('ai-config')
@@ -75,43 +74,47 @@ async function testConnection() {
   }
 }
 
-// ==================== User Management ====================
-const users = ref<User[]>([])
-const usersTotal = ref(0)
-const usersPage = ref(1)
-const usersLoading = ref(false)
+// ==================== RBAC Permission Management ====================
+const permCatalog = ref<Record<string, { label: string; items: [string, string][] }>>({})
+const rolePerms = ref<Record<string, string[]>>({})
+const permsLoading = ref(false)
+const savingRole = ref('')
+const activeRole = ref('admin')
+const roleLabels: Record<string, string> = { admin: '管理员', manager: '经理', member: '成员' }
 
-const roleOptions = [
-  { label: '管理员', value: UserRole.ADMIN },
-  { label: '经理', value: UserRole.MANAGER },
-  { label: '成员', value: UserRole.MEMBER },
-]
-
-async function loadUsers() {
-  usersLoading.value = true
+async function loadPermissions() {
+  permsLoading.value = true
   try {
-    const res = await usersApi.list(usersPage.value, 20)
-    users.value = res.data.items
-    usersTotal.value = res.data.total
-  } finally {
-    usersLoading.value = false
-  }
+    const [catRes, rolesRes] = await Promise.all([
+      http.get('/permissions/catalog'),
+      http.get('/permissions/roles'),
+    ])
+    permCatalog.value = catRes.data
+    rolePerms.value = rolesRes.data
+  } catch {}
+  finally { permsLoading.value = false }
 }
 
-async function handleRoleChange(user: User, newRole: UserRole) {
-  try {
-    await usersApi.update(user.id, { role: newRole })
-    user.role = newRole
-    ElMessage.success(`已将 ${user.full_name || user.username} 的角色更改为 ${roleOptions.find((r) => r.value === newRole)?.label}`)
-  } catch {
-    ElMessage.error('角色更新失败')
-    loadUsers()
-  }
+function hasPermission(role: string, perm: string): boolean {
+  return (rolePerms.value[role] || []).includes(perm)
 }
 
-function handleUsersPageChange(page: number) {
-  usersPage.value = page
-  loadUsers()
+function togglePermission(role: string, perm: string) {
+  if (role === 'admin') return // admin always has all
+  const perms = rolePerms.value[role] || []
+  const idx = perms.indexOf(perm)
+  if (idx >= 0) perms.splice(idx, 1)
+  else perms.push(perm)
+  rolePerms.value[role] = [...perms]
+}
+
+async function saveRolePerms(role: string) {
+  savingRole.value = role
+  try {
+    await http.put('/permissions/roles', { role, permissions: rolePerms.value[role] })
+    ElMessage.success(`${roleLabels[role]} 权限已保存`)
+  } catch { ElMessage.error('保存失败') }
+  finally { savingRole.value = '' }
 }
 
 // ==================== Skill Management ====================
@@ -238,8 +241,8 @@ function handleTabChange(name: string | number) {
   const tab = String(name)
   if (tab === 'ai-config') {
     loadAiConfig()
-  } else if (tab === 'user-management') {
-    loadUsers()
+  } else if (tab === 'permissions') {
+    loadPermissions()
   } else if (tab === 'skill-management') {
     loadSkills()
   } else if (tab === 'ai-prompts') {
@@ -328,46 +331,31 @@ onMounted(() => {
       </el-tab-pane>
 
       <!-- User Management Tab -->
-      <el-tab-pane label="用户管理" name="user-management">
-        <el-card v-loading="usersLoading">
-          <el-table :data="users" stripe style="width: 100%">
-            <el-table-column label="用户名" prop="username" min-width="120" />
-            <el-table-column label="姓名" prop="full_name" min-width="120" />
-            <el-table-column label="邮箱" prop="email" min-width="180" />
-            <el-table-column label="角色" width="160">
-              <template #default="{ row }">
-                <el-select
-                  :model-value="row.role"
-                  :disabled="!authStore.isAdmin || row.id === authStore.user?.id"
-                  size="small"
-                  @change="(val: UserRole) => handleRoleChange(row, val)"
-                >
-                  <el-option
-                    v-for="opt in roleOptions"
-                    :key="opt.value"
-                    :label="opt.label"
-                    :value="opt.value"
-                  />
-                </el-select>
-              </template>
-            </el-table-column>
-            <el-table-column label="状态" width="100" align="center">
-              <template #default="{ row }">
-                <el-tag :type="row.is_active ? 'success' : 'danger'" size="small">
-                  {{ row.is_active ? '活跃' : '禁用' }}
-                </el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-          <div class="pagination-wrapper">
-            <el-pagination
-              v-model:current-page="usersPage"
-              :page-size="20"
-              :total="usersTotal"
-              layout="total, prev, pager, next"
-              @current-change="handleUsersPageChange"
-            />
+      <el-tab-pane label="权限管理" name="permissions">
+        <el-card v-loading="permsLoading">
+          <div style="margin-bottom:12px;color:#909399;font-size:13px">
+            配置每个角色可以使用的功能权限。管理员默认拥有所有权限。
           </div>
+          <el-tabs v-model="activeRole" type="card">
+            <el-tab-pane v-for="role in ['admin','manager','member']" :key="role" :label="roleLabels[role]" :name="role">
+              <div v-for="(cat, catKey) in permCatalog" :key="catKey" class="perm-cat">
+                <div class="perm-cat-hd">{{ cat.label }}</div>
+                <div class="perm-items">
+                  <el-checkbox
+                    v-for="[perm, label] in cat.items" :key="perm"
+                    :model-value="hasPermission(role, perm)"
+                    :disabled="role === 'admin'"
+                    @change="togglePermission(role, perm)"
+                  >{{ label }}</el-checkbox>
+                </div>
+              </div>
+              <div style="margin-top:12px">
+                <el-button type="primary" :loading="savingRole === role" :disabled="role === 'admin'" @click="saveRolePerms(role)">
+                  保存 {{ roleLabels[role] }} 权限
+                </el-button>
+              </div>
+            </el-tab-pane>
+          </el-tabs>
         </el-card>
       </el-tab-pane>
 
@@ -552,4 +540,9 @@ onMounted(() => {
   color: #c0c4cc;
   font-size: 13px;
 }
+
+/* Permission management */
+.perm-cat { margin-bottom: 16px; }
+.perm-cat-hd { font-weight: 600; font-size: 13px; color: #303133; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #ebeef5; }
+.perm-items { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 </style>

@@ -242,6 +242,7 @@ async def seed():
                 hashed_password=PASSWORD,
                 full_name=m["full_name"],
                 role=m["role"],
+                department=m["group"],
             )
             db.add(u)
             user_objs.append(u)
