@@ -16,7 +16,7 @@ router = APIRouter(prefix="/users", tags=["用户"])
 @router.get("", response_model=dict)
 async def list_users(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

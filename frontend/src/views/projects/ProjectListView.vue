@@ -45,15 +45,18 @@ const statusOptions = [
 async function loadProjects() {
   loading.value = true
   try {
-    const [projRes, userRes] = await Promise.all([
-      projectsApi.list(1, 100, showArchived.value),
-      usersApi.list(1, 200),
-    ])
+    const projRes = await projectsApi.list(1, 100, showArchived.value)
     projects.value = projRes.data.items
-    users.value = userRes.data.items
-  } finally {
-    loading.value = false
+  } catch {
+    ElMessage.error('加载项目列表失败')
   }
+  try {
+    const userRes = await usersApi.list(1, 200)
+    users.value = userRes.data.items
+  } catch {
+    // Users list failed, not critical for rendering projects
+  }
+  loading.value = false
 }
 
 async function archiveProject(projectId: string) {
