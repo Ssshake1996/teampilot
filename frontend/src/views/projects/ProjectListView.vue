@@ -113,13 +113,88 @@ function toggleProject(projectId: string) {
 
 function isExpanded(pid: string) { return expandedProjects.value.has(pid) }
 
-// ── Inline Edit: Assignee ──
+// ── Inline Edit ──
 async function handleAssigneeChange(task: any, newId: string) {
   try {
     await tasksApi.assign(task.id, newId || null)
     task.assignee_id = newId || null
     task.assignee_name = userName(newId)
     ElMessage.success('负责人已更新')
+  } catch {
+    ElMessage.error('更新失败')
+  }
+}
+
+async function handleFieldUpdate(task: any, field: string, value: any) {
+  try {
+    await tasksApi.update(task.id, { [field]: value || null } as any)
+    task[field] = value || null
+  } catch {
+    ElMessage.error('更新失败')
+  }
+}
+
+// Task commands (edit/delete)
+async function handleTaskCommand(cmd: string, task: any, projectId: string) {
+  if (cmd === 'edit') {
+    openEditDialog(task)
+  } else if (cmd === 'delete') {
+    // Mark as deleted visually first (strikethrough + gray)
+    task._deleted = true
+    try {
+      await tasksApi.delete(task.id)
+      ElMessage.success('任务已删除')
+      // Refresh after a short delay so user sees the strikethrough
+      setTimeout(async () => {
+        await loadTaskTree(projectId, true)
+        const projRes = await projectsApi.list(1, 100, showArchived.value)
+        projects.value = projRes.data.items
+      }, 800)
+    } catch {
+      task._deleted = false
+      ElMessage.error('删除失败')
+    }
+  }
+}
+
+// Edit task dialog
+const editDialogVisible = ref(false)
+const editingTask = ref<any>(null)
+const editForm = ref({ title: '', description: '', priority: 'medium', estimated_hours: null as number | null, deadline: '' })
+
+function openEditDialog(task: any) {
+  editingTask.value = task
+  editForm.value = {
+    title: task.title || '',
+    description: task.description || '',
+    priority: task.priority || 'medium',
+    estimated_hours: task.estimated_hours,
+    deadline: task.deadline ? task.deadline.slice(0, 10) : '',
+  }
+  editDialogVisible.value = true
+}
+
+async function handleEditSave() {
+  if (!editingTask.value) return
+  const updates: any = {}
+  if (editForm.value.title !== editingTask.value.title) updates.title = editForm.value.title
+  if (editForm.value.priority !== editingTask.value.priority) updates.priority = editForm.value.priority
+  if (editForm.value.estimated_hours !== editingTask.value.estimated_hours) updates.estimated_hours = editForm.value.estimated_hours
+  const newDeadline = editForm.value.deadline || null
+  const oldDeadline = editingTask.value.deadline ? editingTask.value.deadline.slice(0, 10) : null
+  if (newDeadline !== oldDeadline) updates.deadline = newDeadline
+  if (editForm.value.description !== (editingTask.value.description || '')) updates.description = editForm.value.description
+
+  if (Object.keys(updates).length === 0) {
+    editDialogVisible.value = false
+    return
+  }
+  try {
+    await tasksApi.update(editingTask.value.id, updates)
+    Object.assign(editingTask.value, updates)
+    if (updates.deadline) editingTask.value.deadline = updates.deadline
+    ElMessage.success('任务已更新')
+    editDialogVisible.value = false
   } catch {
     ElMessage.error('更新失败')
   }
@@ -410,13 +485,13 @@ onMounted(loadProjects)
               <div class="row-cell center">状态 / 操作</div>
             </div>
 
-            <div v-for="task in taskTrees[project.id]" :key="task.id" class="task-row" :class="{ 'depth-0': task._depth === 0, 'depth-1': task._depth === 1, 'depth-2': task._depth === 2 }">
+            <div v-for="task in taskTrees[project.id]" :key="task.id" class="task-row" :class="{ 'depth-0': task._depth === 0, 'depth-1': task._depth === 1, 'depth-2': task._depth === 2, 'task-deleted': task._deleted }">
               <div class="row-expand">
                 <span v-if="task._depth === 0 && task.subtask_total > 0" class="subtask-badge">{{ task.subtask_done }}/{{ task.subtask_total }}</span>
               </div>
               <div class="row-name" :style="{ paddingLeft: (8 + task._depth * 20) + 'px' }">
                 <span v-if="task._depth > 0" class="subtask-indent">└</span>
-                {{ task.title }}
+                <span class="task-title-text" @dblclick.stop="openEditDialog(task)" title="双击编辑">{{ task.title }}</span>
                 <el-tag v-if="task.priority === 'urgent'" type="danger" size="small" style="margin-left:4px">紧急</el-tag>
                 <el-tag v-else-if="task.priority === 'high'" type="danger" size="small" effect="plain" style="margin-left:4px">高</el-tag>
               </div>
@@ -430,7 +505,15 @@ onMounted(loadProjects)
                   <el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" />
                 </el-select>
               </div>
-              <div class="row-cell center">{{ task.estimated_hours ? task.estimated_hours + 'h' : '-' }}</div>
+              <div class="row-cell center" @click.stop>
+                <el-input-number
+                  :model-value="task.estimated_hours"
+                  size="small" :min="0" :max="999" :precision="1" :controls="false"
+                  class="inline-hours"
+                  placeholder="-"
+                  @change="(v: number) => handleFieldUpdate(task, 'estimated_hours', v)"
+                />
+              </div>
               <div class="row-progress">
                 <el-progress
                   :percentage="task.progress_pct ?? (task.status === 'done' ? 100 : 0)"
@@ -440,7 +523,15 @@ onMounted(loadProjects)
                 />
                 <span class="progress-num">{{ task.progress_pct ?? (task.status === 'done' ? 100 : 0) }}%</span>
               </div>
-              <div class="row-cell" :class="{ overdue: task.is_overdue }">{{ formatDate(task.deadline) }}</div>
+              <div class="row-cell" @click.stop>
+                <el-date-picker
+                  :model-value="task.deadline ? task.deadline.slice(0, 10) : ''"
+                  type="date" size="small" value-format="YYYY-MM-DD"
+                  placeholder="-" class="inline-date"
+                  :class="{ overdue: task.is_overdue }"
+                  @update:model-value="(v: string) => handleFieldUpdate(task, 'deadline', v)"
+                />
+              </div>
               <div class="row-cell center" @click.stop>
                 <el-select
                   :model-value="task.status" size="small"
@@ -450,6 +541,15 @@ onMounted(loadProjects)
                   <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
                 </el-select>
                 <el-button type="primary" link size="small" class="add-sub-btn" title="添加子任务" @click="openSubtaskDialog(task, project.id)">+</el-button>
+                <el-dropdown trigger="click" size="small" @command="(cmd: string) => handleTaskCommand(cmd, task, project.id)">
+                  <el-button type="info" link size="small" class="more-btn" title="更多">...</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="edit">编辑任务</el-dropdown-item>
+                      <el-dropdown-item command="delete" divided style="color:#F56C6C">删除任务</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
             </div>
           </template>
@@ -551,6 +651,36 @@ onMounted(loadProjects)
         <el-button type="primary" @click="confirmStatusChange">确认</el-button>
       </template>
     </el-dialog>
+
+    <!-- Edit Task Dialog -->
+    <el-dialog v-model="editDialogVisible" title="编辑任务" width="520px">
+      <el-form v-if="editingTask" label-width="80px">
+        <el-form-item label="任务标题">
+          <el-input v-model="editForm.title" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="editForm.description" type="textarea" :rows="3" />
+        </el-form-item>
+        <el-form-item label="优先级">
+          <el-select v-model="editForm.priority" style="width:100%">
+            <el-option label="低" value="low" />
+            <el-option label="中" value="medium" />
+            <el-option label="高" value="high" />
+            <el-option label="紧急" value="urgent" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="预估工时">
+          <el-input-number v-model="editForm.estimated_hours" :min="0" :max="999" :precision="1" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="截止日期">
+          <el-date-picker v-model="editForm.deadline" type="date" value-format="YYYY-MM-DD" style="width:100%" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleEditSave">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -643,4 +773,28 @@ onMounted(loadProjects)
 .ai-action-row { display: flex; align-items: center; gap: 12px; }
 .ai-status-text { font-size: 13px; color: #e6a23c; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* Task deleted strikethrough */
+.task-deleted { opacity: 0.45; pointer-events: none; }
+.task-deleted .task-title-text { text-decoration: line-through; color: #c0c4cc; }
+
+/* Inline hours input */
+.inline-hours { width: 56px; }
+.inline-hours :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0 2px; }
+.inline-hours :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
+.inline-hours :deep(.el-input__inner) { font-size: 12px; text-align: center; }
+
+/* Inline date picker */
+.inline-date { width: 110px; }
+.inline-date :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0 2px; }
+.inline-date :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
+.inline-date :deep(.el-input__inner) { font-size: 12px; }
+.inline-date.overdue :deep(.el-input__inner) { color: #F56C6C; font-weight: 600; }
+
+/* Title clickable */
+.task-title-text { cursor: default; }
+.task-title-text:hover { color: #409EFF; cursor: pointer; }
+
+/* More button */
+.more-btn { font-size: 14px; font-weight: 700; padding: 2px 4px; margin-left: 0; }
 </style>
