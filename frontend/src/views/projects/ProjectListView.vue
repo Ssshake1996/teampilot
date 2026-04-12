@@ -561,8 +561,8 @@ onMounted(loadProjects)
 .prow { background: #fafbfc; border-left: 4px solid #409EFF; cursor: pointer; min-height: 48px; }
 .prow:hover { background: #f0f5ff; }
 .pn strong { font-size: 13px; }
-.thead { background: #f5f7fa; font-size: 11px; color: #909399; font-weight: 600; min-height: 30px; border-bottom: 1px solid #ebeef5; }
-.trow { border-bottom: 1px solid #f2f3f5; font-size: 12px; min-height: 36px; }
+.thead { background: #f5f7fa; font-size: 11px; color: #909399; font-weight: 600; min-height: 30px; border-bottom: 1px solid #ebeef5; border-left: 4px solid transparent; }
+.trow { border-bottom: 1px solid #f2f3f5; font-size: 12px; min-height: 36px; border-left: 4px solid transparent; }
 .trow:last-child { border-bottom: none; }
 .d0 { background: #fff; } .d1 { background: #fafbfc; } .d2 { background: #f5f7fa; }
 
