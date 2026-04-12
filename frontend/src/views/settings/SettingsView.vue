@@ -23,19 +23,22 @@ const aiConfigLoading = ref(false)
 const savingConfig = ref(false)
 const testingConnection = ref(false)
 const showApiKey = ref(false)
+const apiKeyPlaceholder = ref('sk-...')
 
 async function loadAiConfig() {
   aiConfigLoading.value = true
   try {
     const res = await aiApi.getConfig()
-    const data = res.data as typeof aiConfig.value
+    const data = res.data as any
     aiConfig.value = {
       api_base_url: data.api_base_url || '',
-      api_key: data.api_key || '',
+      api_key: '',  // API Key 不回显，需要用户重新输入才会更新
       model_name: data.model_name || '',
       temperature: data.temperature ?? 0.7,
       max_tokens: data.max_tokens ?? 2048,
     }
+    // 显示脱敏的 key 作为 placeholder 提示
+    apiKeyPlaceholder.value = data.api_key_masked || 'sk-...'
   } catch {
     // Config may not exist yet
   } finally {
@@ -237,17 +240,21 @@ onMounted(() => {
               <el-input
                 v-model="aiConfig.api_key"
                 :type="showApiKey ? 'text' : 'password'"
-                placeholder="sk-..."
+                :placeholder="apiKeyPlaceholder"
               >
                 <template #suffix>
-                  <el-icon
+                  <span
                     class="api-key-toggle"
                     @click="showApiKey = !showApiKey"
+                    style="cursor:pointer; color:#909399; font-size:12px"
                   >
-                    <component :is="showApiKey ? 'Hide' : 'View'" />
-                  </el-icon>
+                    {{ showApiKey ? '隐藏' : '显示' }}
+                  </span>
                 </template>
               </el-input>
+              <div style="font-size:12px; color:#909399; margin-top:4px">
+                留空表示不修改已保存的 Key
+              </div>
             </el-form-item>
             <el-form-item label="模型名称">
               <el-input

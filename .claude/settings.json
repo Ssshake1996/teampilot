@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(psql --version)",
+      "WebSearch",
+      "Bash(pip install:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(node -e \"const p = require\\('F:/项目任务进度管理/frontend/node_modules/vue-echarts/package.json'\\); console.log\\('version:', p.version\\); console.log\\('exports:', JSON.stringify\\(Object.keys\\(p.exports || {}\\)\\).slice\\(0,200\\)\\)\")",
+      "Bash(node -e ':*)",
+      "Bash(rm -f views/HomeView.vue views/AboutView.vue components/HelloWorld.vue components/WelcomeItem.vue components/TheWelcome.vue components/icons/*.vue)",
+      "Bash(rm -rf assets/base.css assets/logo.svg components/icons)",
+      "Bash(python -m pytest tests/test_health.py -v)",
+      "Bash(python -m pytest tests/test_health.py tests/test_auth.py -v)",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m pytest tests/test_projects.py::test_update_project -v -s)",
+      "Bash(pg_isready)",
+      "Bash(rm -f teampilot.db)",
+      "Bash(python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000)",
+      "Bash(npx vite:*)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(taskkill //F //IM uvicorn.exe)",
+      "Bash(python -m uvicorn app.main:app --host 0.0.0.0 --port 8000)",
+      "Bash(curl -s http://localhost:8000/api/v1/auth/login -X POST -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173)",
+      "Bash(curl -s -w \"\\\\nHTTP_CODE:%{http_code}\" \"https://coding.dashscope.aliyuncs.com/v1/chat/completions\" -H \"Authorization: Bearer sk-sp-6adb827d9edc42f1869069beca5cb246\" -H \"Content-Type: application/json\" -d '{\"model\":\"qwen3.5-plus\",\"messages\":[{\"role\":\"user\",\"content\":\"Say OK\"}],\"max_tokens\":10}')",
+      "Bash(curl -s http://localhost:8000/api/v1/ai/config -X PUT -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2MThhNDg3My1kODE0LTQ1MzctOGFiYS1jMzk0MjE3MjM3NDkiLCJyb2xlIjoiYWRtaW4iLCJleHAiOjE3NzU5NjE3ODEsInR5cGUiOiJhY2Nlc3MifQ.HLvYwfnvdtySNBq08DWQSqggIhfSPPuHuDoOCfU6QkQ' -H 'Content-Type: application/json' -d '{\"api_base_url\":\"https://coding.dashscope.aliyuncs.com/v1\",\"api_key\":\"sk-sp-6adb827d9edc42f1869069beca5cb246\",\"model_name\":\"qwen3.5-plus\",\"max_tokens\":2048,\"temperature\":0.7}')",
+      "Bash(curl -s -w '\\\\nHTTP:%{http_code}' http://localhost:8000/api/v1/ai/test-connection -X POST -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2MThhNDg3My1kODE0LTQ1MzctOGFiYS1jMzk0MjE3MjM3NDkiLCJyb2xlIjoiYWRtaW4iLCJleHAiOjE3NzU5NjE3ODEsInR5cGUiOiJhY2Nlc3MifQ.HLvYwfnvdtySNBq08DWQSqggIhfSPPuHuDoOCfU6QkQ')",
+      "Bash(python seed_demo.py)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\" http://localhost:5173)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(f'  {p[\\\\\"name\\\\\"]} \\({p[\\\\\"status\\\\\"]}\\) - {p[\\\\\"task_count\\\\\"]} tasks'\\) for p in d['items']]\")"
+    ]
+  }
+}

@@ -22,4 +22,10 @@ export const aiApi = {
   testConnection() {
     return http.post('/ai/test-connection')
   },
+  analyzeRisk(projectId: string) {
+    return http.post('/ai/analyze-risk', { project_id: projectId })
+  },
+  decomposeTask(taskId: string) {
+    return http.post('/ai/decompose-task', { task_id: taskId })
+  },
 }

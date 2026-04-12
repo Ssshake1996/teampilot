@@ -13,6 +13,8 @@ from app.models.user import User
 from app.services.ai.llm_client import LLMClient
 from app.services.ai.task_assignment import recommend_assignee
 from app.services.ai.capability_analysis import analyze_capability
+from app.services.ai.risk_analysis import analyze_project_risk
+from app.services.ai.task_decompose import decompose_task
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 
@@ -91,6 +93,50 @@ async def analyze(
         await llm.close()
 
 
+class RiskRequest(BaseModel):
+    project_id: uuid.UUID
+
+
+class DecomposeRequest(BaseModel):
+    task_id: uuid.UUID
+
+
+@router.post("/analyze-risk")
+async def risk_analysis(
+    data: RiskRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    llm = await _get_llm(db)
+    try:
+        result = await analyze_project_risk(db, data.project_id, llm)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+    finally:
+        await llm.close()
+
+
+@router.post("/decompose-task")
+async def task_decomposition(
+    data: DecomposeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    llm = await _get_llm(db)
+    try:
+        result = await decompose_task(db, data.task_id, llm)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+    finally:
+        await llm.close()
+
+
 @router.get("/config", response_model=AIConfigOut)
 async def get_config(
     db: AsyncSession = Depends(get_db),
@@ -121,11 +167,14 @@ async def update_config(
     config = result.scalar_one_or_none()
     if config:
         config.api_base_url = data.api_base_url
-        config.api_key_encrypted = data.api_key
+        if data.api_key:  # Only update key if provided (non-empty)
+            config.api_key_encrypted = data.api_key
         config.model_name = data.model_name
         config.max_tokens = data.max_tokens
         config.temperature = Decimal(str(data.temperature))
     else:
+        if not data.api_key:
+            raise HTTPException(status_code=400, detail="API Key is required for initial setup")
         config = AIConfig(
             id=1,
             api_base_url=data.api_base_url,

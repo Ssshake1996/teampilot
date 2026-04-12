@@ -30,6 +30,96 @@ TASK_ASSIGNMENT_USER = """## 任务信息
 }}
 ```"""
 
+RISK_ANALYSIS_SYSTEM = """你是一个资深项目风险管控专家。请根据项目当前的任务状态、人员负载和进度数据，识别潜在风险并给出建议。
+
+要求：
+1. 识别逾期风险（已逾期或即将逾期的任务）
+2. 识别负载风险（某些人任务过多）
+3. 识别进度风险（进度严重滞后的任务）
+4. 识别依赖风险（子任务阻塞父任务）
+5. 每条风险给出严重等级（high/medium/low）和具体建议
+6. 返回严格的 JSON 格式"""
+
+RISK_ANALYSIS_USER = """## 项目信息
+- 项目名称：{project_name}
+- 项目状态：{project_status}
+- 截止日期：{project_end_date}
+- 当前日期：{current_date}
+
+## 任务概况
+- 总任务数：{total_tasks}
+- 已完成：{done_tasks}
+- 进行中：{in_progress_tasks}
+- 已逾期：{overdue_tasks}
+
+## 逾期/临近截止的任务
+{overdue_detail}
+
+## 团队负载
+{workload_detail}
+
+## 进度滞后的任务（进度低于预期）
+{lagging_detail}
+
+## 有子任务未完成的父任务
+{blocked_detail}
+
+请返回 JSON 格式：
+```json
+{{
+  "risks": [
+    {{
+      "type": "overdue|workload|progress|dependency|other",
+      "severity": "high|medium|low",
+      "title": "风险标题",
+      "description": "详细描述",
+      "affected_tasks": ["任务名称"],
+      "affected_users": ["人员名称"],
+      "suggestion": "建议措施"
+    }}
+  ],
+  "overall_health": "healthy|warning|critical",
+  "summary": "项目整体风险评估摘要"
+}}
+```"""
+
+TASK_DECOMPOSE_SYSTEM = """你是一个资深项目经理，擅长将大任务拆解为可执行的精细子任务。
+
+要求：
+1. 每个子任务应该是一个独立的、可分配给单个人的工作单元
+2. 每个子任务需要给出预估工时（小时）
+3. 子任务之间注意逻辑顺序
+4. 考虑团队成员的技能匹配
+5. 返回严格的 JSON 格式"""
+
+TASK_DECOMPOSE_USER = """## 父任务信息
+- 标题：{task_title}
+- 描述：{task_description}
+- 优先级：{task_priority}
+- 总预估工时：{estimated_hours} 小时
+- 截止时间：{deadline}
+
+## 可分配的团队成员
+{team_members}
+
+请将此任务拆解为精细的子任务，并推荐负责人。返回 JSON 格式：
+```json
+{{
+  "subtasks": [
+    {{
+      "title": "子任务标题",
+      "description": "子任务描述",
+      "estimated_hours": 4,
+      "priority": "medium",
+      "recommended_assignee_id": "user-uuid",
+      "recommended_assignee_name": "姓名",
+      "reason": "推荐理由"
+    }}
+  ],
+  "decompose_notes": "拆解说明"
+}}
+```"""
+
 CAPABILITY_ANALYSIS_SYSTEM = """你是一个人力资源分析专家，擅长根据团队成员的技能数据和任务历史来评估其能力。
 请生成一份详细的能力分析报告。
 

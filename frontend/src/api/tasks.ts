@@ -33,4 +33,13 @@ export const tasksApi = {
   reorder(items: { task_id: string; status: TaskStatus; sort_order: number }[]) {
     return http.patch('/tasks/reorder', items)
   },
+  getSubtasks(taskId: string) {
+    return http.get<Task[]>(`/tasks/${taskId}/subtasks`)
+  },
+  createSubtask(taskId: string, data: Partial<Task>) {
+    return http.post<Task>(`/tasks/${taskId}/subtasks`, data)
+  },
+  batchCreateSubtasks(taskId: string, subtasks: Partial<Task>[]) {
+    return http.post<Task[]>(`/tasks/${taskId}/batch-subtasks`, subtasks)
+  },
 }

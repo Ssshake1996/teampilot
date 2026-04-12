@@ -186,3 +186,21 @@ async def reorder_tasks(db: AsyncSession, items: list[dict]) -> None:
             .values(status=item["status"], sort_order=item["sort_order"])
         )
     await db.flush()
+
+
+async def get_subtasks(db: AsyncSession, parent_task_id: uuid.UUID) -> list[dict]:
+    result = await db.execute(
+        select(Task, User.full_name)
+        .outerjoin(User, Task.assignee_id == User.id)
+        .where(Task.parent_task_id == parent_task_id)
+        .order_by(Task.sort_order, Task.created_at)
+    )
+    rows = result.all()
+    items = []
+    for t, assignee_name in rows:
+        items.append({
+            **{c.name: getattr(t, c.name) for c in t.__table__.columns},
+            "assignee_name": assignee_name,
+            "progress_pct": 100 if t.status == TaskStatus.DONE else 0,
+        })
+    return items

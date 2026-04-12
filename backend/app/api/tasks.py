@@ -160,3 +160,57 @@ async def reorder_tasks(
 ):
     await task_service.reorder_tasks(db, [i.model_dump() for i in items])
     return {"message": "Reordered"}
+
+
+@router.get("/tasks/{task_id}/subtasks")
+async def get_subtasks(
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get all subtasks of a parent task."""
+    return await task_service.get_subtasks(db, task_id)
+
+
+@router.post("/tasks/{task_id}/subtasks", status_code=201)
+async def create_subtask(
+    task_id: uuid.UUID,
+    data: TaskCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a subtask under a parent task."""
+    parent = await task_service.get_task(db, task_id)
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent task not found")
+    data.parent_task_id = task_id
+    task = await task_service.create_task(db, parent.project_id, data, current_user.id)
+    await db.refresh(task)
+    await emit_task_event("task.created", {"task_id": str(task.id), "parent_task_id": str(task_id)})
+    return {
+        **{c.name: getattr(task, c.name) for c in task.__table__.columns},
+        "assignee_name": None, "progress_pct": 0,
+    }
+
+
+@router.post("/tasks/{task_id}/batch-subtasks", status_code=201)
+async def batch_create_subtasks(
+    task_id: uuid.UUID,
+    subtasks: list[TaskCreate],
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Batch create subtasks (used after AI decomposition)."""
+    parent = await task_service.get_task(db, task_id)
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent task not found")
+    created = []
+    for s in subtasks:
+        s.parent_task_id = task_id
+        task = await task_service.create_task(db, parent.project_id, s, current_user.id)
+        await db.refresh(task)
+        created.append({
+            **{c.name: getattr(task, c.name) for c in task.__table__.columns},
+            "assignee_name": None, "progress_pct": 0,
+        })
+    return created
