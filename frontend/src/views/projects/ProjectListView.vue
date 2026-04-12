@@ -397,10 +397,11 @@ onMounted(loadProjects)
               </div>
               <!-- Hours -->
               <div class="col-hrs center" @click.stop>
-                <template v-if="canEdit && !task.is_deleted">
-                  <el-input-number :model-value="task.estimated_hours" size="small" :min="0" :max="999" :precision="1" :controls="false" class="ihrs" placeholder="-" @change="(v: number) => handleFieldUpdate(task, 'estimated_hours', v)" />
-                </template>
-                <span v-else>{{ task.estimated_hours ? task.estimated_hours + 'h' : '-' }}</span>
+                <el-popover v-if="canEdit && !task.is_deleted" trigger="click" :width="160" placement="bottom">
+                  <template #reference><span class="dt-click">{{ task.estimated_hours ?? '-' }}</span></template>
+                  <el-input-number :model-value="task.estimated_hours" size="small" :min="0" :max="999" :precision="1" style="width:100%" @change="(v: number) => handleFieldUpdate(task, 'estimated_hours', v)" />
+                </el-popover>
+                <span v-else>{{ task.estimated_hours ?? '-' }}</span>
               </div>
               <!-- Progress bar -->
               <div class="col-prog">
@@ -408,12 +409,18 @@ onMounted(loadProjects)
               </div>
               <!-- Start Date -->
               <div class="col-sd" @click.stop>
-                <el-date-picker v-if="canEdit && !task.is_deleted" :model-value="task.created_at ? task.created_at.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" placeholder="-" class="idt" @update:model-value="(v: string) => handleFieldUpdate(task, 'start_date', v)" />
-                <span v-else>{{ formatDate(task.created_at) }}</span>
+                <el-popover v-if="canEdit && !task.is_deleted" trigger="click" :width="240" placement="bottom">
+                  <template #reference><span class="dt-click">{{ formatDate(task.start_date || task.created_at) }}</span></template>
+                  <el-date-picker :model-value="(task.start_date || task.created_at || '').slice(0, 10)" type="date" size="small" value-format="YYYY-MM-DD" style="width:100%" @update:model-value="(v: string) => handleFieldUpdate(task, 'start_date', v)" />
+                </el-popover>
+                <span v-else>{{ formatDate(task.start_date || task.created_at) }}</span>
               </div>
               <!-- End Date -->
               <div class="col-ed" @click.stop>
-                <el-date-picker v-if="canEdit && !task.is_deleted" :model-value="task.deadline ? task.deadline.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" placeholder="-" class="idt" :class="{ ovd: task.is_overdue }" @update:model-value="(v: string) => handleFieldUpdate(task, 'deadline', v)" />
+                <el-popover v-if="canEdit && !task.is_deleted" trigger="click" :width="240" placement="bottom">
+                  <template #reference><span class="dt-click" :class="{ ovd: task.is_overdue }">{{ formatDate(task.deadline) || '-' }}</span></template>
+                  <el-date-picker :model-value="task.deadline ? task.deadline.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" style="width:100%" @update:model-value="(v: string) => handleFieldUpdate(task, 'deadline', v)" />
+                </el-popover>
                 <span v-else :class="{ ovd: task.is_overdue }">{{ formatDate(task.deadline) }}</span>
               </div>
               <!-- Status + Actions -->
@@ -557,12 +564,14 @@ onMounted(loadProjects)
   display: grid;
   grid-template-columns: 30px 3fr 2fr 1.2fr 0.7fr 1.2fr 1.2fr 1.2fr 2fr;
   align-items: center; padding: 0 8px; min-height: 40px; gap: 2px;
+  border-left: 4px solid transparent;
+  box-sizing: border-box;
 }
-.prow { background: #fafbfc; border-left: 4px solid #409EFF; cursor: pointer; min-height: 48px; }
+.prow { background: #fafbfc; border-left-color: #409EFF; cursor: pointer; min-height: 48px; }
 .prow:hover { background: #f0f5ff; }
 .pn strong { font-size: 13px; }
-.thead { background: #f5f7fa; font-size: 11px; color: #909399; font-weight: 600; min-height: 30px; border-bottom: 1px solid #ebeef5; border-left: 4px solid transparent; }
-.trow { border-bottom: 1px solid #f2f3f5; font-size: 12px; min-height: 36px; border-left: 4px solid transparent; }
+.thead { background: #f5f7fa; font-size: 11px; color: #909399; font-weight: 600; min-height: 30px; border-bottom: 1px solid #ebeef5; }
+.trow { border-bottom: 1px solid #f2f3f5; font-size: 12px; min-height: 36px; }
 .trow:last-child { border-bottom: none; }
 .d0 { background: #fff; } .d1 { background: #fafbfc; } .d2 { background: #f5f7fa; }
 
@@ -596,15 +605,9 @@ onMounted(loadProjects)
 .isel :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
 .isel :deep(.el-input__inner) { font-size: 11px; }
 .ist { width: 82px; }
-.ihrs { width: 100%; }
-.ihrs :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0; }
-.ihrs :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
-.ihrs :deep(.el-input__inner) { font-size: 11px; text-align: center; }
-.idt { width: 100%; }
-.idt :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0 2px; }
-.idt :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
-.idt :deep(.el-input__inner) { font-size: 11px; }
-.idt.ovd :deep(.el-input__inner) { color: #F56C6C; font-weight: 600; }
+/* Clickable text for inline edit */
+.dt-click { cursor: pointer; padding: 2px 4px; border-radius: 3px; border-bottom: 1px dashed #c0c4cc; }
+.dt-click:hover { background: #ecf5ff; color: #409EFF; border-bottom-color: #409EFF; }
 
 /* Deleted */
 .tdel { opacity: 0.75; }
