@@ -699,7 +699,7 @@ onMounted(loadProjects)
 
 .project-row, .task-row, .task-header-row {
   display: grid;
-  grid-template-columns: 48px 1fr 110px 60px 160px 110px 150px;
+  grid-template-columns: 40px minmax(180px, 1fr) 100px 56px 140px 120px 160px;
   align-items: center; padding: 0 12px; min-height: 44px; gap: 4px;
 }
 .project-row {
