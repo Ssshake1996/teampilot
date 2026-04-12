@@ -157,7 +157,9 @@ async def task_estimation(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"AI service error: {type(e).__name__}: {str(e)}")
     finally:
         await llm.close()
 

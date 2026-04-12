@@ -22,7 +22,7 @@ class LLMClient:
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self._http = httpx.AsyncClient(timeout=60.0)
+        self._http = httpx.AsyncClient(timeout=180.0)
 
     async def chat(self, messages: list[dict], **kwargs) -> str:
         """Send a chat completion request. Returns the assistant content."""
