@@ -111,11 +111,14 @@ async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) ->
 
 
 async def delete_task(db: AsyncSession, task_id: uuid.UUID) -> bool:
+    """Soft delete: mark as deleted, don't remove from DB."""
     task = await get_task(db, task_id)
     if not task:
         return False
-    await db.delete(task)
+    task.is_deleted = True
+    task.deleted_at = datetime.now(timezone.utc)
     await db.flush()
+    await db.refresh(task)
     return True
 
 

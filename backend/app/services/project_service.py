@@ -23,10 +23,10 @@ async def list_projects(db: AsyncSession, page: int = 1, page_size: int = 20, in
 
     items = []
     for p in projects:
-        task_count_q = await db.execute(select(func.count(Task.id)).where(Task.project_id == p.id))
+        task_count_q = await db.execute(select(func.count(Task.id)).where(Task.project_id == p.id, Task.is_deleted == False))
         task_count = task_count_q.scalar()
         done_count_q = await db.execute(
-            select(func.count(Task.id)).where(Task.project_id == p.id, Task.status == TaskStatus.DONE)
+            select(func.count(Task.id)).where(Task.project_id == p.id, Task.status == TaskStatus.DONE, Task.is_deleted == False)
         )
         done_count = done_count_q.scalar()
         member_count_q = await db.execute(
@@ -139,7 +139,8 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
             "completed_at": t.completed_at.isoformat() if t.completed_at else None,
             "created_at": t.created_at.isoformat() if t.created_at else None,
             "parent_task_id": str(t.parent_task_id) if t.parent_task_id else None,
-            "is_overdue": bool(t.deadline and t.deadline.replace(tzinfo=None) < now and t.status.value != "done"),
+            "is_deleted": bool(t.is_deleted),
+            "is_overdue": bool(not t.is_deleted and t.deadline and t.deadline.replace(tzinfo=None) < now and t.status.value != "done"),
             "children": [],
         }
         all_tasks[str(t.id)] = td
@@ -168,9 +169,11 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
         children = td["children"]
 
         if children:
-            done_children = sum(1 for c in children if c["status"] == "done")
-            td["progress_pct"] = round(done_children / len(children) * 100)
-            td["subtask_total"] = len(children)
+            active_children = [c for c in children if not c.get("is_deleted")]
+            done_children = sum(1 for c in active_children if c["status"] == "done")
+            total_active = len(active_children) or 1
+            td["progress_pct"] = round(done_children / total_active * 100)
+            td["subtask_total"] = len(active_children)
             td["subtask_done"] = done_children
         else:
             # Leaf task: use logged progress, or 100 if done, 0 if not

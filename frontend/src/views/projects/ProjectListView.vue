@@ -139,19 +139,14 @@ async function handleTaskCommand(cmd: string, task: any, projectId: string) {
   if (cmd === 'edit') {
     openEditDialog(task)
   } else if (cmd === 'delete') {
-    // Mark as deleted visually first (strikethrough + gray)
-    task._deleted = true
     try {
       await tasksApi.delete(task.id)
-      ElMessage.success('任务已删除')
-      // Refresh after a short delay so user sees the strikethrough
-      setTimeout(async () => {
-        await loadTaskTree(projectId, true)
-        const projRes = await projectsApi.list(1, 100, showArchived.value)
-        projects.value = projRes.data.items
-      }, 800)
+      task.is_deleted = true
+      ElMessage.success('任务已标记删除（数据保留，不计入统计）')
+      // Refresh project stats
+      const projRes = await projectsApi.list(1, 100, showArchived.value)
+      projects.value = projRes.data.items
     } catch {
-      task._deleted = false
       ElMessage.error('删除失败')
     }
   }
@@ -485,7 +480,7 @@ onMounted(loadProjects)
               <div class="row-cell center">状态 / 操作</div>
             </div>
 
-            <div v-for="task in taskTrees[project.id]" :key="task.id" class="task-row" :class="{ 'depth-0': task._depth === 0, 'depth-1': task._depth === 1, 'depth-2': task._depth === 2, 'task-deleted': task._deleted }">
+            <div v-for="task in taskTrees[project.id]" :key="task.id" class="task-row" :class="{ 'depth-0': task._depth === 0, 'depth-1': task._depth === 1, 'depth-2': task._depth === 2, 'task-deleted': task.is_deleted }">
               <div class="row-expand">
                 <span v-if="task._depth === 0 && task.subtask_total > 0" class="subtask-badge">{{ task.subtask_done }}/{{ task.subtask_total }}</span>
               </div>
@@ -775,8 +770,11 @@ onMounted(loadProjects)
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 /* Task deleted strikethrough */
-.task-deleted { opacity: 0.45; pointer-events: none; }
+.task-deleted { opacity: 0.5; }
 .task-deleted .task-title-text { text-decoration: line-through; color: #c0c4cc; }
+.task-deleted .inline-select :deep(.el-input__wrapper),
+.task-deleted .inline-hours :deep(.el-input__wrapper),
+.task-deleted .inline-date :deep(.el-input__wrapper) { pointer-events: none; }
 
 /* Inline hours input */
 .inline-hours { width: 56px; }

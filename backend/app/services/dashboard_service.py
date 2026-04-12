@@ -20,7 +20,7 @@ _active_task = (
 async def get_overview(db: AsyncSession) -> dict:
     now = datetime.utcnow()
 
-    base = select(func.count(Task.id)).join(Project, Task.project_id == Project.id).where(Project.status != ProjectStatus.ARCHIVED)
+    base = select(func.count(Task.id)).join(Project, Task.project_id == Project.id).where(Project.status != ProjectStatus.ARCHIVED, Task.is_deleted == False)
     total = (await db.execute(base)).scalar()
     in_progress = (await db.execute(base.where(Task.status == TaskStatus.IN_PROGRESS))).scalar()
     overdue = (await db.execute(base.where(Task.status != TaskStatus.DONE, Task.deadline < now))).scalar()
@@ -42,7 +42,7 @@ async def get_team_workload(db: AsyncSession) -> list[dict]:
     result = []
     for u in users:
         base_q = select(func.count(Task.id)).join(Project, Task.project_id == Project.id).where(
-            Task.assignee_id == u.id, Project.status != ProjectStatus.ARCHIVED
+            Task.assignee_id == u.id, Project.status != ProjectStatus.ARCHIVED, Task.is_deleted == False
         )
         assigned = (await db.execute(base_q.where(Task.status != TaskStatus.DONE))).scalar()
         in_prog = (await db.execute(base_q.where(Task.status == TaskStatus.IN_PROGRESS))).scalar()
