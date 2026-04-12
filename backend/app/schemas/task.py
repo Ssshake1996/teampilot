@@ -1,0 +1,85 @@
+import uuid
+from datetime import datetime
+from decimal import Decimal
+
+from pydantic import BaseModel
+
+from app.models.task import TaskStatus, TaskPriority
+
+
+class TaskCreate(BaseModel):
+    title: str
+    description: str | None = None
+    status: TaskStatus = TaskStatus.BACKLOG
+    priority: TaskPriority = TaskPriority.MEDIUM
+    assignee_id: uuid.UUID | None = None
+    parent_task_id: uuid.UUID | None = None
+    estimated_hours: float | None = None
+    deadline: datetime | None = None
+
+
+class TaskUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    status: TaskStatus | None = None
+    priority: TaskPriority | None = None
+    assignee_id: uuid.UUID | None = None
+    estimated_hours: float | None = None
+    actual_hours: float | None = None
+    deadline: datetime | None = None
+
+
+class TaskOut(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID
+    title: str
+    description: str | None = None
+    status: TaskStatus
+    priority: TaskPriority
+    assignee_id: uuid.UUID | None = None
+    assignee_name: str | None = None
+    creator_id: uuid.UUID
+    parent_task_id: uuid.UUID | None = None
+    estimated_hours: float | None = None
+    actual_hours: float | None = None
+    deadline: datetime | None = None
+    completed_at: datetime | None = None
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+    progress_pct: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class TaskStatusUpdate(BaseModel):
+    status: TaskStatus
+
+
+class TaskAssign(BaseModel):
+    assignee_id: uuid.UUID | None
+
+
+class TaskReorder(BaseModel):
+    task_id: uuid.UUID
+    status: TaskStatus
+    sort_order: int
+
+
+class TaskProgressCreate(BaseModel):
+    progress_pct: int
+    note: str | None = None
+    hours_spent: float | None = None
+
+
+class TaskProgressOut(BaseModel):
+    id: uuid.UUID
+    task_id: uuid.UUID
+    user_id: uuid.UUID
+    user_name: str | None = None
+    progress_pct: int
+    note: str | None = None
+    hours_spent: float | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

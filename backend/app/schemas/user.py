@@ -1,0 +1,36 @@
+import uuid
+from datetime import datetime
+
+from pydantic import BaseModel
+
+from app.models.user import UserRole
+
+
+class UserOut(BaseModel):
+    id: uuid.UUID
+    username: str
+    email: str
+    full_name: str
+    role: UserRole
+    avatar_url: str | None = None
+    is_active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class UserUpdate(BaseModel):
+    full_name: str | None = None
+    email: str | None = None
+    avatar_url: str | None = None
+    role: UserRole | None = None
+
+
+class UserWorkload(BaseModel):
+    user_id: uuid.UUID
+    full_name: str
+    total_tasks: int
+    in_progress_tasks: int
+    overdue_tasks: int
+    estimated_hours: float
+    actual_hours: float
