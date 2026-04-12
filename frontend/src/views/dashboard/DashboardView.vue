@@ -34,6 +34,47 @@ function formatDate(d: string | null) { return d ? d.slice(0, 10) : '-' }
 function goToProject(pid: string) { router.push('/projects/' + pid + '/board') }
 function goToProjects() { router.push('/projects') }
 
+/**
+ * Calculate project risk level based on:
+ * - Time elapsed vs progress achieved
+ * - Overdue task count
+ * Returns { level: 'low'|'medium'|'high', label, color, reasons[] }
+ */
+function projectRisk(p: any): { level: string; label: string; color: string; reasons: string[] } {
+  const reasons: string[] = []
+
+  // 1. Overdue tasks
+  if (p.overdue_tasks >= 3) reasons.push(p.overdue_tasks + ' 个任务逾期')
+  else if (p.overdue_tasks > 0) reasons.push(p.overdue_tasks + ' 个任务逾期')
+
+  // 2. Time vs progress deviation
+  if (p.start_date && p.end_date) {
+    const now = Date.now()
+    const start = new Date(p.start_date).getTime()
+    const end = new Date(p.end_date).getTime()
+    const span = end - start
+    if (span > 0) {
+      const timeRatio = Math.min((now - start) / span, 1) * 100
+      const deviation = p.progress_pct - timeRatio
+      if (deviation < -30) reasons.push('进度严重滞后于工期 (' + Math.round(Math.abs(deviation)) + '%)')
+      else if (deviation < -15) reasons.push('进度略低于工期预期')
+      if (now > end && p.progress_pct < 100) reasons.push('项目已超期')
+    }
+  }
+
+  // 3. No tasks in progress
+  if (p.total_tasks > 0 && p.in_progress_tasks === 0 && p.done_tasks < p.total_tasks) {
+    reasons.push('无进行中的任务')
+  }
+
+  const score = reasons.length
+  if (score >= 2 || reasons.some(r => r.includes('严重') || r.includes('超期')))
+    return { level: 'high', label: '高风险', color: '#F56C6C', reasons }
+  if (score >= 1)
+    return { level: 'medium', label: '有风险', color: '#E6A23C', reasons }
+  return { level: 'low', label: '正常', color: '#67C23A', reasons }
+}
+
 const quadrantLabels: Record<string, { title: string; color: string; desc: string }> = {
   urgent_important: { title: '紧急且重要', color: '#F56C6C', desc: '立即处理' },
   important_not_urgent: { title: '重要不紧急', color: '#E6A23C', desc: '计划安排' },
@@ -109,12 +150,18 @@ onMounted(async () => {
         <div v-for="p in projectProgress" :key="p.id" class="pp-row" @click="goToProject(p.id)">
           <div class="pp-name">
             {{ p.name }}
+            <el-tag :color="projectRisk(p).color" size="small" effect="dark" style="margin-left:6px;border:none;color:#fff">
+              {{ projectRisk(p).label }}
+            </el-tag>
             <el-tag v-if="p.overdue_tasks > 0" type="danger" size="small" style="margin-left:4px">{{ p.overdue_tasks }} 逾期</el-tag>
+          </div>
+          <div v-if="projectRisk(p).reasons.length" class="pp-risks">
+            <span v-for="(r, i) in projectRisk(p).reasons" :key="i" class="pp-risk-item">{{ r }}</span>
           </div>
           <div class="pp-stats">
             <span class="pp-num">{{ p.done_tasks }}/{{ p.total_tasks }}</span>
-            <el-progress :percentage="p.progress_pct" :stroke-width="10" :color="p.progress_pct >= 80 ? '#67C23A' : p.progress_pct >= 40 ? '#E6A23C' : '#409EFF'" style="flex:1" />
-            <span class="pp-date">{{ formatDate(p.end_date) }}</span>
+            <el-progress :percentage="p.progress_pct" :stroke-width="10" :color="projectRisk(p).color" style="flex:1" />
+            <span class="pp-date">{{ formatDate(p.start_date) }} ~ {{ formatDate(p.end_date) }}</span>
           </div>
         </div>
         <el-empty v-if="!projectProgress.length" description="暂无活跃项目" :image-size="50" />
@@ -187,6 +234,8 @@ onMounted(async () => {
 .pp-stats { display: flex; align-items: center; gap: 8px; }
 .pp-num { font-size: 12px; color: #909399; min-width: 40px; }
 .pp-date { font-size: 11px; color: #c0c4cc; white-space: nowrap; }
+.pp-risks { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.pp-risk-item { font-size: 11px; color: #E6A23C; background: #fdf6ec; padding: 1px 6px; border-radius: 3px; }
 
 /* Workload */
 .wl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
