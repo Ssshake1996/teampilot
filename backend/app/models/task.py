@@ -47,6 +47,7 @@ class Task(Base, UUIDMixin, TimestampMixin):
     )
     estimated_hours: Mapped[Decimal | None] = mapped_column(Numeric(6, 1), nullable=True)
     actual_hours: Mapped[Decimal | None] = mapped_column(Numeric(6, 1), nullable=True)
+    start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

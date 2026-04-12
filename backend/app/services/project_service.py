@@ -135,6 +135,7 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
             "assignee_name": assignee_name,
             "estimated_hours": float(t.estimated_hours) if t.estimated_hours else None,
             "actual_hours": float(t.actual_hours) if t.actual_hours else None,
+            "start_date": (t.start_date or t.created_at).isoformat() if (t.start_date or t.created_at) else None,
             "deadline": t.deadline.isoformat() if t.deadline else None,
             "completed_at": t.completed_at.isoformat() if t.completed_at else None,
             "created_at": t.created_at.isoformat() if t.created_at else None,

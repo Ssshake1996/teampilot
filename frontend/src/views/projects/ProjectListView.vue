@@ -274,9 +274,10 @@ async function handleCreate() {
 function taskProgressColor(task: any): string {
   const pct = task.progress_pct ?? 0
   if (task.status === 'done' || pct >= 100) return '#67C23A'
-  if (!task.deadline || !task.created_at) return pct > 0 ? '#409EFF' : '#C0C4CC'
+  const sd = task.start_date || task.created_at
+  if (!task.deadline || !sd) return pct > 0 ? '#409EFF' : '#C0C4CC'
   if (task.status === 'backlog') return '#C0C4CC'
-  const now = Date.now(), start = new Date(task.created_at).getTime(), end = new Date(task.deadline).getTime()
+  const now = Date.now(), start = new Date(sd).getTime(), end = new Date(task.deadline).getTime()
   const span = end - start; if (span <= 0) return pct > 0 ? '#67C23A' : '#F56C6C'
   const deviation = pct - (Math.min(now - start, span) / span * 100)
   if (deviation >= 0) return '#67C23A'
@@ -339,10 +340,11 @@ onMounted(loadProjects)
           <div class="col-who">{{ project.member_count }} 人</div>
           <div class="col-hrs center">{{ project.task_count }} 任务</div>
           <div class="col-prog">
-            <el-progress :percentage="projectProgress(project)" :stroke-width="8" :color="projectProgressColor(project)" style="width:100px" />
+            <el-progress :percentage="projectProgress(project)" :stroke-width="8" :color="projectProgressColor(project)" style="width:100%" />
             <span class="ptxt">{{ project.completed_count }}/{{ project.task_count }}</span>
           </div>
-          <div class="col-dl">{{ formatDate(project.start_date) }} ~ {{ formatDate(project.end_date) }}</div>
+          <div class="col-sd">{{ formatDate(project.start_date) }}</div>
+          <div class="col-ed">{{ formatDate(project.end_date) }}</div>
           <div class="col-act center" @click.stop>
             <el-button type="primary" link size="small" @click="goToBoard(project.id)">看板</el-button>
             <el-popconfirm v-if="project.status !== 'archived' && canEdit" title="归档后不计入统计，确认？" @confirm="archiveProject(project.id)">
@@ -363,8 +365,9 @@ onMounted(loadProjects)
               <div class="col-who">负责人</div>
               <div class="col-hrs center">工时(h)</div>
               <div class="col-prog">进度</div>
-              <div class="col-dl">起止日期</div>
-              <div class="col-act center">状态</div>
+              <div class="col-sd">开始日期</div>
+              <div class="col-ed">截止日期</div>
+              <div class="col-act center">状态 / 操作</div>
             </div>
 
             <div v-for="task in taskTrees[project.id]" :key="task.id" class="trow" :class="['d' + task._depth, { tdel: task.is_deleted }]">
@@ -401,16 +404,17 @@ onMounted(loadProjects)
               </div>
               <!-- Progress bar -->
               <div class="col-prog">
-                <el-progress :percentage="task.progress_pct ?? (task.status === 'done' ? 100 : 0)" :stroke-width="6" :color="taskProgressColor(task)" style="width:90px" />
+                <el-progress :percentage="task.progress_pct ?? (task.status === 'done' ? 100 : 0)" :stroke-width="6" :color="taskProgressColor(task)" style="width:100%" />
               </div>
-              <!-- Dates -->
-              <div class="col-dl" @click.stop>
-                <div class="dl-wrap">
-                  <span class="dl-start">{{ formatDate(task.created_at) }}</span>
-                  <span class="dl-sep">~</span>
-                  <el-date-picker v-if="canEdit && !task.is_deleted" :model-value="task.deadline ? task.deadline.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" placeholder="截止" class="idl" :class="{ ovd: task.is_overdue }" @update:model-value="(v: string) => handleFieldUpdate(task, 'deadline', v)" />
-                  <span v-else :class="{ ovd: task.is_overdue }">{{ formatDate(task.deadline) }}</span>
-                </div>
+              <!-- Start Date -->
+              <div class="col-sd" @click.stop>
+                <el-date-picker v-if="canEdit && !task.is_deleted" :model-value="task.created_at ? task.created_at.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" placeholder="-" class="idt" @update:model-value="(v: string) => handleFieldUpdate(task, 'start_date', v)" />
+                <span v-else>{{ formatDate(task.created_at) }}</span>
+              </div>
+              <!-- End Date -->
+              <div class="col-ed" @click.stop>
+                <el-date-picker v-if="canEdit && !task.is_deleted" :model-value="task.deadline ? task.deadline.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" placeholder="-" class="idt" :class="{ ovd: task.is_overdue }" @update:model-value="(v: string) => handleFieldUpdate(task, 'deadline', v)" />
+                <span v-else :class="{ ovd: task.is_overdue }">{{ formatDate(task.deadline) }}</span>
               </div>
               <!-- Status + Actions -->
               <div class="col-act center" @click.stop>
@@ -418,9 +422,9 @@ onMounted(loadProjects)
                   <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
                 </el-select>
                 <el-tag v-else :type="(taskStatusType(task.status) as any)" size="small">{{ taskStatusLabel(task.status) }}</el-tag>
-                <el-button v-if="canEdit && !task.is_deleted" type="primary" link size="small" title="添加子任务" @click="openSubtaskDialog(task, project.id)">+</el-button>
+                <el-button v-if="canEdit && !task.is_deleted" type="primary" link size="small" @click="openSubtaskDialog(task, project.id)">子任务</el-button>
                 <el-popconfirm v-if="canEdit && !task.is_deleted" title="标记删除？不计入统计" @confirm="handleDelete(task)">
-                  <template #reference><el-button type="danger" link size="small" title="删除">x</el-button></template>
+                  <template #reference><el-button type="danger" link size="small">删除</el-button></template>
                 </el-popconfirm>
               </div>
             </div>
@@ -548,10 +552,10 @@ onMounted(loadProjects)
 .ptree { display: flex; flex-direction: column; gap: 2px; }
 .pblock { background: #fff; border-radius: 6px; overflow-x: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
 
-/* Grid: 8 columns */
+/* Grid: 9 columns, auto-fill width */
 .prow, .trow, .thead {
   display: grid;
-  grid-template-columns: 30px 260px 100px 80px 46px 86px 180px 140px;
+  grid-template-columns: 30px 3fr 2fr 1.2fr 0.7fr 1.2fr 1.2fr 1.2fr 2fr;
   align-items: center; padding: 0 8px; min-height: 40px; gap: 2px;
 }
 .prow { background: #fafbfc; border-left: 4px solid #409EFF; cursor: pointer; min-height: 48px; }
@@ -581,10 +585,7 @@ onMounted(loadProjects)
 .col-hrs.center { text-align: center; }
 .col-prog { display: flex; align-items: center; }
 .ptxt { font-size: 10px; color: #909399; white-space: nowrap; margin-left: 4px; }
-.col-dl { font-size: 11px; color: #909399; overflow: hidden; }
-.dl-wrap { display: flex; align-items: center; gap: 2px; white-space: nowrap; }
-.dl-start { color: #c0c4cc; }
-.dl-sep { color: #dcdfe6; }
+.col-sd, .col-ed { font-size: 11px; color: #909399; }
 .col-act { font-size: 11px; }
 .col-act.center { text-align: center; display: flex; align-items: center; justify-content: center; gap: 2px; white-space: nowrap; flex-wrap: nowrap; }
 .ovd { color: #F56C6C !important; font-weight: 600; }
@@ -595,15 +596,15 @@ onMounted(loadProjects)
 .isel :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
 .isel :deep(.el-input__inner) { font-size: 11px; }
 .ist { width: 82px; }
-.ihrs { width: 46px; }
+.ihrs { width: 100%; }
 .ihrs :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0; }
 .ihrs :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
 .ihrs :deep(.el-input__inner) { font-size: 11px; text-align: center; }
-.idl { width: 100px; }
-.idl :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0 2px; }
-.idl :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
-.idl :deep(.el-input__inner) { font-size: 11px; }
-.idl.ovd :deep(.el-input__inner) { color: #F56C6C; font-weight: 600; }
+.idt { width: 100%; }
+.idt :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0 2px; }
+.idt :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
+.idt :deep(.el-input__inner) { font-size: 11px; }
+.idt.ovd :deep(.el-input__inner) { color: #F56C6C; font-weight: 600; }
 
 /* Deleted */
 .tdel { opacity: 0.75; }
