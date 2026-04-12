@@ -75,3 +75,95 @@ async def get_recent_activity(db: AsyncSession, limit: int = 20) -> list[dict]:
         }
         for tp, uname, ttitle, pname in rows
     ]
+
+
+async def get_my_tasks_quadrant(db: AsyncSession, user_id) -> dict:
+    """Get user's undone tasks grouped into 4 quadrants:
+    - urgent_important: high/urgent priority, deadline within 3 days or overdue
+    - important_not_urgent: high/urgent priority, deadline > 3 days
+    - urgent_not_important: medium/low priority, deadline within 3 days or overdue
+    - not_urgent_not_important: medium/low priority, deadline > 3 days or no deadline
+    """
+    import uuid as uuid_mod
+    now = datetime.utcnow()
+    from datetime import timedelta
+    soon = now + timedelta(days=3)
+
+    result = await db.execute(
+        select(Task, Project.name)
+        .join(Project, Task.project_id == Project.id)
+        .where(
+            Task.assignee_id == (user_id if isinstance(user_id, uuid_mod.UUID) else uuid_mod.UUID(str(user_id))),
+            Task.status != TaskStatus.DONE,
+            Task.is_deleted == False,
+            Project.status != ProjectStatus.ARCHIVED,
+        )
+        .order_by(Task.deadline.asc().nullslast())
+    )
+    rows = result.all()
+
+    quadrants = {
+        "urgent_important": [],
+        "important_not_urgent": [],
+        "urgent_not_important": [],
+        "not_urgent_not_important": [],
+    }
+
+    for t, pname in rows:
+        is_high = t.priority.value in ("high", "urgent")
+        dl = t.deadline.replace(tzinfo=None) if t.deadline else None
+        is_soon = dl is not None and dl <= soon
+
+        item = {
+            "id": str(t.id), "title": t.title, "status": t.status.value,
+            "priority": t.priority.value, "project_name": pname,
+            "project_id": str(t.project_id),
+            "deadline": t.deadline.isoformat() if t.deadline else None,
+            "is_overdue": bool(dl and dl < now),
+            "estimated_hours": float(t.estimated_hours) if t.estimated_hours else None,
+        }
+
+        if is_high and is_soon:
+            quadrants["urgent_important"].append(item)
+        elif is_high and not is_soon:
+            quadrants["important_not_urgent"].append(item)
+        elif not is_high and is_soon:
+            quadrants["urgent_not_important"].append(item)
+        else:
+            quadrants["not_urgent_not_important"].append(item)
+
+    return quadrants
+
+
+async def get_project_progress(db: AsyncSession) -> list[dict]:
+    """Get all active projects with task completion stats."""
+    result = await db.execute(
+        select(Project).where(Project.status != ProjectStatus.ARCHIVED).order_by(Project.created_at.desc())
+    )
+    projects = result.scalars().all()
+
+    items = []
+    for p in projects:
+        total = (await db.execute(
+            select(func.count(Task.id)).where(Task.project_id == p.id, Task.is_deleted == False)
+        )).scalar()
+        done = (await db.execute(
+            select(func.count(Task.id)).where(Task.project_id == p.id, Task.status == TaskStatus.DONE, Task.is_deleted == False)
+        )).scalar()
+        in_prog = (await db.execute(
+            select(func.count(Task.id)).where(Task.project_id == p.id, Task.status == TaskStatus.IN_PROGRESS, Task.is_deleted == False)
+        )).scalar()
+        now = datetime.utcnow()
+        overdue = (await db.execute(
+            select(func.count(Task.id)).where(Task.project_id == p.id, Task.status != TaskStatus.DONE, Task.is_deleted == False, Task.deadline < now)
+        )).scalar()
+
+        items.append({
+            "id": str(p.id), "name": p.name, "status": p.status.value,
+            "start_date": p.start_date.isoformat() if p.start_date else None,
+            "end_date": p.end_date.isoformat() if p.end_date else None,
+            "total_tasks": total, "done_tasks": done, "in_progress_tasks": in_prog,
+            "overdue_tasks": overdue,
+            "progress_pct": round(done / total * 100) if total > 0 else 0,
+        })
+    return items

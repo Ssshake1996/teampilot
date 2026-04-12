@@ -11,4 +11,10 @@ export const dashboardApi = {
   recentActivity(limit = 20) {
     return http.get<RecentActivity[]>('/dashboard/recent-activity', { params: { limit } })
   },
+  myTasks() {
+    return http.get('/dashboard/my-tasks')
+  },
+  projectProgress() {
+    return http.get('/dashboard/project-progress')
+  },
 }

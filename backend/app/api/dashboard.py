@@ -33,3 +33,21 @@ async def recent_activity(
     current_user: User = Depends(get_current_user),
 ):
     return await dashboard_service.get_recent_activity(db, limit)
+
+
+@router.get("/my-tasks")
+async def my_tasks(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get current user's tasks grouped by urgency quadrant."""
+    return await dashboard_service.get_my_tasks_quadrant(db, current_user.id)
+
+
+@router.get("/project-progress")
+async def project_progress(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get all active projects with progress stats."""
+    return await dashboard_service.get_project_progress(db)
