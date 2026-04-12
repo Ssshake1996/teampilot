@@ -361,7 +361,7 @@ onMounted(loadProjects)
               <div class="col-name">任务名称</div>
               <div class="col-fb">最新进展</div>
               <div class="col-who">负责人</div>
-              <div class="col-hrs center">工时</div>
+              <div class="col-hrs center">工时(h)</div>
               <div class="col-prog">进度</div>
               <div class="col-dl">截止日期</div>
               <div class="col-act center">状态</div>
@@ -549,7 +549,7 @@ onMounted(loadProjects)
 /* Grid: 8 columns */
 .prow, .trow, .thead {
   display: grid;
-  grid-template-columns: 36px minmax(140px, 1.2fr) minmax(80px, 0.8fr) 90px 50px 110px 100px 140px;
+  grid-template-columns: 32px minmax(120px,1fr) minmax(60px,0.6fr) 80px 42px 90px 96px 156px;
   align-items: center; padding: 0 8px; min-height: 40px; gap: 2px;
 }
 .prow { background: #fafbfc; border-left: 4px solid #409EFF; cursor: pointer; min-height: 48px; }
@@ -594,7 +594,7 @@ onMounted(loadProjects)
 .ihrs :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0; }
 .ihrs :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
 .ihrs :deep(.el-input__inner) { font-size: 11px; text-align: center; }
-.idl { width: 100px; }
+.idl { width: 92px; }
 .idl :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0 2px; }
 .idl :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
 .idl :deep(.el-input__inner) { font-size: 11px; }
