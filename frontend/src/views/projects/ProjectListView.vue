@@ -429,7 +429,7 @@ onMounted(loadProjects)
                   <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
                 </el-select>
                 <el-tag v-else :type="(taskStatusType(task.status) as any)" size="small">{{ taskStatusLabel(task.status) }}</el-tag>
-                <el-button v-if="canEdit && !task.is_deleted" type="primary" link size="small" @click="openSubtaskDialog(task, project.id)">子任务</el-button>
+                <el-button v-if="canEdit && !task.is_deleted" type="primary" link size="small" @click="openSubtaskDialog(task, project.id)">添加</el-button>
                 <el-popconfirm v-if="canEdit && !task.is_deleted" title="标记删除？不计入统计" @confirm="handleDelete(task)">
                   <template #reference><el-button type="danger" link size="small">删除</el-button></template>
                 </el-popconfirm>
