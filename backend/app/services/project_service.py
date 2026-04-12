@@ -10,12 +10,14 @@ from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectUpdate
 
 
-async def list_projects(db: AsyncSession, page: int = 1, page_size: int = 20) -> tuple[list[dict], int]:
-    total_q = await db.execute(select(func.count(Project.id)))
+async def list_projects(db: AsyncSession, page: int = 1, page_size: int = 20, include_archived: bool = False) -> tuple[list[dict], int]:
+    base_filter = [] if include_archived else [Project.status != ProjectStatus.ARCHIVED]
+
+    total_q = await db.execute(select(func.count(Project.id)).where(*base_filter))
     total = total_q.scalar()
 
     result = await db.execute(
-        select(Project).order_by(Project.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        select(Project).where(*base_filter).order_by(Project.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     )
     projects = result.scalars().all()
 

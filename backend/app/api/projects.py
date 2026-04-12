@@ -18,10 +18,11 @@ router = APIRouter(prefix="/projects", tags=["项目"])
 async def list_projects(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    include_archived: bool = Query(False),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    items, total = await project_service.list_projects(db, page, page_size)
+    items, total = await project_service.list_projects(db, page, page_size, include_archived)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 

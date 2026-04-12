@@ -33,7 +33,10 @@
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(f'  {p[\\\\\"name\\\\\"]} \\({p[\\\\\"status\\\\\"]}\\) - {p[\\\\\"task_count\\\\\"]} tasks'\\) for p in d['items']]\")",
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'Total: {d[\\\\\"total\\\\\"]}, Items: {len\\(d[\\\\\"items\\\\\"]\\)}'\\)\")",
       "Skill(gstack)",
-      "Skill(gstack:*)"
+      "Skill(gstack:*)",
+      "Bash(python seed_new_projects.py)",
+      "Bash(python -c ':*)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'Count: {d[\\\\\"total\\\\\"]}'\\)\")"
     ]
   }
 }

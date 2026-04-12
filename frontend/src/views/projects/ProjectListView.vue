@@ -18,6 +18,9 @@ const taskTrees = ref<Record<string, any[]>>({})
 const loadingTrees = ref<Record<string, boolean>>({})
 const expandedProjects = ref<Set<string>>(new Set())
 
+// Filters
+const showArchived = ref(false)
+
 // Create project dialog
 const createDialogVisible = ref(false)
 const createForm = ref({ name: '', description: '', start_date: '', end_date: '' })
@@ -43,7 +46,7 @@ async function loadProjects() {
   loading.value = true
   try {
     const [projRes, userRes] = await Promise.all([
-      projectsApi.list(1, 100),
+      projectsApi.list(1, 100, showArchived.value),
       usersApi.list(1, 200),
     ])
     projects.value = projRes.data.items
@@ -51,6 +54,24 @@ async function loadProjects() {
   } finally {
     loading.value = false
   }
+}
+
+async function archiveProject(projectId: string) {
+  try {
+    await projectsApi.delete(projectId)
+    ElMessage.success('项目已归档，不再计入仪表盘统计')
+    await loadProjects()
+  } catch {
+    ElMessage.error('归档失败')
+  }
+}
+
+function toggleArchived() {
+  showArchived.value = !showArchived.value
+  // Clear cached trees
+  taskTrees.value = {}
+  expandedProjects.value.clear()
+  loadProjects()
 }
 
 async function loadTaskTree(projectId: string, force = false) {
@@ -242,7 +263,8 @@ onMounted(loadProjects)
         <span class="summary-value" :class="{ warning: summaryStats.overallRate < 50 }">{{ summaryStats.overallRate }}%</span>
         <span class="summary-label">整体完成率</span>
       </div>
-      <el-button type="primary" class="create-btn" @click="createDialogVisible = true">新建项目</el-button>
+      <el-switch v-model="showArchived" active-text="含归档" inactive-text="" style="margin-left:auto" @change="toggleArchived" />
+      <el-button type="primary" @click="createDialogVisible = true">新建项目</el-button>
     </div>
 
     <!-- Project Tree -->
@@ -268,6 +290,12 @@ onMounted(loadProjects)
           <div class="row-cell">{{ formatDate(project.start_date) }} ~ {{ formatDate(project.end_date) }}</div>
           <div class="row-cell center" @click.stop>
             <el-button type="primary" link size="small" @click="goToBoard(project.id)">看板</el-button>
+            <el-popconfirm v-if="project.status !== 'archived'" title="归档后不计入仪表盘统计，确认？" @confirm="archiveProject(project.id)">
+              <template #reference>
+                <el-button type="info" link size="small">归档</el-button>
+              </template>
+            </el-popconfirm>
+            <el-tag v-else type="info" size="small" effect="plain">已归档</el-tag>
           </div>
         </div>
 
@@ -421,7 +449,6 @@ onMounted(loadProjects)
 .summary-value.done { color: #67C23A; }
 .summary-value.warning { color: #E6A23C; }
 .summary-label { font-size: 12px; color: #909399; margin-top: 2px; }
-.create-btn { margin-left: auto; }
 
 .project-tree { display: flex; flex-direction: column; gap: 2px; }
 .project-block { background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
@@ -429,7 +456,7 @@ onMounted(loadProjects)
 /* Shared grid — 7 columns */
 .project-row, .task-row, .task-header-row {
   display: grid;
-  grid-template-columns: 48px 1fr 110px 60px 140px 110px 120px;
+  grid-template-columns: 48px 1fr 110px 60px 140px 110px 140px;
   align-items: center; padding: 0 12px; min-height: 44px; gap: 4px;
 }
 .project-row {

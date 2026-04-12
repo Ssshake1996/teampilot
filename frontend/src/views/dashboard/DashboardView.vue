@@ -214,7 +214,7 @@ onMounted(async () => {
             <el-icon size="28"><TrendCharts /></el-icon>
           </div>
           <div class="stat-info">
-            <div class="stat-value">{{ (stats.completion_rate * 100).toFixed(1) }}%</div>
+            <div class="stat-value">{{ Math.min(stats.completion_rate, 100).toFixed(1) }}%</div>
             <div class="stat-label">完成率</div>
           </div>
         </el-card>
