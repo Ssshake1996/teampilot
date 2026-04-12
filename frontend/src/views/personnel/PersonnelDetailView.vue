@@ -14,6 +14,7 @@ import VChart from 'vue-echarts'
 import { usersApi } from '@/api/users'
 import { capabilitiesApi } from '@/api/capabilities'
 import { aiApi } from '@/api/ai'
+import { skillsApi } from '@/api/skills'
 import type { User, UserSkill, CapabilityProfile } from '@/types/models'
 import { UserRole } from '@/types/enums'
 
@@ -41,55 +42,46 @@ const roleTagType: Record<string, 'danger' | 'warning' | 'info'> = {
   [UserRole.MEMBER]: 'info',
 }
 
+// Editable radar dimensions
+const editingSkills = ref(false)
+const allSkills = ref<{ id: string; name: string; category: string | null }[]>([])
+const newSkillId = ref('')
+const newProficiency = ref(3)
+
 const radarOption = computed(() => {
-  if (!skills.value.length) {
-    return null
-  }
+  if (!skills.value.length) return null
 
   const indicators = skills.value.map((s) => ({
     name: s.skill_name,
-    max: 100,
+    max: 5,
   }))
   const values = skills.value.map((s) => s.proficiency)
 
   return {
-    title: {
-      text: '技能雷达图',
-      left: 'center',
-      textStyle: { fontSize: 14, color: '#303133' },
-    },
-    tooltip: {
-      trigger: 'item',
-    },
+    tooltip: { trigger: 'item' },
     radar: {
       indicator: indicators,
       shape: 'polygon',
       radius: '65%',
-      axisName: {
-        color: '#606266',
-        fontSize: 12,
-      },
+      axisName: { color: '#606266', fontSize: 12 },
+      splitNumber: 5,
     },
-    series: [
-      {
-        type: 'radar',
-        data: [
-          {
-            value: values,
-            name: user.value?.full_name || '技能水平',
-            areaStyle: { color: 'rgba(64, 158, 255, 0.2)' },
-            lineStyle: { color: '#409eff' },
-            itemStyle: { color: '#409eff' },
-          },
-        ],
-      },
-    ],
+    series: [{
+      type: 'radar',
+      data: [{
+        value: values,
+        name: user.value?.full_name || '技能水平',
+        areaStyle: { color: 'rgba(64, 158, 255, 0.2)' },
+        lineStyle: { color: '#409eff' },
+        itemStyle: { color: '#409eff' },
+      }],
+    }],
   }
 })
 
 const onTimeRateDisplay = computed(() => {
   if (capability.value?.on_time_rate == null) return '--'
-  return `${(capability.value.on_time_rate * 100).toFixed(1)}%`
+  return `${Math.min(capability.value.on_time_rate, 100).toFixed(1)}%`
 })
 
 const performanceScoreDisplay = computed(() => {
@@ -141,6 +133,49 @@ async function loadData() {
     }
   } finally {
     loading.value = false
+  }
+}
+
+async function loadAllSkills() {
+  try {
+    const res = await skillsApi.list()
+    allSkills.value = res.data
+  } catch { /* silent */ }
+}
+
+function openSkillEditor() {
+  editingSkills.value = true
+  loadAllSkills()
+}
+
+async function removeSkill(skillId: string) {
+  const updated = skills.value.filter(s => s.skill_id !== skillId)
+  await saveSkills(updated)
+}
+
+async function addSkill() {
+  if (!newSkillId.value) { ElMessage.warning('请选择技能'); return }
+  if (skills.value.some(s => s.skill_id === newSkillId.value)) { ElMessage.warning('该技能已存在'); return }
+  const skill = allSkills.value.find(s => s.id === newSkillId.value)
+  const updated = [...skills.value, { skill_id: newSkillId.value, skill_name: skill?.name || '', category: skill?.category || null, proficiency: newProficiency.value }]
+  await saveSkills(updated)
+  newSkillId.value = ''
+  newProficiency.value = 3
+}
+
+async function updateProficiency(skillId: string, val: number) {
+  const updated = skills.value.map(s => s.skill_id === skillId ? { ...s, proficiency: val } : s)
+  await saveSkills(updated)
+}
+
+async function saveSkills(updatedSkills: UserSkill[]) {
+  try {
+    await usersApi.updateSkills(userId.value, updatedSkills.map(s => ({ skill_id: s.skill_id, proficiency: s.proficiency })))
+    const res = await usersApi.getSkills(userId.value)
+    skills.value = res.data
+    ElMessage.success('技能已更新')
+  } catch {
+    ElMessage.error('技能更新失败')
   }
 }
 
@@ -211,15 +246,38 @@ onMounted(() => {
 
       <!-- Two-column Layout -->
       <div class="detail-columns">
-        <!-- Left: Radar Chart -->
+        <!-- Left: Radar Chart + Skill Editor -->
         <el-card class="radar-card">
           <template #header>
-            <span>能力雷达图</span>
+            <div class="card-header-row">
+              <span>能力雷达图</span>
+              <el-button type="primary" link size="small" @click="openSkillEditor">
+                {{ editingSkills ? '收起' : '编辑维度' }}
+              </el-button>
+            </div>
           </template>
           <div v-if="radarOption" class="radar-chart-wrapper">
             <v-chart :option="radarOption" autoresize class="radar-chart" />
           </div>
-          <el-empty v-else description="暂无技能数据" />
+          <el-empty v-else description="暂无技能数据，请点击编辑维度添加" />
+
+          <!-- Skill Editor Panel -->
+          <div v-if="editingSkills" class="skill-editor">
+            <div class="skill-list">
+              <div v-for="s in skills" :key="s.skill_id" class="skill-item">
+                <span class="skill-name">{{ s.skill_name }}</span>
+                <el-rate v-model="s.proficiency" :max="5" allow-half @change="(v: number) => updateProficiency(s.skill_id, v)" />
+                <el-button type="danger" link size="small" @click="removeSkill(s.skill_id)">删除</el-button>
+              </div>
+            </div>
+            <div class="skill-add-row">
+              <el-select v-model="newSkillId" placeholder="添加技能" filterable size="small" style="flex:1">
+                <el-option v-for="s in allSkills.filter(a => !skills.some(e => e.skill_id === a.id))" :key="s.id" :label="s.name + (s.category ? ' (' + s.category + ')' : '')" :value="s.id" />
+              </el-select>
+              <el-rate v-model="newProficiency" :max="5" style="margin:0 8px" />
+              <el-button type="primary" size="small" @click="addSkill">添加</el-button>
+            </div>
+          </div>
         </el-card>
 
         <!-- Right: AI Analysis -->
@@ -424,5 +482,47 @@ onMounted(() => {
 
 .task-timeline {
   padding: 10px 0;
+}
+
+.card-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.skill-editor {
+  border-top: 1px solid #ebeef5;
+  padding-top: 12px;
+  margin-top: 8px;
+}
+
+.skill-list {
+  margin-bottom: 12px;
+}
+
+.skill-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #f5f7fa;
+}
+
+.skill-item:last-child {
+  border-bottom: none;
+}
+
+.skill-name {
+  min-width: 80px;
+  font-size: 13px;
+  color: #303133;
+}
+
+.skill-add-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed #dcdfe6;
 }
 </style>
