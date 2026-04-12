@@ -277,8 +277,62 @@ async function handleCreate() {
 }
 
 // ── Helpers ──
+
+/**
+ * Progress bar color based on efficiency vs expected pace.
+ * Green: on track or ahead (deviation >= 0)
+ * Yellow: slightly behind (deviation -20% ~ 0)
+ * Red: significantly behind (deviation < -20%)
+ *
+ * Expected progress = elapsed time ratio * 100
+ * Deviation = actual progress - expected progress
+ */
+function taskProgressColor(task: any): string {
+  const GREEN = '#67C23A'
+  const YELLOW = '#E6A23C'
+  const RED = '#F56C6C'
+
+  const pct = task.progress_pct ?? 0
+  // Done = always green
+  if (task.status === 'done' || pct >= 100) return GREEN
+  // Not started statuses without deadline = neutral blue
+  if (!task.deadline || !task.created_at) return pct > 0 ? '#409EFF' : '#C0C4CC'
+  if (task.status === 'backlog') return '#C0C4CC'
+
+  const now = Date.now()
+  const start = new Date(task.created_at).getTime()
+  const end = new Date(task.deadline).getTime()
+  const totalSpan = end - start
+  if (totalSpan <= 0) return pct > 0 ? GREEN : RED
+
+  const elapsed = Math.min(now - start, totalSpan)
+  const timeRatio = elapsed / totalSpan  // 0~1
+  const expectedPct = timeRatio * 100
+  const deviation = pct - expectedPct
+
+  if (deviation >= 0) return GREEN        // on track or ahead
+  if (deviation >= -20) return YELLOW     // slightly behind (within 20%)
+  return RED                              // significantly behind (>20%)
+}
+
 function projectProgress(p: Project) {
   return p.task_count ? Math.round(p.completed_count / p.task_count * 100) : 0
+}
+function projectProgressColor(p: Project): string {
+  const pct = projectProgress(p)
+  if (pct >= 100 || p.status === 'completed') return '#67C23A'
+  if (!p.start_date || !p.end_date) return pct > 0 ? '#409EFF' : '#C0C4CC'
+  const now = Date.now()
+  const start = new Date(p.start_date).getTime()
+  const end = new Date(p.end_date).getTime()
+  const span = end - start
+  if (span <= 0) return '#409EFF'
+  const elapsed = Math.min(now - start, span)
+  const expectedPct = (elapsed / span) * 100
+  const deviation = pct - expectedPct
+  if (deviation >= 0) return '#67C23A'
+  if (deviation >= -20) return '#E6A23C'
+  return '#F56C6C'
 }
 function statusType(s: string) { return ({ planning: 'info', active: '', paused: 'warning', completed: 'success', archived: 'danger' } as any)[s] || 'info' }
 function statusLabel(s: string) { return ({ planning: '规划中', active: '进行中', paused: '已暂停', completed: '已完成', archived: '已归档' } as any)[s] || s }
@@ -329,7 +383,7 @@ onMounted(loadProjects)
           <div class="row-cell">{{ project.member_count }} 人</div>
           <div class="row-cell center">{{ project.task_count }} 任务</div>
           <div class="row-progress">
-            <el-progress :percentage="projectProgress(project)" :stroke-width="8" :color="projectProgress(project) >= 80 ? '#67C23A' : projectProgress(project) >= 40 ? '#E6A23C' : '#409EFF'" style="width:120px" />
+            <el-progress :percentage="projectProgress(project)" :stroke-width="8" :color="projectProgressColor(project)" style="width:120px" />
             <span class="progress-text">{{ project.completed_count }}/{{ project.task_count }}</span>
           </div>
           <div class="row-cell">{{ formatDate(project.start_date) }} ~ {{ formatDate(project.end_date) }}</div>
@@ -381,7 +435,7 @@ onMounted(loadProjects)
                 <el-progress
                   :percentage="task.progress_pct ?? (task.status === 'done' ? 100 : 0)"
                   :stroke-width="6"
-                  :color="(task.progress_pct ?? 0) >= 100 ? '#67C23A' : (task.progress_pct ?? 0) >= 50 ? '#409EFF' : '#C0C4CC'"
+                  :color="taskProgressColor(task)"
                   style="width:100px"
                 />
                 <span class="progress-num">{{ task.progress_pct ?? (task.status === 'done' ? 100 : 0) }}%</span>

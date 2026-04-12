@@ -137,6 +137,7 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
             "actual_hours": float(t.actual_hours) if t.actual_hours else None,
             "deadline": t.deadline.isoformat() if t.deadline else None,
             "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
             "parent_task_id": str(t.parent_task_id) if t.parent_task_id else None,
             "is_overdue": bool(t.deadline and t.deadline.replace(tzinfo=None) < now and t.status.value != "done"),
             "children": [],
