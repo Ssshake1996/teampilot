@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { projectsApi } from '@/api/projects'
 import { tasksApi } from '@/api/tasks'
 import { usersApi } from '@/api/users'
+import { aiApi } from '@/api/ai'
 import type { Project, User } from '@/types/models'
 
 const router = useRouter()
@@ -26,8 +27,11 @@ const creating = ref(false)
 // Add subtask
 const subtaskDialogVisible = ref(false)
 const subtaskParent = ref<{ id: string; title: string; projectId: string } | null>(null)
-const subtaskForm = ref({ title: '', assignee_id: '', estimated_hours: null as number | null, deadline: '' })
+const subtaskForm = ref({ title: '', description: '', assignee_id: '', estimated_hours: null as number | null, deadline: '' })
 const creatingSubtask = ref(false)
+const aiEstimating = ref(false)
+const aiRecommendations = ref<{ user_id: string; name: string; score: number; reason: string }[]>([])
+const aiEstimateInfo = ref<{ estimated_hours: number; reasoning: string; confidence: string } | null>(null)
 
 // Progress dialog (when changing status)
 const progressDialogVisible = ref(false)
@@ -173,8 +177,36 @@ function recalcParent(parentId: string) {
 // ── Add Subtask ──
 function openSubtaskDialog(task: any, projectId: string) {
   subtaskParent.value = { id: task.id, title: task.title, projectId }
-  subtaskForm.value = { title: '', assignee_id: '', estimated_hours: null, deadline: '' }
+  subtaskForm.value = { title: '', description: '', assignee_id: '', estimated_hours: null, deadline: '' }
+  aiRecommendations.value = []
+  aiEstimateInfo.value = null
   subtaskDialogVisible.value = true
+}
+
+async function handleAiEstimate() {
+  if (!subtaskForm.value.title.trim()) { ElMessage.warning('请先输入任务标题'); return }
+  if (!subtaskParent.value) return
+  aiEstimating.value = true
+  try {
+    const res = await aiApi.estimateTask(subtaskParent.value.projectId, subtaskForm.value.title, subtaskForm.value.description)
+    const data = res.data as any
+    aiEstimateInfo.value = { estimated_hours: data.estimated_hours, reasoning: data.reasoning, confidence: data.confidence }
+    aiRecommendations.value = data.recommended_assignees || []
+    // Auto-fill
+    if (data.estimated_hours && !subtaskForm.value.estimated_hours) {
+      subtaskForm.value.estimated_hours = data.estimated_hours
+    }
+    ElMessage.success('AI 分析完成')
+  } catch {
+    ElMessage.error('AI 分析失败，请检查 AI 配置')
+  } finally {
+    aiEstimating.value = false
+  }
+}
+
+function applyRecommendation(rec: { user_id: string }) {
+  subtaskForm.value.assignee_id = rec.user_id
+  ElMessage.success('已采纳推荐人选')
 }
 
 async function handleCreateSubtask() {
@@ -185,6 +217,7 @@ async function handleCreateSubtask() {
   creatingSubtask.value = true
   try {
     const payload: any = { title: subtaskForm.value.title }
+    if (subtaskForm.value.description) payload.description = subtaskForm.value.description
     if (subtaskForm.value.assignee_id) payload.assignee_id = subtaskForm.value.assignee_id
     if (subtaskForm.value.estimated_hours) payload.estimated_hours = subtaskForm.value.estimated_hours
     if (subtaskForm.value.deadline) payload.deadline = subtaskForm.value.deadline
@@ -379,16 +412,55 @@ onMounted(loadProjects)
     </el-dialog>
 
     <!-- Add Subtask Dialog -->
-    <el-dialog v-model="subtaskDialogVisible" :title="'添加子任务 — ' + (subtaskParent?.title || '')" width="520px">
+    <el-dialog v-model="subtaskDialogVisible" :title="'添加子任务 — ' + (subtaskParent?.title || '')" width="640px">
       <el-form label-width="80px">
-        <el-form-item label="子任务名"><el-input v-model="subtaskForm.title" placeholder="请输入子任务标题" @keyup.enter="handleCreateSubtask" /></el-form-item>
+        <el-form-item label="任务标题">
+          <el-input v-model="subtaskForm.title" placeholder="请输入子任务标题" />
+        </el-form-item>
+        <el-form-item label="任务描述">
+          <el-input v-model="subtaskForm.description" type="textarea" :rows="2" placeholder="简要描述任务内容(可选,有助于 AI 更准确推荐)" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="warning" :loading="aiEstimating" @click="handleAiEstimate" :disabled="!subtaskForm.title.trim()">
+            AI 推荐人选 + 预估工时
+          </el-button>
+        </el-form-item>
+
+        <!-- AI Recommendations -->
+        <div v-if="aiEstimateInfo" class="ai-result-box">
+          <div class="ai-result-header">AI 分析结果</div>
+          <div class="ai-estimate-row">
+            <span>预估工时: <strong>{{ aiEstimateInfo.estimated_hours }}h</strong></span>
+            <el-tag :type="aiEstimateInfo.confidence === 'high' ? 'success' : aiEstimateInfo.confidence === 'medium' ? 'warning' : 'info'" size="small">
+              {{ aiEstimateInfo.confidence === 'high' ? '高置信' : aiEstimateInfo.confidence === 'medium' ? '中置信' : '低置信' }}
+            </el-tag>
+          </div>
+          <div class="ai-reasoning">{{ aiEstimateInfo.reasoning }}</div>
+          <div v-if="aiRecommendations.length" class="ai-recommend-list">
+            <div class="ai-recommend-title">推荐人选:</div>
+            <div v-for="(rec, idx) in aiRecommendations" :key="idx" class="ai-recommend-item">
+              <div class="rec-info">
+                <span class="rec-rank">#{{ idx + 1 }}</span>
+                <span class="rec-name">{{ rec.name }}</span>
+                <el-tag size="small" type="warning">{{ rec.score }}分</el-tag>
+              </div>
+              <div class="rec-reason">{{ rec.reason }}</div>
+              <el-button type="primary" size="small" @click="applyRecommendation(rec)">采纳</el-button>
+            </div>
+          </div>
+        </div>
+
         <el-form-item label="负责人">
           <el-select v-model="subtaskForm.assignee_id" placeholder="选择负责人" clearable filterable style="width:100%">
             <el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="预估工时"><el-input-number v-model="subtaskForm.estimated_hours" :min="0" :max="999" :precision="1" style="width:100%" /></el-form-item>
-        <el-form-item label="截止日期"><el-date-picker v-model="subtaskForm.deadline" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
+        <el-form-item label="预估工时">
+          <el-input-number v-model="subtaskForm.estimated_hours" :min="0" :max="999" :precision="1" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="截止日期">
+          <el-date-picker v-model="subtaskForm.deadline" type="date" value-format="YYYY-MM-DD" style="width:100%" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="subtaskDialogVisible = false">取消</el-button>
@@ -485,4 +557,22 @@ onMounted(loadProjects)
 
 .task-tree-container { border-top: 1px solid #ebeef5; }
 .tree-loading, .tree-empty { padding: 16px 24px; text-align: center; color: #909399; font-size: 13px; }
+
+.ai-result-box {
+  background: #fdf6ec; border: 1px solid #faecd8; border-radius: 6px;
+  padding: 12px 16px; margin-bottom: 16px;
+}
+.ai-result-header { font-weight: 600; font-size: 14px; color: #e6a23c; margin-bottom: 8px; }
+.ai-estimate-row { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; font-size: 13px; }
+.ai-reasoning { font-size: 12px; color: #909399; margin-bottom: 10px; }
+.ai-recommend-title { font-size: 13px; font-weight: 600; color: #303133; margin-bottom: 6px; }
+.ai-recommend-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 0;
+  border-bottom: 1px solid #faecd8; flex-wrap: wrap;
+}
+.ai-recommend-item:last-child { border-bottom: none; }
+.rec-info { display: flex; align-items: center; gap: 6px; flex: 1; }
+.rec-rank { font-weight: 700; color: #e6a23c; font-size: 13px; }
+.rec-name { font-weight: 500; font-size: 13px; }
+.rec-reason { font-size: 12px; color: #909399; width: 100%; margin: 2px 0; }
 </style>

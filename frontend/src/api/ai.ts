@@ -28,4 +28,7 @@ export const aiApi = {
   decomposeTask(taskId: string) {
     return http.post('/ai/decompose-task', { task_id: taskId })
   },
+  estimateTask(projectId: string, title: string, description: string = '') {
+    return http.post('/ai/estimate-task', { project_id: projectId, title, description })
+  },
 }

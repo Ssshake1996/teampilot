@@ -120,6 +120,34 @@ TASK_DECOMPOSE_USER = """## 父任务信息
 }}
 ```"""
 
+TASK_ESTIMATE_SYSTEM = """你是一个资深项目经理，擅长根据任务描述预估工作量。
+请根据任务标题和描述，给出工时预估和推荐人选。返回严格的 JSON 格式。"""
+
+TASK_ESTIMATE_USER = """## 任务信息
+- 标题: {task_title}
+- 描述: {task_description}
+- 所属项目: {project_name}
+
+## 项目团队成员
+{team_members}
+
+请返回 JSON 格式:
+```json
+{{
+  "estimated_hours": 8,
+  "confidence": "high|medium|low",
+  "reasoning": "预估理由",
+  "recommended_assignees": [
+    {{
+      "user_id": "xxx",
+      "name": "姓名",
+      "score": 85,
+      "reason": "推荐理由"
+    }}
+  ]
+}}
+```"""
+
 CAPABILITY_ANALYSIS_SYSTEM = """你是一个人力资源分析专家，擅长根据团队成员的技能数据和任务历史来评估其能力。
 请生成一份详细的能力分析报告。
 

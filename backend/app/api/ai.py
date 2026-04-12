@@ -15,6 +15,7 @@ from app.services.ai.task_assignment import recommend_assignee
 from app.services.ai.capability_analysis import analyze_capability
 from app.services.ai.risk_analysis import analyze_project_risk
 from app.services.ai.task_decompose import decompose_task
+from app.services.ai.task_estimate import estimate_task
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 
@@ -128,6 +129,30 @@ async def task_decomposition(
     llm = await _get_llm(db)
     try:
         result = await decompose_task(db, data.task_id, llm)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+    finally:
+        await llm.close()
+
+
+class EstimateRequest(BaseModel):
+    project_id: uuid.UUID
+    title: str
+    description: str = ""
+
+
+@router.post("/estimate-task")
+async def task_estimation(
+    data: EstimateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    llm = await _get_llm(db)
+    try:
+        result = await estimate_task(db, data.project_id, data.title, data.description, llm)
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
