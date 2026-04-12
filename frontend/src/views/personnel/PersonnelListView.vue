@@ -38,6 +38,14 @@ async function loadDepartments() {
   } catch {}
 }
 
+const availableRoles = ref<string[]>(['admin', 'manager', 'member'])
+async function loadRoles() {
+  try {
+    const res = await http.get('/permissions/roles')
+    availableRoles.value = Object.keys(res.data)
+  } catch {}
+}
+
 async function loadUsers() {
   loading.value = true
   try {
@@ -111,7 +119,7 @@ async function handleDeactivate(user: User) {
 }
 
 onMounted(async () => {
-  await loadDepartments()
+  await Promise.all([loadDepartments(), loadRoles()])
   await loadUsers()
 })
 </script>
@@ -189,10 +197,8 @@ onMounted(async () => {
           </el-select>
         </el-form-item>
         <el-form-item label="角色">
-          <el-select v-model="addForm.role" style="width:100%">
-            <el-option label="成员" value="member" />
-            <el-option label="经理" value="manager" />
-            <el-option label="管理员" value="admin" />
+          <el-select v-model="addForm.role" filterable allow-create style="width:100%">
+            <el-option v-for="r in availableRoles" :key="r" :label="r" :value="r" />
           </el-select>
         </el-form-item>
       </el-form>

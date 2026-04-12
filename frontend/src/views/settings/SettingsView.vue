@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { aiApi } from '@/api/ai'
 import { skillsApi } from '@/api/skills'
@@ -76,11 +76,21 @@ async function testConnection() {
 
 // ==================== RBAC Permission Management ====================
 const permCatalog = ref<Record<string, { label: string; items: [string, string][] }>>({})
-const rolePerms = ref<Record<string, string[]>>({})
+const rolesData = ref<Record<string, { permissions: string[]; builtin: boolean }>>({})
 const permsLoading = ref(false)
 const savingRole = ref('')
 const activeRole = ref('admin')
-const roleLabels: Record<string, string> = { admin: '管理员', manager: '经理', member: '成员' }
+const builtinLabels: Record<string, string> = { admin: '管理员', manager: '经理', member: '成员' }
+
+const addRoleDialogVisible = ref(false)
+const newRoleName = ref('')
+const newRoleCopyFrom = ref('')
+const addingRole = ref(false)
+
+const roleList = computed(() => Object.keys(rolesData.value))
+
+function roleLabel(r: string) { return builtinLabels[r] || r }
+function isBuiltin(r: string) { return rolesData.value[r]?.builtin ?? false }
 
 async function loadPermissions() {
   permsLoading.value = true
@@ -90,31 +100,54 @@ async function loadPermissions() {
       http.get('/permissions/roles'),
     ])
     permCatalog.value = catRes.data
-    rolePerms.value = rolesRes.data
+    rolesData.value = rolesRes.data
   } catch {}
   finally { permsLoading.value = false }
 }
 
 function hasPermission(role: string, perm: string): boolean {
-  return (rolePerms.value[role] || []).includes(perm)
+  return (rolesData.value[role]?.permissions || []).includes(perm)
 }
 
 function togglePermission(role: string, perm: string) {
-  if (role === 'admin') return // admin always has all
-  const perms = rolePerms.value[role] || []
+  if (role === 'admin') return
+  const perms = rolesData.value[role]?.permissions || []
   const idx = perms.indexOf(perm)
   if (idx >= 0) perms.splice(idx, 1)
   else perms.push(perm)
-  rolePerms.value[role] = [...perms]
 }
 
 async function saveRolePerms(role: string) {
   savingRole.value = role
   try {
-    await http.put('/permissions/roles', { role, permissions: rolePerms.value[role] })
-    ElMessage.success(`${roleLabels[role]} 权限已保存`)
+    await http.put('/permissions/roles', { role, permissions: rolesData.value[role]?.permissions || [] })
+    ElMessage.success(roleLabel(role) + ' 权限已保存')
   } catch { ElMessage.error('保存失败') }
   finally { savingRole.value = '' }
+}
+
+async function handleAddRole() {
+  if (!newRoleName.value.trim()) { ElMessage.warning('请输入角色名称'); return }
+  addingRole.value = true
+  try {
+    await http.post('/permissions/roles', { name: newRoleName.value.trim(), copy_from: newRoleCopyFrom.value })
+    ElMessage.success('角色已创建')
+    addRoleDialogVisible.value = false
+    newRoleName.value = ''; newRoleCopyFrom.value = ''
+    await loadPermissions()
+    activeRole.value = newRoleName.value.trim() || activeRole.value
+  } catch (e: any) { ElMessage.error(e.response?.data?.detail || '创建失败') }
+  finally { addingRole.value = false }
+}
+
+async function handleDeleteRole(role: string) {
+  try {
+    await ElMessageBox.confirm('删除角色 "' + role + '"？使用此角色的用户不受影响，但失去角色权限配置。', '确认删除', { type: 'warning' })
+    await http.delete('/permissions/roles/' + role)
+    ElMessage.success('角色已删除')
+    if (activeRole.value === role) activeRole.value = 'admin'
+    await loadPermissions()
+  } catch {}
 }
 
 // ==================== Skill Management ====================
@@ -333,30 +366,53 @@ onMounted(() => {
       <!-- User Management Tab -->
       <el-tab-pane label="权限管理" name="permissions">
         <el-card v-loading="permsLoading">
-          <div style="margin-bottom:12px;color:#909399;font-size:13px">
-            配置每个角色可以使用的功能权限。管理员默认拥有所有权限。
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <span style="color:#909399;font-size:13px">配置各角色权限。管理员默认全部权限。支持自定义角色。</span>
+            <el-button type="primary" size="small" @click="addRoleDialogVisible = true">新建角色</el-button>
           </div>
           <el-tabs v-model="activeRole" type="card">
-            <el-tab-pane v-for="role in ['admin','manager','member']" :key="role" :label="roleLabels[role]" :name="role">
+            <el-tab-pane v-for="role in roleList" :key="role" :label="roleLabel(role)" :name="role">
               <div v-for="(cat, catKey) in permCatalog" :key="catKey" class="perm-cat">
                 <div class="perm-cat-hd">{{ cat.label }}</div>
                 <div class="perm-items">
                   <el-checkbox
-                    v-for="[perm, label] in cat.items" :key="perm"
+                    v-for="[perm, plabel] in cat.items" :key="perm"
                     :model-value="hasPermission(role, perm)"
                     :disabled="role === 'admin'"
                     @change="togglePermission(role, perm)"
-                  >{{ label }}</el-checkbox>
+                  >{{ plabel }}</el-checkbox>
                 </div>
               </div>
-              <div style="margin-top:12px">
+              <div style="margin-top:12px;display:flex;gap:8px">
                 <el-button type="primary" :loading="savingRole === role" :disabled="role === 'admin'" @click="saveRolePerms(role)">
-                  保存 {{ roleLabels[role] }} 权限
+                  保存权限
                 </el-button>
+                <el-button v-if="!isBuiltin(role)" type="danger" plain size="small" @click="handleDeleteRole(role)">
+                  删除此角色
+                </el-button>
+                <el-tag v-if="isBuiltin(role)" type="info" size="small" effect="plain" style="margin-left:8px">内置角色</el-tag>
               </div>
             </el-tab-pane>
           </el-tabs>
         </el-card>
+
+        <!-- Add Role Dialog -->
+        <el-dialog v-model="addRoleDialogVisible" title="新建角色" width="400px">
+          <el-form label-width="80px">
+            <el-form-item label="角色名称">
+              <el-input v-model="newRoleName" placeholder="如: 测试组长、项目总监" />
+            </el-form-item>
+            <el-form-item label="复制权限">
+              <el-select v-model="newRoleCopyFrom" placeholder="从已有角色复制(可选)" clearable style="width:100%">
+                <el-option v-for="r in roleList" :key="r" :label="roleLabel(r)" :value="r" />
+              </el-select>
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="addRoleDialogVisible = false">取消</el-button>
+            <el-button type="primary" :loading="addingRole" @click="handleAddRole">创建</el-button>
+          </template>
+        </el-dialog>
       </el-tab-pane>
 
       <!-- Skill Management Tab -->

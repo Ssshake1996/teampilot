@@ -3,15 +3,13 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.models.user import UserRole
-
 
 class UserOut(BaseModel):
     id: uuid.UUID
     username: str
     email: str
     full_name: str
-    role: UserRole
+    role: str
     department: str | None = None
     avatar_url: str | None = None
     is_active: bool
@@ -24,7 +22,7 @@ class UserUpdate(BaseModel):
     full_name: str | None = None
     email: str | None = None
     avatar_url: str | None = None
-    role: UserRole | None = None
+    role: str | None = None
     department: str | None = None
 
 

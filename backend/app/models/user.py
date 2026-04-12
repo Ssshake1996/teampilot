@@ -1,13 +1,14 @@
 import enum
 import uuid
 
-from sqlalchemy import Boolean, Enum, String, Uuid
+from sqlalchemy import Boolean, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base, TimestampMixin, UUIDMixin
 
 
 class UserRole(str, enum.Enum):
+    """Built-in roles (kept for reference, but role field is now free-form string)."""
     ADMIN = "admin"
     MANAGER = "manager"
     MEMBER = "member"
@@ -20,7 +21,7 @@ class User(Base, UUIDMixin, TimestampMixin):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.MEMBER)
+    role: Mapped[str] = mapped_column(String(50), default="member")
     department: Mapped[str | None] = mapped_column(String(100), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

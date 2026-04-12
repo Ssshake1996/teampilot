@@ -47,7 +47,8 @@
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'Users: {d[\\\\\"total\\\\\"]}'\\)\")",
       "Bash(python -c \"import sys; data=sys.stdin.read\\(\\); print\\(f'Length: {len\\(data\\)}, starts: {data[:50]}'\\)\")",
       "Read(//f/项目任务��度管理/backend/app/services/**)",
-      "Bash(curl -s -w '\\\\nHTTP:%{http_code}' http://localhost:8000/api/v1/ai/estimate-task -X POST -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNWJiODFhMS04ZTM4LTQ4MGItYWE3NS03ZGQ2M2JkNTBhYzIiLCJyb2xlIjoiYWRtaW4iLCJleHAiOjE3NzU5NzIwMTQsInR5cGUiOiJhY2Nlc3MifQ.yN6tvDHJ-3wEnD_JIs_YGMBPWTKiSSGPQJquy9iUC-o' -H 'Content-Type: application/json' --data-raw '{\"project_id\":\"1c444e27-0509-4e2b-97be-c53ef54a4f21\",\"title\":\"NVMe format test\",\"description\":\"test\"}')"
+      "Bash(curl -s -w '\\\\nHTTP:%{http_code}' http://localhost:8000/api/v1/ai/estimate-task -X POST -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNWJiODFhMS04ZTM4LTQ4MGItYWE3NS03ZGQ2M2JkNTBhYzIiLCJyb2xlIjoiYWRtaW4iLCJleHAiOjE3NzU5NzIwMTQsInR5cGUiOiJhY2Nlc3MifQ.yN6tvDHJ-3wEnD_JIs_YGMBPWTKiSSGPQJquy9iUC-o' -H 'Content-Type: application/json' --data-raw '{\"project_id\":\"1c444e27-0509-4e2b-97be-c53ef54a4f21\",\"title\":\"NVMe format test\",\"description\":\"test\"}')",
+      "Bash(curl -s -w \"\\\\nHTTP:%{http_code}\" http://localhost:8000/api/v1/auth/login -X POST -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"admin123\"}')"
     ]
   }
 }

@@ -38,6 +38,6 @@ async def authenticate_user(db: AsyncSession, username: str, password: str) -> U
 
 
 def create_tokens(user: User) -> dict:
-    access = create_access_token({"sub": str(user.id), "role": user.role.value})
+    access = create_access_token({"sub": str(user.id), "role": user.role})
     refresh = create_refresh_token({"sub": str(user.id)})
     return {"access_token": access, "refresh_token": refresh}
