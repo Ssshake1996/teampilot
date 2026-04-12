@@ -363,7 +363,7 @@ onMounted(loadProjects)
               <div class="col-who">负责人</div>
               <div class="col-hrs center">工时(h)</div>
               <div class="col-prog">进度</div>
-              <div class="col-dl">截止日期</div>
+              <div class="col-dl">起止日期</div>
               <div class="col-act center">状态</div>
             </div>
 
@@ -403,12 +403,14 @@ onMounted(loadProjects)
               <div class="col-prog">
                 <el-progress :percentage="task.progress_pct ?? (task.status === 'done' ? 100 : 0)" :stroke-width="6" :color="taskProgressColor(task)" style="width:90px" />
               </div>
-              <!-- Deadline -->
+              <!-- Dates -->
               <div class="col-dl" @click.stop>
-                <template v-if="canEdit && !task.is_deleted">
-                  <el-date-picker :model-value="task.deadline ? task.deadline.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" placeholder="-" class="idl" :class="{ ovd: task.is_overdue }" @update:model-value="(v: string) => handleFieldUpdate(task, 'deadline', v)" />
-                </template>
-                <span v-else :class="{ ovd: task.is_overdue }">{{ formatDate(task.deadline) }}</span>
+                <div class="dl-wrap">
+                  <span class="dl-start">{{ formatDate(task.created_at) }}</span>
+                  <span class="dl-sep">~</span>
+                  <el-date-picker v-if="canEdit && !task.is_deleted" :model-value="task.deadline ? task.deadline.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" placeholder="截止" class="idl" :class="{ ovd: task.is_overdue }" @update:model-value="(v: string) => handleFieldUpdate(task, 'deadline', v)" />
+                  <span v-else :class="{ ovd: task.is_overdue }">{{ formatDate(task.deadline) }}</span>
+                </div>
               </div>
               <!-- Status + Actions -->
               <div class="col-act center" @click.stop>
@@ -549,8 +551,7 @@ onMounted(loadProjects)
 /* Grid: 8 columns */
 .prow, .trow, .thead {
   display: grid;
-  grid-template-columns: 32px 1fr 120px 80px 46px 90px 112px 130px;
-  min-width: 900px;
+  grid-template-columns: 30px 260px 100px 80px 46px 86px 180px 140px;
   align-items: center; padding: 0 8px; min-height: 40px; gap: 2px;
 }
 .prow { background: #fafbfc; border-left: 4px solid #409EFF; cursor: pointer; min-height: 48px; }
@@ -580,7 +581,10 @@ onMounted(loadProjects)
 .col-hrs.center { text-align: center; }
 .col-prog { display: flex; align-items: center; }
 .ptxt { font-size: 10px; color: #909399; white-space: nowrap; margin-left: 4px; }
-.col-dl { font-size: 11px; color: #909399; }
+.col-dl { font-size: 11px; color: #909399; overflow: hidden; }
+.dl-wrap { display: flex; align-items: center; gap: 2px; white-space: nowrap; }
+.dl-start { color: #c0c4cc; }
+.dl-sep { color: #dcdfe6; }
 .col-act { font-size: 11px; }
 .col-act.center { text-align: center; display: flex; align-items: center; justify-content: center; gap: 2px; white-space: nowrap; flex-wrap: nowrap; }
 .ovd { color: #F56C6C !important; font-weight: 600; }
@@ -590,20 +594,20 @@ onMounted(loadProjects)
 .isel :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0 2px; }
 .isel :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
 .isel :deep(.el-input__inner) { font-size: 11px; }
-.ist { width: 72px; }
+.ist { width: 82px; }
 .ihrs { width: 46px; }
 .ihrs :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0; }
 .ihrs :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
 .ihrs :deep(.el-input__inner) { font-size: 11px; text-align: center; }
-.idl { width: 108px; }
+.idl { width: 100px; }
 .idl :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0 2px; }
 .idl :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
 .idl :deep(.el-input__inner) { font-size: 11px; }
 .idl.ovd :deep(.el-input__inner) { color: #F56C6C; font-weight: 600; }
 
 /* Deleted */
-.tdel { opacity: 0.4; }
-.tdel .tname { text-decoration: line-through; color: #c0c4cc; }
+.tdel { opacity: 0.75; }
+.tdel .tname { text-decoration: line-through; }
 .tdel .isel :deep(.el-input__wrapper), .tdel .ihrs :deep(.el-input__wrapper), .tdel .idl :deep(.el-input__wrapper) { pointer-events: none; }
 
 .ttree { border-top: 1px solid #ebeef5; }
