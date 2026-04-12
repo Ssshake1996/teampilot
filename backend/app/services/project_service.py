@@ -151,16 +151,18 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
     # Get latest progress_pct per task from task_progress table
     from app.models.task_progress import TaskProgress
     progress_map: dict[str, int] = {}
+    note_map: dict[str, str] = {}
     prog_result = await db.execute(
-        select(TaskProgress.task_id, TaskProgress.progress_pct)
+        select(TaskProgress.task_id, TaskProgress.progress_pct, TaskProgress.note)
         .join(Task, TaskProgress.task_id == Task.id)
         .where(Task.project_id == project_id)
         .order_by(TaskProgress.created_at.desc())
     )
-    for tid_raw, pct in prog_result.all():
+    for tid_raw, pct, note in prog_result.all():
         tid_str = str(tid_raw)
-        if tid_str not in progress_map:  # first = latest (ordered desc)
+        if tid_str not in progress_map:
             progress_map[tid_str] = pct
+            note_map[tid_str] = note or ""
 
     # Assemble tree: attach children, compute progress
     roots = []
@@ -186,6 +188,8 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
                 td["progress_pct"] = 0
             td["subtask_total"] = 0
             td["subtask_done"] = 0
+
+        td["latest_note"] = note_map.get(tid, "")
 
         if td["parent_task_id"] is None:
             roots.append(td)
