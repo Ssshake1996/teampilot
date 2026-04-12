@@ -65,6 +65,15 @@ async def get_workload(
     return await user_service.get_user_workload(db, user_id)
 
 
+@router.get("/{user_id}/tasks")
+async def get_user_tasks(
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await user_service.get_user_tasks(db, user_id)
+
+
 @router.get("/{user_id}/skills", response_model=list[UserSkillOut])
 async def get_user_skills(
     user_id: uuid.UUID,

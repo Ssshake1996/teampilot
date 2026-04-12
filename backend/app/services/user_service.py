@@ -6,6 +6,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.user import User
 from app.models.task import Task, TaskStatus
+from app.models.project import Project
 from app.models.skill import UserSkill, Skill
 from app.schemas.user import UserUpdate
 
@@ -102,6 +103,28 @@ async def get_user_skills(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
             "proficiency": us.proficiency,
         }
         for us, s in rows
+    ]
+
+
+async def get_user_tasks(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
+    """Get all tasks assigned to a user with project name."""
+    result = await db.execute(
+        select(Task, Project.name)
+        .join(Project, Task.project_id == Project.id)
+        .where(Task.assignee_id == user_id, Task.is_deleted == False)
+        .order_by(Task.status, Task.deadline)
+    )
+    return [
+        {
+            "id": str(t.id),
+            "title": t.title,
+            "status": t.status.value,
+            "priority": t.priority.value,
+            "project_name": pname,
+            "estimated_hours": float(t.estimated_hours) if t.estimated_hours else None,
+            "deadline": t.deadline.isoformat() if t.deadline else None,
+        }
+        for t, pname in result.all()
     ]
 
 

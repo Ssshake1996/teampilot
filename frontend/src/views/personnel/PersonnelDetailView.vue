@@ -11,6 +11,7 @@ import {
   RadarComponent,
 } from 'echarts/components'
 import VChart from 'vue-echarts'
+import http from '@/api/index'
 import { usersApi } from '@/api/users'
 import { capabilitiesApi } from '@/api/capabilities'
 import { aiApi } from '@/api/ai'
@@ -26,7 +27,8 @@ const userId = computed(() => route.params.id as string)
 const user = ref<User | null>(null)
 const skills = ref<UserSkill[]>([])
 const capability = ref<CapabilityProfile | null>(null)
-const workload = ref<{ assigned_tasks: number; in_progress_tasks: number; completed_tasks: number; overdue_tasks: number } | null>(null)
+const workload = ref<any>(null)
+const userTasks = ref<any[]>([])
 const loading = ref(false)
 const analyzing = ref(false)
 
@@ -127,10 +129,14 @@ async function loadData() {
 
     try {
       const wlRes = await usersApi.getWorkload(userId.value)
-      workload.value = wlRes.data as typeof workload.value
-    } catch {
-      workload.value = null
-    }
+      workload.value = wlRes.data
+    } catch { workload.value = null }
+
+    // Load user's tasks across all projects
+    try {
+      const res = await http.get('/users/' + userId.value + '/tasks')
+      userTasks.value = res.data
+    } catch { userTasks.value = [] }
   } finally {
     loading.value = false
   }
@@ -187,8 +193,8 @@ async function analyzeCapability() {
   try {
     await aiApi.analyzeCapability(userId.value, (msg: string) => { aiStatusMsg.value = msg })
     ElMessage.success('AI 能力分析已完成')
-    const capRes = await capabilitiesApi.get(userId.value)
-    capability.value = capRes.data
+    // Refresh all data so report and stats are in sync
+    await loadData()
   } catch {
     ElMessage.error('AI 能力分析失败，请稍后重试')
   } finally {
@@ -196,6 +202,10 @@ async function analyzeCapability() {
     aiStatusMsg.value = ''
   }
 }
+
+function formatDateTime(d: string | null) { return d ? d.replace('T', ' ').slice(0, 16) : '' }
+function taskStatusLabel(s: string) { return ({ backlog: '待办池', todo: '待处理', in_progress: '进行中', in_review: '审核中', done: '已完成' } as any)[s] || s }
+function taskStatusType(s: string) { return ({ backlog: 'info', todo: '', in_progress: 'warning', in_review: '', done: 'success' } as any)[s] || 'info' }
 
 onMounted(() => {
   loadData()
@@ -232,8 +242,20 @@ onMounted(() => {
       <!-- Stats Cards -->
       <div class="stats-row">
         <el-card class="stat-card">
-          <div class="stat-value">{{ currentTaskCount }}</div>
-          <div class="stat-label">当前任务</div>
+          <div class="stat-value">{{ workload?.assigned_tasks ?? 0 }}</div>
+          <div class="stat-label">待完成任务</div>
+        </el-card>
+        <el-card class="stat-card">
+          <div class="stat-value" style="color:#E6A23C">{{ workload?.in_progress_tasks ?? 0 }}</div>
+          <div class="stat-label">进行中</div>
+        </el-card>
+        <el-card class="stat-card">
+          <div class="stat-value" style="color:#67C23A">{{ workload?.completed_tasks ?? 0 }}</div>
+          <div class="stat-label">已完成</div>
+        </el-card>
+        <el-card class="stat-card">
+          <div class="stat-value" :style="{ color: (workload?.overdue_tasks ?? 0) > 0 ? '#F56C6C' : '#303133' }">{{ workload?.overdue_tasks ?? 0 }}</div>
+          <div class="stat-label">已逾期</div>
         </el-card>
         <el-card class="stat-card">
           <div class="stat-value">{{ onTimeRateDisplay }}</div>
@@ -284,7 +306,10 @@ onMounted(() => {
         <!-- Right: AI Analysis -->
         <el-card class="analysis-card">
           <template #header>
-            <span>AI 分析报告</span>
+            <div class="card-header-row">
+              <span>AI 分析报告</span>
+              <span v-if="capability?.last_analyzed_at" class="analysis-time">{{ formatDateTime(capability.last_analyzed_at) }}</span>
+            </div>
           </template>
           <template v-if="capability?.ai_analysis">
             <div class="analysis-section">
@@ -326,25 +351,38 @@ onMounted(() => {
         </el-card>
       </div>
 
-      <!-- Task History -->
+      <!-- Task List -->
       <el-card class="task-history-card">
         <template #header>
-          <span>任务概览</span>
+          <span>当前任务</span>
         </template>
-        <div v-if="taskHistory.length" class="task-timeline">
-          <el-timeline>
-            <el-timeline-item
-              v-for="item in taskHistory"
-              :key="item.label"
-              :type="item.type"
-              :timestamp="item.label"
-              placement="top"
-            >
-              <span>{{ item.count }} 个任务</span>
-            </el-timeline-item>
-          </el-timeline>
-        </div>
-        <el-empty v-else description="暂无任务记录" />
+        <el-table v-if="userTasks.length" :data="userTasks" stripe size="small" style="width:100%">
+          <el-table-column label="任务名称" prop="title" min-width="200" show-overflow-tooltip />
+          <el-table-column label="所属项目" prop="project_name" min-width="160" show-overflow-tooltip />
+          <el-table-column label="状态" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag :type="(taskStatusType(row.status) as any)" size="small">{{ taskStatusLabel(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="优先级" width="70" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.priority === 'urgent'" type="danger" size="small">紧急</el-tag>
+              <el-tag v-else-if="row.priority === 'high'" type="danger" size="small" effect="plain">高</el-tag>
+              <span v-else style="font-size:12px;color:#909399">{{ row.priority === 'medium' ? '中' : '低' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="工时" width="60" align="center">
+            <template #default="{ row }">{{ row.estimated_hours ? row.estimated_hours + 'h' : '-' }}</template>
+          </el-table-column>
+          <el-table-column label="截止日期" width="100">
+            <template #default="{ row }">
+              <span :style="{ color: row.deadline && new Date(row.deadline) < new Date() && row.status !== 'done' ? '#F56C6C' : '#909399', fontWeight: row.deadline && new Date(row.deadline) < new Date() && row.status !== 'done' ? '600' : 'normal' }">
+                {{ row.deadline ? row.deadline.slice(0, 10) : '-' }}
+              </span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-else description="暂无分配任务" />
       </el-card>
     </template>
   </div>
@@ -404,8 +442,8 @@ onMounted(() => {
 
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
   margin-bottom: 20px;
 }
 
@@ -499,6 +537,11 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.analysis-time {
+  font-size: 12px;
+  color: #909399;
+  font-weight: normal;
 }
 
 .skill-editor {
