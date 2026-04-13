@@ -2,6 +2,12 @@
 
 This guide is the canonical production deployment and server migration reference for TeamPilot.
 
+## Runtime versions
+
+- Backend runtime: Python `3.11`
+- Frontend build runtime: Node.js `20.19+`
+- Database: PostgreSQL `16`
+
 ## One-click deployment
 
 1. Clone the repository on the target Linux server.

@@ -13,6 +13,14 @@
 
 ## 日常运维
 
+建议先加载当前部署配置，避免命令里写死数据库名、用户名或端口：
+
+```bash
+set -a
+. ./deploy.env
+set +a
+```
+
 ### 查看服务状态
 
 ```bash
@@ -44,8 +52,11 @@ docker compose up -d     # 启动所有服务
 ### 手动备份
 
 ```bash
-# 备份数据库
-docker compose exec db pg_dump -U teampilot teampilot > backup_$(date +%Y%m%d_%H%M%S).sql
+# 推荐：使用仓库自带脚本导出数据库
+scripts/migrate_db.sh export backups/teampilot_$(date +%Y%m%d_%H%M%S).sql.gz
+
+# 或者手动备份数据库
+docker compose exec -T db pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > backup_$(date +%Y%m%d_%H%M%S).sql
 
 # 备份整个数据卷
 docker compose down
@@ -58,14 +69,17 @@ docker compose up -d
 
 ```bash
 # 每天凌晨3点自动备份
-echo "0 3 * * * cd /path/to/teampilot && docker compose exec -T db pg_dump -U teampilot teampilot > /backups/teampilot_\$(date +\%Y\%m\%d).sql" | crontab -
+echo "0 3 * * * cd /path/to/teampilot && set -a && . ./deploy.env && set +a && docker compose exec -T db pg_dump -U \"\$POSTGRES_USER\" \"\$POSTGRES_DB\" > /backups/teampilot_\$(date +\%Y\%m\%d).sql" | crontab -
 ```
 
 ### 恢复数据
 
 ```bash
+# 推荐：使用仓库自带脚本恢复数据库
+scripts/migrate_db.sh import backups/teampilot_YYYYMMDD_HHMMSS.sql.gz
+
 # 从SQL文件恢复
-cat backup.sql | docker compose exec -T db psql -U teampilot teampilot
+cat backup.sql | docker compose exec -T db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
 ```
 
 ---
@@ -135,20 +149,20 @@ docker compose logs --tail=100 backend
 
 # 3. 进入容器调试
 docker compose exec backend bash
-python -c "from app.config import settings; print(settings.DATABASE_URL)"
+python -c "from app.config import settings; print(settings.database_url)"
 ```
 
 ### 健康检查
 
 ```bash
 # 后端健康检查
-curl http://localhost:8000/health
+curl "http://localhost:${BACKEND_PORT}/health"
 
 # 数据库连接检查
-docker compose exec db pg_isready -U teampilot
+docker compose exec db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 # 前端检查
-curl -o /dev/null -sw "%{http_code}" http://localhost
+curl -o /dev/null -sw "%{http_code}" "http://localhost:${FRONTEND_PORT}"
 ```
 
 ---
@@ -159,7 +173,7 @@ curl -o /dev/null -sw "%{http_code}" http://localhost
 
 ```bash
 # 进入数据库
-docker compose exec db psql -U teampilot teampilot
+docker compose exec db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
 
 # 查看慢查询
 SELECT query, calls, mean_exec_time FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 10;
@@ -198,7 +212,7 @@ docker stats
 
 ### 生产环境必做
 
-1. **修改默认密码**: 首次登录后立即修改 admin 密码
+1. **修改管理员密码**: 首次登录后立即修改 `deploy.env` 中生成的管理员密码
 2. **修改JWT密钥**: 部署脚本会自动生成,确认 `deploy.env` 中的 `JWT_SECRET_KEY` 不是默认值
 3. **修改数据库密码**: 修改 `deploy.env` 中的 `POSTGRES_PASSWORD`
 4. **配置 HTTPS**: 在 nginx 前加一层 HTTPS 反向代理
@@ -236,14 +250,19 @@ ufw enable
 #!/bin/bash
 # save as /usr/local/bin/teampilot-check.sh
 
-if ! curl -sf http://localhost:8000/health > /dev/null; then
+cd /path/to/teampilot
+set -a
+. ./deploy.env
+set +a
+
+if ! curl -sf "http://localhost:${BACKEND_PORT}/health" > /dev/null; then
     echo "[$(date)] Backend DOWN, restarting..." >> /var/log/teampilot-monitor.log
-    cd /path/to/teampilot && docker compose restart backend
+    docker compose restart backend
 fi
 
-if ! curl -sf http://localhost > /dev/null; then
+if ! curl -sf "http://localhost:${FRONTEND_PORT}" > /dev/null; then
     echo "[$(date)] Frontend DOWN, restarting..." >> /var/log/teampilot-monitor.log
-    cd /path/to/teampilot && docker compose restart frontend
+    docker compose restart frontend
 fi
 ```
 
