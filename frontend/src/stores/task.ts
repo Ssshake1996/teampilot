@@ -28,7 +28,9 @@ export const useTaskStore = defineStore('task', () => {
   function updateTaskLocally(taskId: string, updates: Partial<Task>) {
     const idx = tasks.value.findIndex((t) => t.id === taskId)
     if (idx !== -1) {
-      tasks.value[idx] = { ...tasks.value[idx], ...updates }
+      const currentTask = tasks.value[idx]
+      if (!currentTask) return
+      tasks.value[idx] = { ...currentTask, ...updates } as Task
     }
   }
 

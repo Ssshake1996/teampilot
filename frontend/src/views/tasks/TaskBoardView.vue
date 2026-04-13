@@ -199,15 +199,17 @@ async function handleLogProgress() {
 // Drag & drop
 async function onDragEnd(status: TaskStatus) {
   const tasksInColumn = columnTasks.value[status]
+  if (!tasksInColumn) return
   // Find tasks that changed columns (their status doesn't match the column)
   for (let i = 0; i < tasksInColumn.length; i++) {
     const task = tasksInColumn[i]
+    if (!task) continue
     if (task.status !== status) {
       try {
         await tasksApi.updateStatus(task.id, status)
         taskStore.updateTaskLocally(task.id, { status, sort_order: i })
         // Update the local copy
-        tasksInColumn[i] = { ...task, status, sort_order: i }
+        tasksInColumn[i] = { ...task, status, sort_order: i } as Task
       } catch {
         ElMessage.error('更新任务状态失败')
         await loadTasks()

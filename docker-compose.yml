@@ -8,7 +8,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-teampilot}"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -19,8 +19,6 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: deploy.env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-teampilot}:${POSTGRES_PASSWORD:-teampilot2026}@db:5432/${POSTGRES_DB:-teampilot}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:

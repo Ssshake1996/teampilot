@@ -7,8 +7,26 @@ import type { OverviewStats } from '@/types/models'
 const router = useRouter()
 const loading = ref(true)
 
+type QuadrantKey =
+  | 'urgent_important'
+  | 'important_not_urgent'
+  | 'urgent_not_important'
+  | 'not_urgent_not_important'
+
+interface MyTaskItem {
+  id: string
+  title: string
+  project_id: string
+  project_name: string
+  deadline: string | null
+  is_overdue: boolean
+}
+
+type QuadrantTaskMap = Record<QuadrantKey, MyTaskItem[]>
+
 const stats = ref<OverviewStats>({ total_tasks: 0, in_progress_tasks: 0, overdue_tasks: 0, completion_rate: 0 })
-const myTasks = ref<any>({ urgent_important: [], important_not_urgent: [], urgent_not_important: [], not_urgent_not_important: [] })
+const quadrantKeys: QuadrantKey[] = ['urgent_important', 'important_not_urgent', 'urgent_not_important', 'not_urgent_not_important']
+const myTasks = ref<QuadrantTaskMap>({ urgent_important: [], important_not_urgent: [], urgent_not_important: [], not_urgent_not_important: [] })
 const projectProgress = ref<any[]>([])
 const teamWorkload = ref<any[]>([])
 
@@ -75,7 +93,7 @@ function projectRisk(p: any): { level: string; label: string; color: string; rea
   return { level: 'low', label: '正常', color: '#67C23A', reasons }
 }
 
-const quadrantLabels: Record<string, { title: string; color: string; desc: string }> = {
+const quadrantLabels: Record<QuadrantKey, { title: string; color: string; desc: string }> = {
   urgent_important: { title: '紧急且重要', color: '#F56C6C', desc: '立即处理' },
   important_not_urgent: { title: '重要不紧急', color: '#E6A23C', desc: '计划安排' },
   urgent_not_important: { title: '紧急不重要', color: '#409EFF', desc: '委派他人' },
@@ -92,7 +110,7 @@ onMounted(async () => {
       dashboardApi.teamWorkload(),
     ])
     if (overviewRes.status === 'fulfilled') stats.value = overviewRes.value.data
-    if (myRes.status === 'fulfilled') myTasks.value = myRes.value.data
+    if (myRes.status === 'fulfilled') myTasks.value = myRes.value.data as QuadrantTaskMap
     if (projRes.status === 'fulfilled') projectProgress.value = projRes.value.data
     if (wlRes.status === 'fulfilled') teamWorkload.value = wlRes.value.data
   } finally {
@@ -120,7 +138,7 @@ onMounted(async () => {
         </div>
       </template>
       <div v-show="showMyTasks" class="quadrant-grid">
-        <div v-for="(qkey, idx) in ['urgent_important','important_not_urgent','urgent_not_important','not_urgent_not_important']" :key="qkey" class="q-box" :style="{ borderTopColor: quadrantLabels[qkey].color }">
+        <div v-for="(qkey, idx) in quadrantKeys" :key="qkey" class="q-box" :style="{ borderTopColor: quadrantLabels[qkey].color }">
           <div class="q-hd">
             <span class="q-title" :style="{ color: quadrantLabels[qkey].color }">{{ quadrantLabels[qkey].title }}</span>
             <span class="q-desc">{{ quadrantLabels[qkey].desc }}</span>
