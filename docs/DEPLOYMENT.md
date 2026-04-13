@@ -29,6 +29,7 @@ What `deploy.sh` now does:
 - Creates `deploy.env` from `deploy.env.example` if needed.
 - Generates `JWT_SECRET_KEY`, `AI_ENCRYPTION_KEY`, and `ADMIN_PASSWORD` when placeholders are still present.
 - Builds and starts the Compose stack.
+- Lets the backend auto-create tables on first start.
 - Fails fast if the backend health check does not become ready.
 
 ## Production checklist
@@ -66,3 +67,4 @@ Recommended migration sequence:
 
 - The backend now constructs its PostgreSQL connection from `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` when `DATABASE_URL` is not provided.
 - `docker-compose.yml` no longer relies on Compose-time interpolation from `env_file`, which was the main source of server-to-server drift.
+- The current repository does not yet include a complete Alembic migration workflow (`alembic.ini` and revision scripts are not present), so first-run schema setup still relies on application startup.

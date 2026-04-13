@@ -103,16 +103,24 @@ docker compose logs -f --tail=50
 
 ### 数据库迁移
 
-如果更新涉及数据库结构变更:
+如果更新涉及数据库结构变更，请先确认仓库里是否已经补齐 Alembic 配置。
+
+当前仓库状态：
+
+- 已安装 `alembic` Python 包
+- 已存在 `backend/alembic/` 目录
+- 但未包含可直接执行的 `alembic.ini` 和版本迁移脚本
+
+因此，下面的 `alembic upgrade head` 只有在你们后续补齐 Alembic 配置后才适用。
+在当前仓库里，自动建表仍主要依赖应用启动时的 `Base.metadata.create_all()`。
+
+如果只是空库首次启动或开发环境重建表，可使用下面的建表脚本：
 
 ```bash
 # 进入后端容器
 docker compose exec backend bash
 
-# 执行迁移
-alembic upgrade head
-
-# 或者重建表(开发阶段,会清空数据)
+# 开发/空库场景重建表(会按当前模型创建缺失表)
 python -c "
 import asyncio
 from app.database import engine
@@ -123,6 +131,13 @@ async def migrate():
 asyncio.run(migrate())
 "
 ```
+
+如果要把数据库结构升级流程规范化，建议后续补齐：
+
+- `backend/alembic.ini`
+- `backend/alembic/env.py`
+- `backend/alembic/versions/*.py`
+- 以及与发布流程配套的迁移命令
 
 ---
 

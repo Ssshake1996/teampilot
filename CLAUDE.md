@@ -27,7 +27,7 @@
 │   │   │   └── ai/          # LLM 客户端和 AI 服务
 │   │   ├── websocket/       # WebSocket 连接管理
 │   │   └── utils/           # 工具 (JWT, 分页)
-│   └── alembic/             # 数据库迁移
+│   └── alembic/             # Alembic 目录占位，当前未补齐完整迁移配置
 ├── frontend/         # Vue 3 前端
 │   └── src/
 │       ├── api/             # Axios API 调用层
@@ -119,6 +119,6 @@ pytest tests/ -v
 ## 常见修改指南
 
 - **添加新的 API**: 在 `api/` 添加路由，在 `services/` 添加业务逻辑，在 `schemas/` 添加数据模型，并在 `api/router.py` 注册
-- **添加新的数据表**: 在 `models/` 添加模型，在 `models/__init__.py` 导入，并运行 alembic 迁移
+- **添加新的数据表**: 在 `models/` 添加模型，在 `models/__init__.py` 导入；当前仓库尚未补齐完整 Alembic 配置，首次建表仍主要依赖应用启动时自动创建
 - **修改 AI Prompt**: 编辑 `services/ai/prompts.py`
 - **添加前端页面**: 在 `views/` 添加组件，在 `router/index.ts` 添加路由
