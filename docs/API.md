@@ -14,6 +14,8 @@ Authorization: Bearer <access_token>
 
 ```bash
 # 登录
+# 部署环境请使用 deploy.env 中的 ADMIN_USERNAME / ADMIN_PASSWORD
+# 本地开发默认可使用 admin / admin123
 curl -X POST http://localhost:8000/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin123"}'
