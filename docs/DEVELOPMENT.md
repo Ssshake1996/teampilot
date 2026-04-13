@@ -1,8 +1,20 @@
 # TeamPilot 开发指南
 
-## 开发环境搭建
+## 开发环境
 
-### 后端
+当前项目的实际开发版本建议如下：
+
+- Python `3.11`
+- Node.js `20.19+`
+- PostgreSQL `16`
+
+说明：
+
+- 后端容器基础镜像是 `python:3.11-slim`
+- 前端构建镜像是 `node:20-alpine`
+- 前端依赖实际要求的 Node 范围是 `^20.19.0 || >=22.12.0`
+
+## 后端开发
 
 ```bash
 cd backend
@@ -10,7 +22,7 @@ pip install fastapi "uvicorn[standard]" "sqlalchemy[asyncio]" asyncpg alembic \
   pydantic-settings "python-jose[cryptography]" "passlib[bcrypt]" httpx \
   cryptography python-multipart aiosqlite
 
-# 使用 SQLite 开发 (免安装 PostgreSQL)
+# 使用 SQLite 进行本地开发（无需额外安装 PostgreSQL）
 echo 'DATABASE_URL=sqlite+aiosqlite:///./teampilot.db' > .env
 echo 'JWT_SECRET_KEY=dev-secret' >> .env
 echo 'CORS_ORIGINS=["http://localhost:5173"]' >> .env
@@ -18,7 +30,7 @@ echo 'CORS_ORIGINS=["http://localhost:5173"]' >> .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-### 前端
+## 前端开发
 
 ```bash
 cd frontend
@@ -26,7 +38,7 @@ npm install
 npm run dev
 ```
 
-### 测试
+## 测试
 
 ```bash
 cd backend
@@ -36,38 +48,39 @@ pytest tests/ -v
 
 ## 代码结构
 
-### 添加新 API
+### 新增后端 API
 
-1. `backend/app/models/` - 添加 SQLAlchemy 模型
-2. `backend/app/schemas/` - 添加 Pydantic schema
-3. `backend/app/services/` - 添加业务逻辑
-4. `backend/app/api/` - 添加路由处理器
-5. `backend/app/api/router.py` - 注册路由
-6. `backend/tests/` - 添加测试
+1. `backend/app/models/`：新增 SQLAlchemy 模型
+2. `backend/app/schemas/`：新增 Pydantic schema
+3. `backend/app/services/`：新增业务逻辑
+4. `backend/app/api/`：新增路由处理
+5. `backend/app/api/router.py`：注册路由
+6. `backend/tests/`：补测试
 
-### 添加前端页面
+### 新增前端页面
 
-1. `frontend/src/views/` - 添加页面组件
-2. `frontend/src/router/index.ts` - 添加路由
-3. `frontend/src/api/` - 添加 API 调用
-4. `frontend/src/types/` - 添加类型定义
+1. `frontend/src/views/`：新增页面组件
+2. `frontend/src/router/index.ts`：新增路由
+3. `frontend/src/api/`：新增 API 调用
+4. `frontend/src/types/`：新增类型定义
 
 ### 修改 AI Prompt
 
-两种方式:
-- **运行时**: 系统设置 > AI Prompt Tab (管理员 Web UI 修改)
-- **代码**: `backend/app/services/ai/prompts.py` (修改默认值)
+有两种方式：
 
-## 数据库模型
+- 运行时：系统设置 > AI Prompt 页面中修改
+- 代码方式：`backend/app/services/ai/prompts.py`
 
-```
-User ──< Task (assignee)
-User ──< ProjectMember >── Project
-User ──< UserSkill >── Skill
-User ──1 CapabilityProfile
-Task >── Project
-Task ──< TaskProgress
-Task ──< TaskRequiredSkill >── Skill
+## 数据模型关系
+
+```text
+User --> Task (assignee)
+User --> ProjectMember --> Project
+User --> UserSkill --> Skill
+User --> CapabilityProfile
+Task --> Project
+Task --> TaskProgress
+Task --> TaskRequiredSkill --> Skill
 RolePermission (role -> permissions JSON)
 AIConfig (singleton, AI settings + custom prompts)
 ```
