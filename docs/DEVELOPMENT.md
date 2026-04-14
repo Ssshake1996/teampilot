@@ -23,9 +23,13 @@ pip install fastapi "uvicorn[standard]" "sqlalchemy[asyncio]" asyncpg alembic \
   cryptography python-multipart aiosqlite
 
 # 使用 SQLite 进行本地开发（无需额外安装 PostgreSQL）
-echo 'DATABASE_URL=sqlite+aiosqlite:///./teampilot.db' > .env
-echo 'JWT_SECRET_KEY=dev-secret' >> .env
-echo 'CORS_ORIGINS=["http://localhost:5173"]' >> .env
+# 可直接复制仓库根目录的 .env.example 到 backend/.env
+copy ..\\.env.example .env
+# 或手动创建等价配置
+# echo 'DATABASE_URL=sqlite+aiosqlite:///./teampilot.db' > .env
+# echo 'JWT_SECRET_KEY=dev-secret-key' >> .env
+# echo 'AI_ENCRYPTION_KEY=dev-ai-encryption-key' >> .env
+# echo 'CORS_ORIGINS=["http://localhost:5173"]' >> .env
 
 uvicorn app.main:app --reload --port 8000
 ```

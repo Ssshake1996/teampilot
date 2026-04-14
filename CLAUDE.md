@@ -60,7 +60,7 @@ pip install fastapi "uvicorn[standard]" "sqlalchemy[asyncio]" asyncpg alembic \
   pydantic-settings "python-jose[cryptography]" "passlib[bcrypt]" httpx \
   cryptography python-multipart aiosqlite
 
-# 复制 .env.example 为 .env 并修改数据库连接
+# 本地开发可直接复制仓库根目录的 .env.example 为 .env
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
