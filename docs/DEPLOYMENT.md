@@ -27,7 +27,7 @@ What `deploy.sh` now does:
 
 - Installs Docker and Docker Compose when possible.
 - Creates `deploy.env` from `deploy.env.example` if needed.
-- Generates `JWT_SECRET_KEY`, `AI_ENCRYPTION_KEY`, and `ADMIN_PASSWORD` when placeholders are still present.
+- Generates `JWT_SECRET_KEY`, `AI_ENCRYPTION_KEY`, and `ADMIN_PASSWORD` when placeholders are still present or values are blank.
 - Builds and starts the Compose stack.
 - Lets the backend auto-create tables on first start.
 - Fails fast if the backend health check does not become ready.

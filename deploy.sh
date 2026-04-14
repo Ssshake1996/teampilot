@@ -140,8 +140,16 @@ set +a
 
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_PORT="${FRONTEND_PORT:-80}"
-ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
+if [ -z "${ADMIN_USERNAME:-}" ]; then
+    ADMIN_USERNAME="admin"
+    set_env_value "ADMIN_USERNAME" "$ADMIN_USERNAME"
+fi
+
+if [ -z "${ADMIN_PASSWORD:-}" ]; then
+    ADMIN_PASSWORD="$(random_password)"
+    set_env_value "ADMIN_PASSWORD" "$ADMIN_PASSWORD"
+    log_info "  Admin password auto-generated because deploy.env did not provide one."
+fi
 
 echo -e "${GREEN}  Configuration: deploy.env${NC}"
 

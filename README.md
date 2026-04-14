@@ -76,7 +76,7 @@ bash deploy.sh
 - 检查并安装 Docker / Docker Compose
 - 自动生成 `JWT_SECRET_KEY`
 - 自动生成 `AI_ENCRYPTION_KEY`
-- 自动生成管理员初始密码
+- 自动生成管理员初始密码（占位值或留空时）
 - 构建并启动前后端与数据库容器
 - 等待后端健康检查通过，失败时直接退出
 
