@@ -54,6 +54,7 @@ cd teampilot
 ### 2. 准备部署配置
 
 如果仓库根目录没有 `deploy.env`，脚本会自动根据 `deploy.env.example` 生成一份。
+`deploy.env` 应作为当前服务器的本地部署配置保留，不建议提交回仓库。
 
 建议至少检查这些配置项：
 

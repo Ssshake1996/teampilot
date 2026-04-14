@@ -12,6 +12,7 @@ This guide is the canonical production deployment and server migration reference
 
 1. Clone the repository on the target Linux server.
 2. Copy `deploy.env.example` to `deploy.env` if `deploy.env` does not already exist.
+   Keep `deploy.env` as a server-local configuration file and do not commit it back into the repository.
 3. Update at least these values in `deploy.env` before exposing the service:
    - `POSTGRES_PASSWORD`
    - `CORS_ORIGINS`
