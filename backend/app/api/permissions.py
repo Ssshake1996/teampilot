@@ -4,7 +4,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import require_admin
+from app.dependencies import get_current_user, get_role_permissions as get_effective_role_permissions, require_permission
 from app.models.user import User
 from app.models.permission import RolePermission, PERMISSION_CATALOG, DEFAULT_PERMISSIONS
 
@@ -13,8 +13,19 @@ router = APIRouter(prefix="/permissions", tags=["权限管理"])
 BUILTIN_ROLES = {"admin", "manager", "member"}
 
 
+@router.get("/me")
+async def get_my_permissions(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return {
+        "role": current_user.role,
+        "permissions": await get_effective_role_permissions(db, current_user.role),
+    }
+
+
 @router.get("/catalog")
-async def get_catalog(current_user: User = Depends(require_admin)):
+async def get_catalog(current_user: User = Depends(require_permission("system.role_manage"))):
     """Get all available permissions grouped by category."""
     return PERMISSION_CATALOG
 
@@ -22,7 +33,7 @@ async def get_catalog(current_user: User = Depends(require_admin)):
 @router.get("/roles")
 async def get_role_permissions(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("system.role_manage")),
 ):
     """Get permissions for all roles (built-in + custom)."""
     result = await db.execute(select(RolePermission).order_by(RolePermission.role))
@@ -51,7 +62,7 @@ class RolePermissionUpdate(BaseModel):
 async def update_role_permissions(
     data: RolePermissionUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("system.role_manage")),
 ):
     """Create or update permissions for a role."""
     if data.role == "admin":
@@ -78,7 +89,7 @@ class RoleCreate(BaseModel):
 async def create_role(
     data: RoleCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("system.role_manage")),
 ):
     """Create a new custom role."""
     name = data.name.strip()
@@ -108,7 +119,7 @@ async def create_role(
 async def delete_role(
     role_name: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("system.role_manage")),
 ):
     """Delete a custom role (built-in roles cannot be deleted)."""
     if role_name in BUILTIN_ROLES:

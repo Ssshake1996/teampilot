@@ -52,6 +52,13 @@ pytest tests/ -v
 
 ## 代码结构
 
+## 用户字段约定
+
+- 登录和注册只使用 `username`，不再采集或保存邮箱。
+- `users.bio` 保存人员详情页的个人介绍。AI 派单、任务预估和能力分析会读取该字段作为成员背景参考。
+- 开发库和生产 PostgreSQL 启动时都会自动补齐当前轻量 schema 变更：删除旧 `users.email`，添加缺失的 `users.bio`。
+- 数据库表字段以 [DATABASE.md](DATABASE.md) 为准；修改模型时需要同步 ORM、Pydantic schema、前端类型、启动兼容迁移和字段回归测试。
+
 ### 新增后端 API
 
 1. `backend/app/models/`：新增 SQLAlchemy 模型
@@ -82,6 +89,7 @@ User --> Task (assignee)
 User --> ProjectMember --> Project
 User --> UserSkill --> Skill
 User --> CapabilityProfile
+User.bio --> AI task assignment / estimate / capability context
 Task --> Project
 Task --> TaskProgress
 Task --> TaskRequiredSkill --> Skill

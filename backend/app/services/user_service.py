@@ -42,14 +42,11 @@ async def list_departments(db: AsyncSession) -> list[str]:
 
 async def create_user(db: AsyncSession, data: dict) -> dict:
     from app.utils.security import hash_password
-    existing = await db.execute(
-        select(User).where((User.username == data["username"]) | (User.email == data.get("email", "")))
-    )
+    existing = await db.execute(select(User).where(User.username == data["username"]))
     if existing.scalar_one_or_none():
-        raise ValueError("Username or email already exists")
+        raise ValueError("Username already exists")
     user = User(
         username=data["username"],
-        email=data.get("email", f"{data['username']}@teampilot.com"),
         hashed_password=hash_password(data.get("password", "123456")),
         full_name=data.get("full_name", data["username"]),
         role=data.get("role", "member"),

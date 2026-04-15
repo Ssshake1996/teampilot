@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session
-from app.dependencies import get_current_user, require_admin
+from app.dependencies import require_permission
 from app.models.capability_profile import AIConfig
 from app.models.user import User
 from app.services.ai.llm_client import LLMClient
@@ -20,6 +20,16 @@ from app.services.ai.capability_analysis import analyze_capability
 from app.services.ai.risk_analysis import analyze_project_risk
 from app.services.ai.task_decompose import decompose_task
 from app.services.ai.task_estimate import estimate_task
+from app.services.ai.progress_import import parse_progress_updates
+from app.services.ai.project_automation import (
+    commit_project_plan,
+    daily_brief,
+    preview_project_plan,
+    project_retrospective,
+    signoff_assistant,
+)
+from app.services import task_service
+from app.websocket.events import emit_progress_event
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 
@@ -42,6 +52,33 @@ class EstimateRequest(BaseModel):
     project_id: uuid.UUID
     title: str
     description: str = ""
+
+class ProgressImportRequest(BaseModel):
+    project_id: uuid.UUID | None = None
+    text: str
+
+class ProgressImportCommitItem(BaseModel):
+    task_id: uuid.UUID
+    progress_pct: int
+    note: str = ""
+    person_name: str = ""
+    reported_at: str = ""
+    hours_spent: float | None = None
+
+class ProgressImportCommitRequest(BaseModel):
+    updates: list[ProgressImportCommitItem]
+
+class ProjectPlanPreviewRequest(BaseModel):
+    prompt: str
+
+class ProjectPlanCommitRequest(BaseModel):
+    plan: dict
+
+class SignoffAssistRequest(BaseModel):
+    task_id: uuid.UUID
+
+class RetrospectiveRequest(BaseModel):
+    project_id: uuid.UUID
 
 class AIConfigUpdate(BaseModel):
     api_base_url: str
@@ -116,7 +153,7 @@ async def _get_llm(db: AsyncSession) -> LLMClient:
 @router.post("/estimate-task")
 async def task_estimation(
     data: EstimateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("ai.estimate")),
 ):
     async def generate() -> AsyncGenerator[str, None]:
         llm = None
@@ -144,7 +181,7 @@ async def task_estimation(
 @router.post("/recommend-assignee")
 async def recommend(
     data: RecommendRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("ai.estimate")),
 ):
     async def generate() -> AsyncGenerator[str, None]:
         llm = None
@@ -172,7 +209,7 @@ async def recommend(
 @router.post("/analyze-capability")
 async def analyze(
     data: AnalyzeRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("ai.capability")),
 ):
     async def generate() -> AsyncGenerator[str, None]:
         llm = None
@@ -201,7 +238,7 @@ async def analyze(
 @router.post("/analyze-risk")
 async def risk_analysis(
     data: RiskRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("ai.risk")),
 ):
     async def generate() -> AsyncGenerator[str, None]:
         llm = None
@@ -230,7 +267,7 @@ async def risk_analysis(
 @router.post("/decompose-task")
 async def task_decomposition(
     data: DecomposeRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("ai.estimate")),
 ):
     async def generate() -> AsyncGenerator[str, None]:
         llm = None
@@ -256,12 +293,182 @@ async def task_decomposition(
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@router.post("/progress-import/preview")
+async def progress_import_preview(
+    data: ProgressImportRequest,
+    current_user: User = Depends(require_permission("ai.estimate")),
+):
+    async def generate() -> AsyncGenerator[str, None]:
+        llm = None
+        try:
+            yield sse_status("正在加载 AI 配置...")
+            llm = await _get_llm_from_db()
+            yield sse_status("正在读取项目任务并识别群消息...")
+            async with async_session() as db:
+                result = await parse_progress_updates(db, data.text, llm, data.project_id)
+            yield sse_status("识别完成")
+            yield sse_result(result)
+        except Exception as e:
+            traceback.print_exc()
+            yield sse_error(f"{type(e).__name__}: {str(e)}")
+        finally:
+            if llm:
+                await llm.close()
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/progress-import/commit")
+async def progress_import_commit(
+    data: ProgressImportCommitRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("progress.submit")),
+):
+    saved = []
+    for item in data.updates:
+        note_parts = []
+        if item.person_name or item.reported_at:
+            note_parts.append(f"群消息：{item.person_name} {item.reported_at}".strip())
+        if item.note:
+            note_parts.append(item.note)
+        note = "\n".join(note_parts)
+        try:
+            await task_service.log_progress(
+                db,
+                item.task_id,
+                current_user.id,
+                item.progress_pct,
+                note,
+                item.hours_spent,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        task = await task_service.get_task(db, item.task_id)
+        if task:
+            saved.append(await task_service.task_to_out(db, task))
+        await emit_progress_event({"task_id": str(item.task_id), "progress_pct": item.progress_pct})
+    return {"saved": saved, "count": len(saved)}
+
+
+@router.post("/project-plan/preview")
+async def project_plan_preview(
+    data: ProjectPlanPreviewRequest,
+    current_user: User = Depends(require_permission("ai.estimate")),
+):
+    async def generate() -> AsyncGenerator[str, None]:
+        llm = None
+        try:
+            yield sse_status("正在加载 AI 配置...")
+            llm = await _get_llm_from_db()
+            yield sse_status("正在生成项目计划和任务树...")
+            async with async_session() as db:
+                result = await preview_project_plan(db, data.prompt, llm)
+            yield sse_status("计划生成完成")
+            yield sse_result(result)
+        except Exception as e:
+            traceback.print_exc()
+            yield sse_error(f"{type(e).__name__}: {str(e)}")
+        finally:
+            if llm:
+                await llm.close()
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/project-plan/commit")
+async def project_plan_commit(
+    data: ProjectPlanCommitRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("project.create")),
+):
+    return await commit_project_plan(db, data.plan, current_user.id)
+
+
+@router.post("/daily-brief")
+async def daily_briefing(
+    current_user: User = Depends(require_permission("ai.risk")),
+):
+    async def generate() -> AsyncGenerator[str, None]:
+        llm = None
+        try:
+            yield sse_status("正在加载 AI 配置...")
+            llm = await _get_llm_from_db()
+            yield sse_status("正在汇总项目、任务和进展数据...")
+            async with async_session() as db:
+                result = await daily_brief(db, llm)
+            yield sse_status("日报巡检完成")
+            yield sse_result(result)
+        except Exception as e:
+            traceback.print_exc()
+            yield sse_error(f"{type(e).__name__}: {str(e)}")
+        finally:
+            if llm:
+                await llm.close()
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/signoff-assist")
+async def signoff_assist(
+    data: SignoffAssistRequest,
+    current_user: User = Depends(require_permission("ai.risk")),
+):
+    async def generate() -> AsyncGenerator[str, None]:
+        llm = None
+        try:
+            yield sse_status("正在加载 AI 配置...")
+            llm = await _get_llm_from_db()
+            yield sse_status("正在检查任务进展、子任务和风险...")
+            async with async_session() as db:
+                result = await signoff_assistant(db, data.task_id, llm)
+            yield sse_status("会签建议生成完成")
+            yield sse_result(result)
+        except Exception as e:
+            traceback.print_exc()
+            yield sse_error(f"{type(e).__name__}: {str(e)}")
+        finally:
+            if llm:
+                await llm.close()
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/project-retrospective")
+async def retrospective(
+    data: RetrospectiveRequest,
+    current_user: User = Depends(require_permission("ai.risk")),
+):
+    async def generate() -> AsyncGenerator[str, None]:
+        llm = None
+        try:
+            yield sse_status("正在加载 AI 配置...")
+            llm = await _get_llm_from_db()
+            yield sse_status("正在整理任务树和进展历史...")
+            async with async_session() as db:
+                result = await project_retrospective(db, data.project_id, llm)
+            yield sse_status("项目复盘生成完成")
+            yield sse_result(result)
+        except Exception as e:
+            traceback.print_exc()
+            yield sse_error(f"{type(e).__name__}: {str(e)}")
+        finally:
+            if llm:
+                await llm.close()
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 # ── Non-streaming endpoints (config, test) ──
 
 @router.get("/config", response_model=AIConfigOut)
 async def get_config(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("ai.config")),
 ):
     result = await db.execute(select(AIConfig).where(AIConfig.id == 1))
     config = result.scalar_one_or_none()
@@ -282,7 +489,7 @@ async def get_config(
 async def update_config(
     data: AIConfigUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("ai.config")),
 ):
     result = await db.execute(select(AIConfig).where(AIConfig.id == 1))
     config = result.scalar_one_or_none()
@@ -309,7 +516,7 @@ async def update_config(
 @router.post("/test-connection")
 async def test_connection(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("ai.config")),
 ):
     llm = await _get_llm(db)
     try:
@@ -334,7 +541,7 @@ PROMPT_LABELS = {
 @router.get("/prompts")
 async def get_prompts(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("ai.prompt")),
 ):
     """Get all custom system prompts. Returns defaults from prompts.py if not customized."""
     from app.services.ai import prompts as default_prompts
@@ -372,7 +579,7 @@ class PromptUpdate(BaseModel):
 async def update_prompt(
     data: PromptUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("ai.prompt")),
 ):
     if data.key not in PROMPT_FIELDS:
         raise HTTPException(status_code=400, detail=f"Invalid prompt key: {data.key}")

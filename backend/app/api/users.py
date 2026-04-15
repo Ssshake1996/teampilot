@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user, require_admin
+from app.dependencies import get_current_user, require_permission, user_has_permission
 from app.models.user import User
 from app.schemas.user import UserOut, UserUpdate, UserWorkload
 from app.schemas.skill import UserSkillUpdate, UserSkillOut
@@ -43,8 +43,11 @@ async def list_departments(
 async def create_user(
     data: dict,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("personnel.add")),
 ):
+    target_role = data.get("role", "member")
+    if target_role != "member" and not await user_has_permission(db, current_user, "system.role_manage"):
+        raise HTTPException(status_code=403, detail="Permission required: system.role_manage")
     return await user_service.create_user(db, data)
 
 
@@ -52,8 +55,10 @@ async def create_user(
 async def deactivate_user(
     user_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("personnel.deactivate")),
 ):
+    if current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
     return await user_service.deactivate_user(db, user_id)
 
 
@@ -76,8 +81,12 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.id != user_id and current_user.role == "member":
-        raise HTTPException(status_code=403, detail="Cannot update other users")
+    payload = data.model_dump(exclude_unset=True)
+    if "role" in payload and not await user_has_permission(db, current_user, "system.role_manage"):
+        raise HTTPException(status_code=403, detail="Permission required: system.role_manage")
+    profile_fields = set(payload) - {"role"}
+    if current_user.id != user_id and profile_fields and not await user_has_permission(db, current_user, "personnel.edit"):
+        raise HTTPException(status_code=403, detail="Permission required: personnel.edit")
     user = await user_service.update_user(db, user_id, data)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -116,7 +125,7 @@ async def update_user_skills(
     user_id: uuid.UUID,
     skills: list[UserSkillUpdate],
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("personnel.edit_skills")),
 ):
     await user_service.update_user_skills(
         db, user_id, [s.model_dump() for s in skills]

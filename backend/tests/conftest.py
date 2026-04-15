@@ -74,7 +74,6 @@ async def test_user(db_session: AsyncSession):
     user = User(
         id=uuid.uuid4(),
         username="testuser",
-        email="test@example.com",
         hashed_password=hash_password("password123"),
         full_name="Test User",
         role=UserRole.ADMIN,

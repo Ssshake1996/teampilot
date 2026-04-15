@@ -227,7 +227,7 @@ async def seed():
     async with async_session() as db:
         # ── Admin ──
         admin = User(
-            username="admin", email="admin@teampilot.com",
+            username="admin",
             hashed_password=hash_password("admin123"),
             full_name="系统管理员", role=UserRole.ADMIN,
         )
@@ -238,7 +238,6 @@ async def seed():
         for i, m in enumerate(TEAM):
             u = User(
                 username=m["username"],
-                email=f"{m['username']}@teampilot.com",
                 hashed_password=PASSWORD,
                 full_name=m["full_name"],
                 role=m["role"],

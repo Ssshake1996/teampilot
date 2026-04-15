@@ -10,10 +10,8 @@ from app.models import Base, TimestampMixin, UUIDMixin
 
 
 class TaskStatus(str, enum.Enum):
-    BACKLOG = "backlog"
-    TODO = "todo"
+    NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
-    IN_REVIEW = "in_review"
     DONE = "done"
 
 
@@ -33,7 +31,7 @@ class Task(Base, UUIDMixin, TimestampMixin):
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[TaskStatus] = mapped_column(
-        Enum(TaskStatus), default=TaskStatus.BACKLOG, index=True
+        Enum(TaskStatus), default=TaskStatus.NOT_STARTED, index=True
     )
     priority: Mapped[TaskPriority] = mapped_column(Enum(TaskPriority), default=TaskPriority.MEDIUM)
     assignee_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -50,6 +48,10 @@ class Task(Base, UUIDMixin, TimestampMixin):
     start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    signed_off_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True
+    )
+    signed_off_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
@@ -58,6 +60,7 @@ class Task(Base, UUIDMixin, TimestampMixin):
     project = relationship("Project", back_populates="tasks")
     assignee = relationship("User", back_populates="assigned_tasks", foreign_keys=[assignee_id])
     creator = relationship("User", back_populates="created_tasks", foreign_keys=[creator_id])
+    signed_off_by = relationship("User", foreign_keys=[signed_off_by_id])
     parent_task = relationship("Task", remote_side="Task.id", backref="subtasks")
     progress_logs = relationship("TaskProgress", back_populates="task", cascade="all, delete-orphan")
     required_skills = relationship("TaskRequiredSkill", back_populates="task", cascade="all, delete-orphan")

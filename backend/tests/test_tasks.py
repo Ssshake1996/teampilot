@@ -18,7 +18,7 @@ async def test_create_task(client: AsyncClient, auth_headers):
     assert res.status_code == 201
     data = res.json()
     assert data["title"] == "Test Task"
-    assert data["status"] == "backlog"
+    assert data["status"] == "in_progress"
     assert data["priority"] == "high"
 
 
@@ -38,7 +38,7 @@ async def test_list_tasks(client: AsyncClient, auth_headers):
 
 @pytest.mark.asyncio
 async def test_update_task_status(client: AsyncClient, auth_headers):
-    """Test moving a task to a different status."""
+    """Task status is automatic and cannot be changed manually."""
     proj = await client.post("/api/v1/projects", json={"name": "Status Project"}, headers=auth_headers)
     pid = proj.json()["id"]
     task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Move Me"}, headers=auth_headers)
@@ -47,21 +47,33 @@ async def test_update_task_status(client: AsyncClient, auth_headers):
     res = await client.patch(f"/api/v1/tasks/{tid}/status", json={
         "status": "in_progress",
     }, headers=auth_headers)
-    assert res.status_code == 200
-    assert res.json()["status"] == "in_progress"
+    assert res.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_complete_task_sets_completed_at(client: AsyncClient, auth_headers):
-    """Test that moving to done sets completed_at."""
+    """Test that signoff after 100% progress sets completed_at."""
     proj = await client.post("/api/v1/projects", json={"name": "Complete Project"}, headers=auth_headers)
     pid = proj.json()["id"]
     task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Done Task"}, headers=auth_headers)
     tid = task.json()["id"]
 
-    res = await client.patch(f"/api/v1/tasks/{tid}/status", json={"status": "done"}, headers=auth_headers)
+    blocked = await client.post(f"/api/v1/tasks/{tid}/signoff", headers=auth_headers)
+    assert blocked.status_code == 400
+
+    progress = await client.post(
+        f"/api/v1/tasks/{tid}/progress",
+        json={"progress_pct": 100, "note": "Ready for signoff"},
+        headers=auth_headers,
+    )
+    assert progress.status_code == 201
+
+    res = await client.post(f"/api/v1/tasks/{tid}/signoff", headers=auth_headers)
     assert res.status_code == 200
-    assert res.json()["completed_at"] is not None
+    data = res.json()
+    assert data["status"] == "done"
+    assert data["completed_at"] is not None
+    assert data["signed_off_by_id"] is not None
 
 
 @pytest.mark.asyncio

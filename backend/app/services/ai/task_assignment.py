@@ -57,7 +57,8 @@ async def recommend_assignee(db: AsyncSession, task_id: uuid.UUID, llm: LLMClien
 
         candidates_text.append(
             f"- ID: {user.id} | 姓名: {user.full_name} | 技能: {skills_str} | "
-            f"当前任务数: {task_count} | 完成率: {completion_rate}%"
+            f"当前任务数: {task_count} | 完成率: {completion_rate}% | "
+            f"个人介绍: {user.bio or '未填写'}"
         )
 
     prompt = TASK_ASSIGNMENT_USER.format(

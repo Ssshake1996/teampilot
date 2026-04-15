@@ -26,10 +26,8 @@ const filterPriority = ref<string>('')
 
 const statusOptions = [
   { label: '全部状态', value: '' },
-  { label: TaskStatusLabel[TaskStatus.BACKLOG], value: TaskStatus.BACKLOG },
-  { label: TaskStatusLabel[TaskStatus.TODO], value: TaskStatus.TODO },
+  { label: TaskStatusLabel[TaskStatus.NOT_STARTED], value: TaskStatus.NOT_STARTED },
   { label: TaskStatusLabel[TaskStatus.IN_PROGRESS], value: TaskStatus.IN_PROGRESS },
-  { label: TaskStatusLabel[TaskStatus.IN_REVIEW], value: TaskStatus.IN_REVIEW },
   { label: TaskStatusLabel[TaskStatus.DONE], value: TaskStatus.DONE },
 ]
 
@@ -43,10 +41,8 @@ const priorityOptions = [
 
 function statusTagType(status: TaskStatus): string {
   const map: Record<string, string> = {
-    [TaskStatus.BACKLOG]: 'info',
-    [TaskStatus.TODO]: '',
+    [TaskStatus.NOT_STARTED]: 'info',
     [TaskStatus.IN_PROGRESS]: 'warning',
-    [TaskStatus.IN_REVIEW]: '',
     [TaskStatus.DONE]: 'success',
   }
   return map[status] || 'info'

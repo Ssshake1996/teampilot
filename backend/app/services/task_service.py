@@ -10,6 +10,87 @@ from app.models.user import User
 from app.schemas.task import TaskCreate, TaskUpdate
 
 
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _aware(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def effective_task_status(task: Task, now: datetime | None = None) -> TaskStatus:
+    """Return the business status shown to users."""
+    if task.status == TaskStatus.DONE:
+        return TaskStatus.DONE
+
+    current = now or _now()
+    start_date = _aware(task.start_date)
+    if start_date and start_date > current:
+        return TaskStatus.NOT_STARTED
+    return TaskStatus.IN_PROGRESS
+
+
+def initial_task_status(start_date: datetime | None) -> TaskStatus:
+    start = _aware(start_date)
+    if start and start > _now():
+        return TaskStatus.NOT_STARTED
+    return TaskStatus.IN_PROGRESS
+
+
+async def get_task_progress_pct(db: AsyncSession, task: Task) -> int:
+    if task.status == TaskStatus.DONE:
+        return 100
+
+    child_total = (await db.execute(
+        select(func.count(Task.id)).where(
+            Task.parent_task_id == task.id,
+            Task.is_deleted == False,
+        )
+    )).scalar() or 0
+    if child_total:
+        child_done = (await db.execute(
+            select(func.count(Task.id)).where(
+                Task.parent_task_id == task.id,
+                Task.status == TaskStatus.DONE,
+                Task.is_deleted == False,
+            )
+        )).scalar() or 0
+        return round(child_done / child_total * 100)
+
+    progress = (await db.execute(
+        select(TaskProgress.progress_pct)
+        .where(TaskProgress.task_id == task.id)
+        .order_by(TaskProgress.created_at.desc())
+        .limit(1)
+    )).scalar()
+    return progress or 0
+
+
+async def task_to_out(db: AsyncSession, task: Task, assignee_name: str | None = None) -> dict:
+    if assignee_name is None and task.assignee_id:
+        assignee_name = (await db.execute(
+            select(User.full_name).where(User.id == task.assignee_id)
+        )).scalar()
+
+    signed_off_by_name = None
+    if task.signed_off_by_id:
+        signed_off_by_name = (await db.execute(
+            select(User.full_name).where(User.id == task.signed_off_by_id)
+        )).scalar()
+
+    return {
+        **{c.name: getattr(task, c.name) for c in task.__table__.columns},
+        "status": effective_task_status(task),
+        "assignee_name": assignee_name,
+        "signed_off_by_name": signed_off_by_name,
+        "progress_pct": await get_task_progress_pct(db, task),
+    }
+
+
 async def list_tasks(
     db: AsyncSession,
     project_id: uuid.UUID,
@@ -21,9 +102,21 @@ async def list_tasks(
     q = select(Task).where(Task.project_id == project_id)
     count_q = select(func.count(Task.id)).where(Task.project_id == project_id)
 
-    if status:
-        q = q.where(Task.status == status)
-        count_q = count_q.where(Task.status == status)
+    if status == TaskStatus.DONE:
+        q = q.where(Task.status == TaskStatus.DONE)
+        count_q = count_q.where(Task.status == TaskStatus.DONE)
+    elif status == TaskStatus.NOT_STARTED:
+        now = _now()
+        q = q.where(Task.status != TaskStatus.DONE, Task.start_date.isnot(None), Task.start_date > now)
+        count_q = count_q.where(Task.status != TaskStatus.DONE, Task.start_date.isnot(None), Task.start_date > now)
+    elif status == TaskStatus.IN_PROGRESS:
+        now = _now()
+        q = q.where(Task.status != TaskStatus.DONE).where(
+            (Task.start_date.is_(None)) | (Task.start_date <= now)
+        )
+        count_q = count_q.where(Task.status != TaskStatus.DONE).where(
+            (Task.start_date.is_(None)) | (Task.start_date <= now)
+        )
     if assignee_id:
         q = q.where(Task.assignee_id == assignee_id)
         count_q = count_q.where(Task.assignee_id == assignee_id)
@@ -43,38 +136,27 @@ async def list_tasks(
             u = (await db.execute(select(User.full_name).where(User.id == t.assignee_id))).scalar()
             assignee_name = u
 
-        # Get latest progress
-        prog_q = await db.execute(
-            select(TaskProgress.progress_pct)
-            .where(TaskProgress.task_id == t.id)
-            .order_by(TaskProgress.created_at.desc())
-            .limit(1)
-        )
-        progress = prog_q.scalar() or 0
-        if t.status == TaskStatus.DONE:
-            progress = 100
-
-        items.append({
-            **{c.name: getattr(t, c.name) for c in t.__table__.columns},
-            "assignee_name": assignee_name,
-            "progress_pct": progress,
-        })
+        items.append(await task_to_out(db, t, assignee_name))
     return items, total
 
 
 async def create_task(
     db: AsyncSession, project_id: uuid.UUID, data: TaskCreate, creator_id: uuid.UUID
 ) -> Task:
+    task_data = data.model_dump()
+    if task_data.get("status") is None:
+        task_data["status"] = initial_task_status(data.start_date)
+
     # Get max sort_order for the status column
     max_order_q = await db.execute(
         select(func.coalesce(func.max(Task.sort_order), 0)).where(
-            Task.project_id == project_id, Task.status == data.status
+            Task.project_id == project_id, Task.status == task_data["status"]
         )
     )
     max_order = max_order_q.scalar()
 
     task = Task(
-        **data.model_dump(),
+        **task_data,
         project_id=project_id,
         creator_id=creator_id,
         sort_order=max_order + 1,
@@ -85,7 +167,7 @@ async def create_task(
 
 
 async def get_task(db: AsyncSession, task_id: uuid.UUID) -> Task | None:
-    result = await db.execute(select(Task).where(Task.id == task_id))
+    result = await db.execute(select(Task).where(Task.id == task_id, Task.is_deleted == False))
     return result.scalar_one_or_none()
 
 
@@ -95,13 +177,8 @@ async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) ->
         return None
 
     update_data = data.model_dump(exclude_unset=True)
-
-    # If moving to done, set completed_at
-    if update_data.get("status") == TaskStatus.DONE and task.status != TaskStatus.DONE:
-        update_data["completed_at"] = datetime.now(timezone.utc)
-    # If moving away from done, clear completed_at
-    elif update_data.get("status") and update_data["status"] != TaskStatus.DONE:
-        update_data["completed_at"] = None
+    if "status" in update_data:
+        raise ValueError("Task status is automatic. Submit progress and sign off completed tasks.")
 
     for field, value in update_data.items():
         setattr(task, field, value)
@@ -126,11 +203,23 @@ async def update_task_status(db: AsyncSession, task_id: uuid.UUID, status: TaskS
     task = await get_task(db, task_id)
     if not task:
         return None
-    task.status = status
-    if status == TaskStatus.DONE:
-        task.completed_at = datetime.now(timezone.utc)
-    else:
-        task.completed_at = None
+    raise ValueError("Task status is automatic. Submit progress and sign off completed tasks.")
+
+
+async def signoff_task(db: AsyncSession, task_id: uuid.UUID, user_id: uuid.UUID) -> Task | None:
+    task = await get_task(db, task_id)
+    if not task:
+        return None
+
+    progress = await get_task_progress_pct(db, task)
+    if progress < 100:
+        raise ValueError("Task progress must be 100% before signoff.")
+
+    signed_at = _now()
+    task.status = TaskStatus.DONE
+    task.completed_at = signed_at
+    task.signed_off_by_id = user_id
+    task.signed_off_at = signed_at
     await db.flush()
     await db.refresh(task)
     return task
@@ -150,6 +239,9 @@ async def log_progress(
     db: AsyncSession, task_id: uuid.UUID, user_id: uuid.UUID,
     progress_pct: int, note: str | None, hours_spent: float | None,
 ) -> TaskProgress:
+    if progress_pct < 0 or progress_pct > 100:
+        raise ValueError("Progress must be between 0 and 100.")
+
     entry = TaskProgress(
         task_id=task_id,
         user_id=user_id,
@@ -186,7 +278,7 @@ async def reorder_tasks(db: AsyncSession, items: list[dict]) -> None:
         await db.execute(
             update(Task)
             .where(Task.id == item["task_id"])
-            .values(status=item["status"], sort_order=item["sort_order"])
+            .values(sort_order=item["sort_order"])
         )
     await db.flush()
 
@@ -201,9 +293,5 @@ async def get_subtasks(db: AsyncSession, parent_task_id: uuid.UUID) -> list[dict
     rows = result.all()
     items = []
     for t, assignee_name in rows:
-        items.append({
-            **{c.name: getattr(t, c.name) for c in t.__table__.columns},
-            "assignee_name": assignee_name,
-            "progress_pct": 100 if t.status == TaskStatus.DONE else 0,
-        })
+        items.append(await task_to_out(db, t, assignee_name))
     return items

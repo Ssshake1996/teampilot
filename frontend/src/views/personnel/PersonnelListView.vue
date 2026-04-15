@@ -6,11 +6,13 @@ import { usersApi } from '@/api/users'
 import http from '@/api/index'
 import { useAuthStore } from '@/stores/auth'
 import type { User, UserSkill } from '@/types/models'
-import { UserRole } from '@/types/enums'
 
 const router = useRouter()
 const auth = useAuthStore()
-const canEdit = computed(() => auth.user?.role === 'admin')
+const canAdd = computed(() => auth.can('personnel.add'))
+const canEditProfile = computed(() => auth.can('personnel.edit'))
+const canDeactivate = computed(() => auth.can('personnel.deactivate'))
+const canManageRoles = computed(() => auth.can('system.role_manage'))
 
 const users = ref<User[]>([])
 const total = ref(0)
@@ -25,8 +27,14 @@ const userTaskCountMap = ref<Record<string, number>>({})
 
 // Add user dialog
 const addDialogVisible = ref(false)
-const addForm = ref({ username: '', full_name: '', email: '', password: '123456', department: '', role: 'member' })
+const addForm = ref({ username: '', full_name: '', password: '123456', department: '', role: 'member' })
 const adding = ref(false)
+
+// Edit user dialog
+const editDialogVisible = ref(false)
+const editUser = ref<User | null>(null)
+const editForm = ref({ full_name: '', department: '', role: 'member' })
+const savingEdit = ref(false)
 
 const roleTagType: Record<string, string> = { admin: 'danger', manager: 'warning', member: 'info' }
 const roleLabel: Record<string, string> = { admin: '管理员', manager: '经理', member: '成员' }
@@ -40,6 +48,7 @@ async function loadDepartments() {
 
 const availableRoles = ref<string[]>(['admin', 'manager', 'member'])
 async function loadRoles() {
+  if (!canManageRoles.value) return
   try {
     const res = await http.get('/permissions/roles')
     availableRoles.value = Object.keys(res.data)
@@ -98,10 +107,12 @@ async function handleAdd() {
   }
   adding.value = true
   try {
-    await http.post('/users', addForm.value)
+    const payload = { ...addForm.value }
+    if (!canManageRoles.value) payload.role = 'member'
+    await http.post('/users', payload)
     ElMessage.success('人员已添加')
     addDialogVisible.value = false
-    addForm.value = { username: '', full_name: '', email: '', password: '123456', department: '', role: 'member' }
+    addForm.value = { username: '', full_name: '', password: '123456', department: '', role: 'member' }
     await loadDepartments()
     await loadUsers()
   } catch (e: any) {
@@ -109,17 +120,51 @@ async function handleAdd() {
   } finally { adding.value = false }
 }
 
+function openEditDialog(user: User) {
+  editUser.value = user
+  editForm.value = {
+    full_name: user.full_name || '',
+    department: user.department || '',
+    role: user.role || 'member',
+  }
+  editDialogVisible.value = true
+}
+
+async function handleSaveEdit() {
+  if (!editUser.value) return
+  if (!editForm.value.full_name.trim()) {
+    ElMessage.warning('请填写姓名'); return
+  }
+  savingEdit.value = true
+  try {
+    const payload: any = {}
+    if (canEditProfile.value) {
+      payload.full_name = editForm.value.full_name.trim()
+      payload.department = editForm.value.department || null
+    }
+    if (canManageRoles.value) payload.role = editForm.value.role
+    await usersApi.update(editUser.value.id, payload)
+    ElMessage.success('人员信息已更新')
+    editDialogVisible.value = false
+    await loadDepartments()
+    await loadUsers()
+    if (editUser.value.id === auth.user?.id) await auth.fetchUser()
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '保存失败')
+  } finally { savingEdit.value = false }
+}
+
 async function handleDeactivate(user: User) {
   try {
-    await ElMessageBox.confirm(`停用 ${user.full_name}？停用后不可登录，数据保留。`, '确认停用', { type: 'warning' })
+    await ElMessageBox.confirm(`删除/停用 ${user.full_name}？该用户将无法登录，历史数据会保留。`, '确认删除', { type: 'warning' })
     await http.delete('/users/' + user.id)
-    ElMessage.success('已停用')
+    ElMessage.success('已删除/停用')
     await loadUsers()
   } catch {}
 }
 
 onMounted(async () => {
-  await Promise.all([loadDepartments(), loadRoles()])
+  await Promise.all([loadDepartments(), canManageRoles.value ? loadRoles() : Promise.resolve()])
   await loadUsers()
 })
 </script>
@@ -136,7 +181,7 @@ onMounted(async () => {
         <el-select v-model="filterDept" placeholder="全部分组" clearable style="width:140px" @change="handleDeptFilter">
           <el-option v-for="d in departments" :key="d" :label="d" :value="d" />
         </el-select>
-        <el-button v-if="canEdit" type="primary" @click="addDialogVisible = true">添加人员</el-button>
+        <el-button v-if="canAdd" type="primary" @click="addDialogVisible = true">添加人员</el-button>
       </div>
     </div>
 
@@ -156,7 +201,7 @@ onMounted(async () => {
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="角色" width="90">
+          <el-table-column label="角色" width="110">
             <template #default="{ row }">
               <el-tag :type="(roleTagType[row.role] as any) || 'info'" size="small">{{ roleLabel[row.role] || row.role }}</el-tag>
             </template>
@@ -173,10 +218,11 @@ onMounted(async () => {
           <el-table-column label="任务" width="60" align="center">
             <template #default="{ row }">{{ userTaskCountMap[row.id] ?? '-' }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="140" align="center">
+          <el-table-column label="操作" width="180" align="center">
             <template #default="{ row }">
               <el-button type="primary" link size="small" @click="navigateToDetail(row.id)">详情</el-button>
-              <el-button v-if="canEdit && row.id !== auth.user?.id" type="danger" link size="small" @click="handleDeactivate(row)">停用</el-button>
+              <el-button v-if="canEditProfile || canManageRoles" type="primary" link size="small" @click="openEditDialog(row)">编辑</el-button>
+              <el-button v-if="canDeactivate && row.id !== auth.user?.id" type="danger" link size="small" @click="handleDeactivate(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -189,14 +235,13 @@ onMounted(async () => {
       <el-form label-width="80px">
         <el-form-item label="用户名"><el-input v-model="addForm.username" placeholder="登录用户名" /></el-form-item>
         <el-form-item label="姓名"><el-input v-model="addForm.full_name" placeholder="显示名称" /></el-form-item>
-        <el-form-item label="邮箱"><el-input v-model="addForm.email" placeholder="可选" /></el-form-item>
         <el-form-item label="初始密码"><el-input v-model="addForm.password" placeholder="默认 123456" /></el-form-item>
         <el-form-item label="分组">
           <el-select v-model="addForm.department" placeholder="选择或输入" filterable allow-create style="width:100%">
             <el-option v-for="d in departments" :key="d" :label="d" :value="d" />
           </el-select>
         </el-form-item>
-        <el-form-item label="角色">
+        <el-form-item v-if="canManageRoles" label="角色">
           <el-select v-model="addForm.role" filterable allow-create style="width:100%">
             <el-option v-for="r in availableRoles" :key="r" :label="r" :value="r" />
           </el-select>
@@ -205,6 +250,27 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="addDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="adding" @click="handleAdd">添加</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Edit User Dialog -->
+    <el-dialog v-model="editDialogVisible" :title="'编辑人员 — ' + (editUser?.full_name || '')" width="480px">
+      <el-form label-width="80px">
+        <el-form-item label="姓名"><el-input v-model="editForm.full_name" :disabled="!canEditProfile" placeholder="显示名称" /></el-form-item>
+        <el-form-item label="分组">
+          <el-select v-model="editForm.department" :disabled="!canEditProfile" placeholder="选择或输入" filterable allow-create clearable style="width:100%">
+            <el-option v-for="d in departments" :key="d" :label="d" :value="d" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="canManageRoles" label="角色">
+          <el-select v-model="editForm.role" filterable style="width:100%">
+            <el-option v-for="r in availableRoles" :key="r" :label="roleLabel[r] || r" :value="r" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingEdit" @click="handleSaveEdit">保存</el-button>
       </template>
     </el-dialog>
   </div>

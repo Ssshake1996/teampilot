@@ -71,6 +71,8 @@ router.beforeEach(async (to, from, next) => {
 
   if (auth.isAuthenticated && !auth.user) {
     await auth.fetchUser()
+  } else if (auth.isAuthenticated) {
+    await auth.fetchPermissions()
   }
 
   if (to.path === '/login' && auth.isAuthenticated) {

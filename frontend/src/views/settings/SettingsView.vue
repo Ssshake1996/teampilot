@@ -121,6 +121,7 @@ async function saveRolePerms(role: string) {
   savingRole.value = role
   try {
     await http.put('/permissions/roles', { role, permissions: rolesData.value[role]?.permissions || [] })
+    if (authStore.user?.role === role) await authStore.fetchPermissions()
     ElMessage.success(roleLabel(role) + ' 权限已保存')
   } catch { ElMessage.error('保存失败') }
   finally { savingRole.value = '' }

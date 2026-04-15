@@ -21,8 +21,16 @@ const taskTrees = ref<Record<string, any[]>>({})
 const loadingTrees = ref<Record<string, boolean>>({})
 const expandedProjects = ref<Set<string>>(new Set())
 
-// Permission: only admin can edit tasks
-const canEdit = computed(() => auth.user?.role === 'admin')
+const canCreateProject = computed(() => auth.can('project.create'))
+const canArchiveProject = computed(() => auth.can('project.archive'))
+const canCreateTask = computed(() => auth.can('task.create'))
+const canAssignTask = computed(() => auth.can('task.assign'))
+const canSetTaskHours = computed(() => auth.can('task.set_hours'))
+const canSetTaskDeadline = computed(() => auth.can('task.set_deadline'))
+const canSignoffTask = computed(() => auth.can('task.signoff'))
+const canDeleteTask = computed(() => auth.can('task.delete'))
+const canUseAiEstimate = computed(() => auth.can('ai.estimate'))
+const canUseAiRisk = computed(() => auth.can('ai.risk'))
 
 // Create project
 const createDialogVisible = ref(false)
@@ -31,7 +39,7 @@ const creating = ref(false)
 
 // Add subtask
 const subtaskDialogVisible = ref(false)
-const subtaskParent = ref<{ id: string; title: string; projectId: string } | null>(null)
+const subtaskParent = ref<{ id: string | null; title: string; projectId: string } | null>(null)
 const subtaskForm = ref({ title: '', description: '', assignee_id: '', estimated_hours: null as number | null, deadline: '' })
 const creatingSubtask = ref(false)
 const aiEstimating = ref(false)
@@ -47,18 +55,35 @@ const feedbackLoading = ref(false)
 const feedbackForm = ref({ progress_pct: 0, note: '' })
 const feedbackSubmitting = ref(false)
 
-// Status change with progress
-const progressDialogVisible = ref(false)
-const progressTarget = ref<{ task: any; newStatus: string } | null>(null)
-const progressForm = ref({ progress_pct: 0, note: '' })
+// Group progress import
+const progressImportDialogVisible = ref(false)
+const progressImportText = ref('')
+const progressImportStatus = ref('')
+const progressImportPreview = ref<any[]>([])
+const progressImportUnmatched = ref<any[]>([])
+const progressImportLoading = ref(false)
+const progressImportSubmitting = ref(false)
 
-const statusOptions = [
-  { value: 'backlog', label: '待办池', pct: 0 },
-  { value: 'todo', label: '待处理', pct: 0 },
-  { value: 'in_progress', label: '进行中', pct: 30 },
-  { value: 'in_review', label: '审核中', pct: 80 },
-  { value: 'done', label: '已完成', pct: 100 },
-]
+// AI project setup
+const projectPlanDialogVisible = ref(false)
+const projectPlanPrompt = ref('')
+const projectPlanStatus = ref('')
+const projectPlanPreview = ref<any>(null)
+const projectPlanLoading = ref(false)
+const projectPlanSubmitting = ref(false)
+
+// AI daily brief
+const dailyBriefDialogVisible = ref(false)
+const dailyBriefStatus = ref('')
+const dailyBriefResult = ref<any>(null)
+const dailyBriefLoading = ref(false)
+
+// AI retrospective
+const retrospectiveDialogVisible = ref(false)
+const retrospectiveProject = ref<Project | null>(null)
+const retrospectiveStatus = ref('')
+const retrospectiveResult = ref<any>(null)
+const retrospectiveLoading = ref(false)
 
 function userName(id: string | null): string {
   if (!id) return '未分配'
@@ -127,31 +152,6 @@ async function handleFieldUpdate(task: any, field: string, value: any) {
   } catch { ElMessage.error('更新失败') }
 }
 
-function handleStatusClick(task: any, newStatus: string) {
-  if (newStatus === task.status) return
-  const opt = statusOptions.find(o => o.value === newStatus)
-  progressTarget.value = { task, newStatus }
-  progressForm.value = { progress_pct: opt?.pct ?? 0, note: '' }
-  progressDialogVisible.value = true
-}
-
-async function confirmStatusChange() {
-  if (!progressTarget.value) return
-  const { task, newStatus } = progressTarget.value
-  try {
-    await tasksApi.updateStatus(task.id, newStatus as any)
-    await tasksApi.logProgress(task.id, {
-      progress_pct: progressForm.value.progress_pct,
-      note: progressForm.value.note || statusOptions.find(o => o.value === newStatus)?.label || '',
-    })
-    task.status = newStatus
-    task.progress_pct = progressForm.value.progress_pct
-    task.completed_at = newStatus === 'done' ? new Date().toISOString() : null
-    if (task._parentId) recalcParent(task._parentId)
-    progressDialogVisible.value = false
-  } catch { ElMessage.error('更新失败') }
-}
-
 function recalcParent(parentId: string) {
   for (const tree of Object.values(taskTrees.value)) {
     const parent = (tree as any[]).find(t => t.id === parentId)
@@ -210,9 +210,162 @@ async function submitFeedback() {
   finally { feedbackSubmitting.value = false }
 }
 
+function openProgressImport() {
+  progressImportText.value = ''
+  progressImportStatus.value = ''
+  progressImportPreview.value = []
+  progressImportUnmatched.value = []
+  progressImportDialogVisible.value = true
+}
+
+async function previewProgressImport() {
+  if (!progressImportText.value.trim()) {
+    ElMessage.warning('请粘贴群进展内容')
+    return
+  }
+  progressImportLoading.value = true
+  progressImportStatus.value = '正在识别...'
+  progressImportPreview.value = []
+  progressImportUnmatched.value = []
+  try {
+    const data = await aiApi.previewProgressImport(
+      progressImportText.value,
+      (msg: string) => { progressImportStatus.value = msg },
+    )
+    progressImportPreview.value = (data.updates || []).map((item: any) => ({
+      ...item,
+      selected: Boolean(item.task_id),
+    }))
+    progressImportUnmatched.value = data.unmatched || []
+    progressImportStatus.value = ''
+  } catch {
+    progressImportStatus.value = ''
+    ElMessage.error('AI 识别进展失败')
+  } finally {
+    progressImportLoading.value = false
+  }
+}
+
+async function commitProgressImport() {
+  const updates = progressImportPreview.value
+    .filter((item: any) => item.selected && item.task_id)
+    .map((item: any) => ({
+      task_id: item.task_id,
+      progress_pct: item.progress_pct,
+      note: item.note || item.raw_text || '',
+      person_name: item.person_name || '',
+      reported_at: item.reported_at || '',
+    }))
+  if (!updates.length) {
+    ElMessage.warning('请选择需要同步的进展')
+    return
+  }
+  progressImportSubmitting.value = true
+  try {
+    await aiApi.commitProgressImport(updates)
+    ElMessage.success(`已同步 ${updates.length} 条进展`)
+    await Promise.all(Array.from(expandedProjects.value).map(pid => loadTaskTree(pid, true)))
+    await loadProjects()
+    progressImportDialogVisible.value = false
+  } catch {
+    ElMessage.error('同步进展失败')
+  } finally {
+    progressImportSubmitting.value = false
+  }
+}
+
+function openProjectPlanDialog() {
+  projectPlanPrompt.value = ''
+  projectPlanStatus.value = ''
+  projectPlanPreview.value = null
+  projectPlanDialogVisible.value = true
+}
+
+async function previewProjectPlan() {
+  if (!projectPlanPrompt.value.trim()) {
+    ElMessage.warning('请描述项目目标')
+    return
+  }
+  projectPlanLoading.value = true
+  projectPlanStatus.value = '正在生成项目计划...'
+  projectPlanPreview.value = null
+  try {
+    projectPlanPreview.value = await aiApi.previewProjectPlan(
+      projectPlanPrompt.value,
+      (msg: string) => { projectPlanStatus.value = msg },
+    )
+    projectPlanStatus.value = ''
+  } catch {
+    projectPlanStatus.value = ''
+    ElMessage.error('AI 生成项目计划失败')
+  } finally {
+    projectPlanLoading.value = false
+  }
+}
+
+async function commitProjectPlan() {
+  if (!projectPlanPreview.value) return
+  projectPlanSubmitting.value = true
+  try {
+    const res = await aiApi.commitProjectPlan(projectPlanPreview.value)
+    const project = (res.data as any).project
+    ElMessage.success('项目和任务树已创建')
+    projectPlanDialogVisible.value = false
+    await loadProjects()
+    if (project?.id) {
+      expandedProjects.value.add(project.id)
+      await loadTaskTree(project.id, true)
+    }
+  } catch {
+    ElMessage.error('创建项目计划失败')
+  } finally {
+    projectPlanSubmitting.value = false
+  }
+}
+
+async function openDailyBrief() {
+  dailyBriefDialogVisible.value = true
+  dailyBriefResult.value = null
+  dailyBriefStatus.value = '正在生成日报巡检...'
+  dailyBriefLoading.value = true
+  try {
+    dailyBriefResult.value = await aiApi.dailyBrief((msg: string) => { dailyBriefStatus.value = msg })
+    dailyBriefStatus.value = ''
+  } catch {
+    dailyBriefStatus.value = ''
+    ElMessage.error('日报巡检生成失败')
+  } finally {
+    dailyBriefLoading.value = false
+  }
+}
+
+async function openRetrospective(project: Project) {
+  retrospectiveProject.value = project
+  retrospectiveDialogVisible.value = true
+  retrospectiveResult.value = null
+  retrospectiveStatus.value = '正在生成项目复盘...'
+  retrospectiveLoading.value = true
+  try {
+    retrospectiveResult.value = await aiApi.projectRetrospective(project.id, (msg: string) => { retrospectiveStatus.value = msg })
+    retrospectiveStatus.value = ''
+  } catch {
+    retrospectiveStatus.value = ''
+    ElMessage.error('项目复盘生成失败')
+  } finally {
+    retrospectiveLoading.value = false
+  }
+}
+
 // ── Add Subtask (admin only) ──
 function openSubtaskDialog(task: any, projectId: string) {
   subtaskParent.value = { id: task.id, title: task.title, projectId }
+  subtaskForm.value = { title: '', description: '', assignee_id: '', estimated_hours: null, deadline: '' }
+  aiRecommendations.value = []; aiEstimateInfo.value = null
+  subtaskDialogVisible.value = true
+}
+
+function openRootTaskDialog(project: Project) {
+  subtaskParent.value = { id: null, title: project.name, projectId: project.id }
   subtaskForm.value = { title: '', description: '', assignee_id: '', estimated_hours: null, deadline: '' }
   aiRecommendations.value = []; aiEstimateInfo.value = null
   subtaskDialogVisible.value = true
@@ -227,8 +380,13 @@ async function handleCreateSubtask() {
     if (subtaskForm.value.assignee_id) payload.assignee_id = subtaskForm.value.assignee_id
     if (subtaskForm.value.estimated_hours) payload.estimated_hours = subtaskForm.value.estimated_hours
     if (subtaskForm.value.deadline) payload.deadline = subtaskForm.value.deadline
-    await tasksApi.createSubtask(subtaskParent.value.id, payload)
-    ElMessage.success('子任务已创建')
+    if (subtaskParent.value.id) {
+      await tasksApi.createSubtask(subtaskParent.value.id, payload)
+      ElMessage.success('子任务已创建')
+    } else {
+      await tasksApi.create(subtaskParent.value.projectId, payload)
+      ElMessage.success('任务已创建')
+    }
     subtaskDialogVisible.value = false
     await loadTaskTree(subtaskParent.value.projectId, true)
     const projRes = await projectsApi.list(1, 100, showArchived.value)
@@ -273,10 +431,10 @@ async function handleCreate() {
 // ── Helpers ──
 function taskProgressColor(task: any): string {
   const pct = task.progress_pct ?? 0
-  if (task.status === 'done' || pct >= 100) return '#67C23A'
+  if (task.status === 'done') return '#67C23A'
+  if (pct >= 100) return '#E6A23C'
   const sd = task.start_date || task.created_at
   if (!task.deadline || !sd) return pct > 0 ? '#409EFF' : '#C0C4CC'
-  if (task.status === 'backlog') return '#C0C4CC'
   const now = Date.now(), start = new Date(sd).getTime(), end = new Date(task.deadline).getTime()
   const span = end - start; if (span <= 0) return pct > 0 ? '#67C23A' : '#F56C6C'
   const deviation = pct - (Math.min(now - start, span) / span * 100)
@@ -296,11 +454,32 @@ function projectProgressColor(p: Project): string {
 }
 function statusType(s: string) { return ({ planning: 'info', active: '', paused: 'warning', completed: 'success', archived: 'danger' } as any)[s] || 'info' }
 function statusLabel(s: string) { return ({ planning: '规划中', active: '进行中', paused: '已暂停', completed: '已完成', archived: '已归档' } as any)[s] || s }
-function taskStatusType(s: string) { return ({ backlog: 'info', todo: '', in_progress: 'warning', in_review: '', done: 'success' } as any)[s] || 'info' }
-function taskStatusLabel(s: string) { return ({ backlog: '待办池', todo: '待处理', in_progress: '进行中', in_review: '审核中', done: '已完成' } as any)[s] || s }
+function taskStatusType(s: string) { return ({ not_started: 'info', in_progress: 'warning', done: 'success' } as any)[s] || 'info' }
+function taskStatusLabel(s: string) { return ({ not_started: '待开始', in_progress: '进行中', done: '已完成' } as any)[s] || s }
+function taskNeedsSignoff(task: any) { return task.status !== 'done' && (task.progress_pct ?? 0) >= 100 }
 function formatDate(d: string | null) { return d ? d.slice(0, 10) : '-' }
 function formatDateTime(d: string | null) { return d ? d.replace('T', ' ').slice(0, 16) : '' }
 function goToBoard(pid: string) { router.push(`/projects/${pid}/board`) }
+function asList(value: any): any[] { return Array.isArray(value) ? value : [] }
+function dailySectionLabel(section: string): string {
+  return ({ completed: '已完成', in_progress: '进行中', risks: '风险', actions: '建议动作', signoff_candidates: '待会签候选' } as any)[section] || section
+}
+function retrospectiveSectionLabel(section: string): string {
+  return ({ wins: '做得好的地方', issues: '主要问题', estimation_lessons: '估时经验', process_improvements: '流程改进', reusable_template: '可复用模板' } as any)[section] || section
+}
+
+async function handleSignoff(task: any, projectId: string) {
+  try {
+    const res = await tasksApi.signoff(task.id)
+    Object.assign(task, res.data)
+    if (task._parentId) recalcParent(task._parentId)
+    await loadTaskTree(projectId, true)
+    await loadProjects()
+    ElMessage.success('任务已会签完成')
+  } catch {
+    ElMessage.error('会签失败，请确认进度已达到 100%')
+  }
+}
 
 const summaryStats = computed(() => {
   const total = projects.value.length, active = projects.value.filter(p => p.status === 'active').length
@@ -322,7 +501,10 @@ onMounted(loadProjects)
       <div class="si"><span class="sv done">{{ summaryStats.doneTasks }}</span><span class="sl">已完成</span></div>
       <div class="si"><span class="sv" :class="{ warn: summaryStats.overallRate < 50 }">{{ summaryStats.overallRate }}%</span><span class="sl">完成率</span></div>
       <el-switch v-model="showArchived" active-text="含归档" style="margin-left:auto" @change="onArchivedChange" />
-      <el-button type="primary" @click="createDialogVisible = true">新建项目</el-button>
+      <el-button v-if="canUseAiEstimate && canCreateProject" type="warning" @click="openProjectPlanDialog">AI 创建项目</el-button>
+      <el-button v-if="canUseAiRisk" type="warning" plain @click="openDailyBrief">日报巡检</el-button>
+      <el-button v-if="canUseAiEstimate" type="warning" @click="openProgressImport">进展更新</el-button>
+      <el-button v-if="canCreateProject" type="primary" @click="createDialogVisible = true">新建项目</el-button>
     </div>
 
     <!-- Project List -->
@@ -347,7 +529,9 @@ onMounted(loadProjects)
           <div class="col-ed">{{ formatDate(project.end_date) }}</div>
           <div class="col-act center" @click.stop>
             <el-button type="primary" link size="small" @click="goToBoard(project.id)">看板</el-button>
-            <el-popconfirm v-if="project.status !== 'archived' && canEdit" title="归档后不计入统计，确认？" @confirm="archiveProject(project.id)">
+            <el-button v-if="canUseAiRisk" type="warning" link size="small" @click="openRetrospective(project)">复盘</el-button>
+            <el-button v-if="canCreateTask && project.status !== 'archived'" type="primary" link size="small" @click="openRootTaskDialog(project)">添加任务</el-button>
+            <el-popconfirm v-if="project.status !== 'archived' && canArchiveProject" title="归档后不计入统计，确认？" @confirm="archiveProject(project.id)">
               <template #reference><el-button type="info" link size="small">归档</el-button></template>
             </el-popconfirm>
             <el-tag v-if="project.status === 'archived'" type="info" size="small" effect="plain">已归档</el-tag>
@@ -388,7 +572,7 @@ onMounted(loadProjects)
               </div>
               <!-- Assignee -->
               <div class="col-who" @click.stop>
-                <template v-if="canEdit && !task.is_deleted">
+                <template v-if="canAssignTask && !task.is_deleted">
                   <el-select :model-value="task.assignee_id || ''" size="small" placeholder="未分配" clearable filterable class="isel" @change="(v: string) => handleAssigneeChange(task, v)">
                     <el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" />
                   </el-select>
@@ -397,7 +581,7 @@ onMounted(loadProjects)
               </div>
               <!-- Hours -->
               <div class="col-hrs center" @click.stop>
-                <el-popover v-if="canEdit && !task.is_deleted" trigger="click" :width="160" placement="bottom">
+                <el-popover v-if="canSetTaskHours && !task.is_deleted" trigger="click" :width="160" placement="bottom">
                   <template #reference><span class="dt-click">{{ task.estimated_hours ?? '-' }}</span></template>
                   <el-input-number :model-value="task.estimated_hours" size="small" :min="0" :max="999" :precision="1" style="width:100%" @change="(v: number) => handleFieldUpdate(task, 'estimated_hours', v)" />
                 </el-popover>
@@ -409,7 +593,7 @@ onMounted(loadProjects)
               </div>
               <!-- Start Date -->
               <div class="col-sd" @click.stop>
-                <el-popover v-if="canEdit && !task.is_deleted" trigger="click" :width="240" placement="bottom">
+                <el-popover v-if="canSetTaskDeadline && !task.is_deleted" trigger="click" :width="240" placement="bottom">
                   <template #reference><span class="dt-click">{{ formatDate(task.start_date || task.created_at) }}</span></template>
                   <el-date-picker :model-value="(task.start_date || task.created_at || '').slice(0, 10)" type="date" size="small" value-format="YYYY-MM-DD" style="width:100%" @update:model-value="(v: string) => handleFieldUpdate(task, 'start_date', v)" />
                 </el-popover>
@@ -417,7 +601,7 @@ onMounted(loadProjects)
               </div>
               <!-- End Date -->
               <div class="col-ed" @click.stop>
-                <el-popover v-if="canEdit && !task.is_deleted" trigger="click" :width="240" placement="bottom">
+                <el-popover v-if="canSetTaskDeadline && !task.is_deleted" trigger="click" :width="240" placement="bottom">
                   <template #reference><span class="dt-click" :class="{ ovd: task.is_overdue }">{{ formatDate(task.deadline) || '-' }}</span></template>
                   <el-date-picker :model-value="task.deadline ? task.deadline.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" style="width:100%" @update:model-value="(v: string) => handleFieldUpdate(task, 'deadline', v)" />
                 </el-popover>
@@ -425,18 +609,27 @@ onMounted(loadProjects)
               </div>
               <!-- Status + Actions -->
               <div class="col-act center" @click.stop>
-                <el-select v-if="canEdit && !task.is_deleted" :model-value="task.status" size="small" class="isel ist" @change="(v: string) => handleStatusClick(task, v)">
-                  <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-                </el-select>
-                <el-tag v-else :type="(taskStatusType(task.status) as any)" size="small">{{ taskStatusLabel(task.status) }}</el-tag>
-                <el-button v-if="canEdit && !task.is_deleted" type="primary" link size="small" @click="openSubtaskDialog(task, project.id)">添加</el-button>
-                <el-popconfirm v-if="canEdit && !task.is_deleted" title="标记删除？不计入统计" @confirm="handleDelete(task)">
+                <el-tag :type="(taskStatusType(task.status) as any)" size="small">{{ taskStatusLabel(task.status) }}</el-tag>
+                <el-button
+                  v-if="canSignoffTask && taskNeedsSignoff(task) && !task.is_deleted"
+                  type="success"
+                  link
+                  size="small"
+                  @click="handleSignoff(task, project.id)"
+                >
+                  会签确认
+                </el-button>
+                <el-button v-if="canCreateTask && !task.is_deleted" type="primary" link size="small" @click="openSubtaskDialog(task, project.id)">添加</el-button>
+                <el-popconfirm v-if="canDeleteTask && !task.is_deleted" title="标记删除？不计入统计" @confirm="handleDelete(task)">
                   <template #reference><el-button type="danger" link size="small">删除</el-button></template>
                 </el-popconfirm>
               </div>
             </div>
           </template>
-          <div v-else class="tloading">暂无任务</div>
+          <div v-else class="tloading">
+            暂无任务
+            <el-button v-if="canCreateTask && project.status !== 'archived'" type="primary" link size="small" @click="openRootTaskDialog(project)">添加任务</el-button>
+          </div>
         </div>
       </div>
     </div>
@@ -455,14 +648,72 @@ onMounted(loadProjects)
       </template>
     </el-dialog>
 
+    <!-- AI Project Plan Dialog -->
+    <el-dialog v-model="projectPlanDialogVisible" title="AI 创建项目" width="880px" :close-on-click-modal="false">
+      <el-form label-width="90px">
+        <el-form-item label="项目目标">
+          <el-input
+            v-model="projectPlanPrompt"
+            type="textarea"
+            :rows="5"
+            placeholder="描述项目目标、周期、交付物、约束条件。AI 会生成项目、任务树、负责人建议、工时和时间计划。"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="warning" :loading="projectPlanLoading" :disabled="!projectPlanPrompt.trim()" @click="previewProjectPlan">生成计划</el-button>
+          <span v-if="projectPlanStatus" class="ai-st">{{ projectPlanStatus }}</span>
+        </el-form-item>
+      </el-form>
+
+      <div v-if="projectPlanPreview" class="ai-result">
+        <div class="ai-result-title">{{ projectPlanPreview.project?.name || 'AI 项目计划' }}</div>
+        <p class="ai-result-summary">{{ projectPlanPreview.project?.description }}</p>
+        <div class="ai-result-meta">
+          {{ projectPlanPreview.project?.start_date || '-' }} 至 {{ projectPlanPreview.project?.end_date || '-' }}
+        </div>
+        <el-table :data="projectPlanPreview.tasks || []" size="small" border style="width:100%;margin-top:10px">
+          <el-table-column prop="title" label="任务" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="assignee_name" label="建议负责人" width="110" show-overflow-tooltip />
+          <el-table-column prop="priority" label="优先级" width="90" />
+          <el-table-column prop="estimated_hours" label="工时" width="80" />
+          <el-table-column prop="deadline" label="截止" width="110" />
+          <el-table-column label="子任务" width="80" align="center">
+            <template #default="{ row }">{{ asList(row.children).length }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button @click="projectPlanDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="projectPlanSubmitting" :disabled="!projectPlanPreview" @click="commitProjectPlan">确认创建项目和任务</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Daily Brief Dialog -->
+    <el-dialog v-model="dailyBriefDialogVisible" title="日报巡检" width="760px">
+      <div v-loading="dailyBriefLoading" class="ai-result">
+        <span v-if="dailyBriefStatus" class="ai-st">{{ dailyBriefStatus }}</span>
+        <template v-if="dailyBriefResult">
+          <div class="ai-result-title">今日摘要</div>
+          <p class="ai-result-summary">{{ dailyBriefResult.summary }}</p>
+          <div class="ai-section" v-for="section in ['completed','in_progress','risks','actions','signoff_candidates']" :key="section">
+            <h4>{{ dailySectionLabel(section) }}</h4>
+            <ul>
+              <li v-for="(item, idx) in asList(dailyBriefResult[section])" :key="idx">{{ typeof item === 'string' ? item : JSON.stringify(item) }}</li>
+            </ul>
+          </div>
+        </template>
+      </div>
+    </el-dialog>
+
     <!-- Add Subtask Dialog -->
-    <el-dialog v-model="subtaskDialogVisible" :title="'添加子任务 — ' + (subtaskParent?.title || '')" width="640px">
+    <el-dialog v-model="subtaskDialogVisible" :title="(subtaskParent?.id ? '添加子任务 — ' : '添加任务 — ') + (subtaskParent?.title || '')" width="640px">
       <el-form label-width="80px">
         <el-form-item label="任务标题"><el-input v-model="subtaskForm.title" /></el-form-item>
         <el-form-item label="任务描述"><el-input v-model="subtaskForm.description" type="textarea" :rows="2" placeholder="可选，有助 AI 更准推荐" /></el-form-item>
         <el-form-item>
           <div class="ai-row">
-            <el-button type="warning" :loading="aiEstimating" @click="handleAiEstimate" :disabled="!subtaskForm.title.trim()">AI 推荐人选 + 预估工时</el-button>
+            <el-button v-if="canUseAiEstimate" type="warning" :loading="aiEstimating" @click="handleAiEstimate" :disabled="!subtaskForm.title.trim()">AI 推荐人选 + 预估工时</el-button>
             <span v-if="aiStatusMsg" class="ai-st">{{ aiStatusMsg }}</span>
           </div>
         </el-form-item>
@@ -492,20 +743,82 @@ onMounted(loadProjects)
       </template>
     </el-dialog>
 
-    <!-- Status Change Dialog -->
-    <el-dialog v-model="progressDialogVisible" title="更新状态和进度" width="440px">
-      <div v-if="progressTarget" style="margin-bottom:16px;color:#606266;font-size:13px">
-        <strong>{{ progressTarget.task.title }}</strong> →
-        <el-tag :type="(taskStatusType(progressTarget.newStatus) as any)" size="small">{{ taskStatusLabel(progressTarget.newStatus) }}</el-tag>
-      </div>
+    <!-- Group Progress Import Dialog -->
+    <el-dialog v-model="progressImportDialogVisible" title="进展更新" width="900px" :close-on-click-modal="false">
       <el-form label-width="80px">
-        <el-form-item label="进度 (%)"><el-slider v-model="progressForm.progress_pct" :min="0" :max="100" :step="5" show-stops style="padding:0 8px" /></el-form-item>
-        <el-form-item label="备注"><el-input v-model="progressForm.note" type="textarea" :rows="2" placeholder="说明本次进展" /></el-form-item>
+        <el-form-item label="群消息">
+          <el-input
+            v-model="progressImportText"
+            type="textarea"
+            :rows="8"
+            placeholder="粘贴格式：姓名&#10;时间&#10;任务进展。一个人的多条任务进展可以放在同一段。"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="warning" :loading="progressImportLoading" :disabled="!progressImportText.trim()" @click="previewProgressImport">AI 识别进展</el-button>
+          <span v-if="progressImportStatus" class="ai-st">{{ progressImportStatus }}</span>
+        </el-form-item>
       </el-form>
+
+      <div v-if="progressImportPreview.length" class="import-preview">
+        <div class="import-title">识别结果</div>
+        <el-table :data="progressImportPreview" size="small" border style="width:100%">
+          <el-table-column width="48" align="center">
+            <template #default="{ row }">
+              <el-checkbox v-model="row.selected" />
+            </template>
+          </el-table-column>
+          <el-table-column prop="person_name" label="姓名" width="90" />
+          <el-table-column prop="reported_at" label="时间" width="130" show-overflow-tooltip />
+          <el-table-column prop="project_name" label="匹配项目" width="140" show-overflow-tooltip />
+          <el-table-column prop="task_title" label="匹配任务" min-width="180" show-overflow-tooltip />
+          <el-table-column label="进度" width="150">
+            <template #default="{ row }">
+              <el-input-number v-model="row.progress_pct" :min="0" :max="100" size="small" style="width:110px" />
+            </template>
+          </el-table-column>
+          <el-table-column prop="note" label="进展说明" min-width="220" show-overflow-tooltip />
+          <el-table-column label="置信度" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.confidence >= 80 ? 'success' : row.confidence >= 50 ? 'warning' : 'info'" size="small">{{ row.confidence || 0 }}%</el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <el-alert
+        v-if="progressImportUnmatched.length"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-top:12px"
+      >
+        <template #title>
+          有 {{ progressImportUnmatched.length }} 段进展未能可靠匹配，请确认原文或手动录入。
+        </template>
+      </el-alert>
+
       <template #footer>
-        <el-button @click="progressDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="confirmStatusChange">确认</el-button>
+        <el-button @click="progressImportDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="progressImportSubmitting" :disabled="!progressImportPreview.some((i: any) => i.selected)" @click="commitProgressImport">确认同步</el-button>
       </template>
+    </el-dialog>
+
+    <!-- Project Retrospective Dialog -->
+    <el-dialog v-model="retrospectiveDialogVisible" :title="'项目复盘 - ' + (retrospectiveProject?.name || '')" width="760px">
+      <div v-loading="retrospectiveLoading" class="ai-result">
+        <span v-if="retrospectiveStatus" class="ai-st">{{ retrospectiveStatus }}</span>
+        <template v-if="retrospectiveResult">
+          <div class="ai-result-title">复盘摘要</div>
+          <p class="ai-result-summary">{{ retrospectiveResult.summary }}</p>
+          <div class="ai-section" v-for="section in ['wins','issues','estimation_lessons','process_improvements','reusable_template']" :key="section">
+            <h4>{{ retrospectiveSectionLabel(section) }}</h4>
+            <ul>
+              <li v-for="(item, idx) in asList(retrospectiveResult[section])" :key="idx">{{ typeof item === 'string' ? item : JSON.stringify(item) }}</li>
+            </ul>
+          </div>
+        </template>
+      </div>
     </el-dialog>
 
     <!-- Progress Feedback Drawer -->
@@ -630,6 +943,16 @@ onMounted(loadProjects)
 .ai-ri:last-child { border-bottom: none; }
 .ri-rank { font-weight: 700; color: #e6a23c; } .ri-name { font-weight: 500; }
 .ri-reason { font-size: 11px; color: #909399; width: 100%; }
+
+.import-preview { margin-top: 8px; }
+.import-title { font-size: 13px; font-weight: 600; color: #303133; margin-bottom: 8px; }
+.ai-result { min-height: 80px; }
+.ai-result-title { font-size: 15px; font-weight: 700; color: #303133; margin-bottom: 8px; }
+.ai-result-summary { margin: 0 0 8px; font-size: 13px; line-height: 1.6; color: #606266; white-space: pre-wrap; }
+.ai-result-meta { font-size: 12px; color: #909399; }
+.ai-section { margin-top: 14px; }
+.ai-section h4 { margin: 0 0 6px; font-size: 13px; color: #303133; }
+.ai-section ul { margin: 0; padding-left: 18px; color: #606266; font-size: 13px; line-height: 1.6; }
 
 /* Feedback drawer */
 .fb-drawer { padding: 0 4px; }

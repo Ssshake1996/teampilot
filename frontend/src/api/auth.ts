@@ -2,7 +2,7 @@ import http from './index'
 import type { User } from '@/types/models'
 
 export const authApi = {
-  register(data: { username: string; email: string; password: string; full_name: string }) {
+  register(data: { username: string; password: string; full_name: string }) {
     return http.post<User>('/auth/register', data)
   },
   login(data: { username: string; password: string }) {
@@ -10,5 +10,8 @@ export const authApi = {
   },
   me() {
     return http.get<User>('/auth/me')
+  },
+  permissions() {
+    return http.get<{ role: string; permissions: string[] }>('/permissions/me')
   },
 }

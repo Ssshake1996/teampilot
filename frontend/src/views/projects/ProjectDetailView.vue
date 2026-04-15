@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { projectsApi } from '@/api/projects'
 import { usersApi } from '@/api/users'
+import { useAuthStore } from '@/stores/auth'
 import type { Project, ProjectMember, User } from '@/types/models'
 import { ProjectStatus } from '@/types/enums'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 const projectId = route.params.id as string
+const canManageMembers = computed(() => auth.can('project.member.manage'))
 
 const project = ref<Project | null>(null)
 const members = ref<ProjectMember[]>([])
@@ -173,7 +176,7 @@ onMounted(async () => {
           <div class="members-section">
             <div class="members-header">
               <span class="members-title">项目成员 ({{ members.length }})</span>
-              <el-button type="primary" :icon="Plus" size="small" @click="openAddMemberDialog">
+              <el-button v-if="canManageMembers" type="primary" :icon="Plus" size="small" @click="openAddMemberDialog">
                 添加成员
               </el-button>
             </div>
@@ -190,7 +193,7 @@ onMounted(async () => {
               <el-table-column label="操作" width="100" align="center">
                 <template #default="{ row }">
                   <el-button
-                    v-if="row.role_in_project !== 'owner'"
+                    v-if="canManageMembers && row.role_in_project !== 'owner'"
                     type="danger"
                     :icon="Delete"
                     size="small"

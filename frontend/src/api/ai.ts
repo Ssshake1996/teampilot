@@ -89,6 +89,29 @@ export const aiApi = {
   decomposeTask(taskId: string, onStatus?: (msg: string) => void) {
     return sseCallAsync('/ai/decompose-task', { task_id: taskId }, onStatus)
   },
+  previewProgressImport(text: string, onStatus?: (msg: string) => void, projectId?: string) {
+    const body: Record<string, any> = { text }
+    if (projectId) body.project_id = projectId
+    return sseCallAsync('/ai/progress-import/preview', body, onStatus)
+  },
+  commitProgressImport(updates: any[]) {
+    return http.post('/ai/progress-import/commit', { updates })
+  },
+  previewProjectPlan(prompt: string, onStatus?: (msg: string) => void) {
+    return sseCallAsync('/ai/project-plan/preview', { prompt }, onStatus)
+  },
+  commitProjectPlan(plan: any) {
+    return http.post('/ai/project-plan/commit', { plan })
+  },
+  dailyBrief(onStatus?: (msg: string) => void) {
+    return sseCallAsync('/ai/daily-brief', {}, onStatus)
+  },
+  signoffAssist(taskId: string, onStatus?: (msg: string) => void) {
+    return sseCallAsync('/ai/signoff-assist', { task_id: taskId }, onStatus)
+  },
+  projectRetrospective(projectId: string, onStatus?: (msg: string) => void) {
+    return sseCallAsync('/ai/project-retrospective', { project_id: projectId }, onStatus)
+  },
 
   // Non-streaming (config management)
   getConfig() {

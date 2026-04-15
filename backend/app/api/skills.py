@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user, require_admin
+from app.dependencies import get_current_user, require_permission
 from app.models.skill import Skill
 from app.models.user import User
 from app.schemas.skill import SkillCreate, SkillOut
@@ -30,7 +30,7 @@ async def list_skills(
 async def create_skill(
     data: SkillCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("system.skill_manage")),
 ):
     skill = Skill(**data.model_dump())
     db.add(skill)
@@ -43,7 +43,7 @@ async def update_skill(
     skill_id: uuid.UUID,
     data: SkillCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("system.skill_manage")),
 ):
     result = await db.execute(select(Skill).where(Skill.id == skill_id))
     skill = result.scalar_one_or_none()
@@ -59,7 +59,7 @@ async def update_skill(
 async def delete_skill(
     skill_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("system.skill_manage")),
 ):
     result = await db.execute(select(Skill).where(Skill.id == skill_id))
     skill = result.scalar_one_or_none()

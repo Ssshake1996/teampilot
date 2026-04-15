@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Warning } from '@element-plus/icons-vue'
@@ -8,6 +8,7 @@ import { tasksApi } from '@/api/tasks'
 import { aiApi } from '@/api/ai'
 import { usersApi } from '@/api/users'
 import { useTaskStore } from '@/stores/task'
+import { useAuthStore } from '@/stores/auth'
 import { TaskStatus, TaskPriority, TaskStatusLabel, TaskPriorityLabel, PriorityColor } from '@/types/enums'
 import type { Task, TaskProgress, User } from '@/types/models'
 import type { FormInstance } from 'element-plus'
@@ -15,33 +16,33 @@ import type { FormInstance } from 'element-plus'
 const route = useRoute()
 const projectId = route.params.id as string
 const taskStore = useTaskStore()
+const auth = useAuthStore()
 
 const loading = ref(false)
 const users = ref<User[]>([])
+const canCreateTask = computed(() => auth.can('task.create'))
+const canSignoffTask = computed(() => auth.can('task.signoff'))
+const canSubmitProgress = computed(() => auth.can('progress.submit'))
+const canUseAiRisk = computed(() => auth.can('ai.risk'))
+const canUseAiEstimate = computed(() => auth.can('ai.estimate'))
 
 // Kanban columns config
 const columns = [
-  { status: TaskStatus.BACKLOG, label: TaskStatusLabel[TaskStatus.BACKLOG] },
-  { status: TaskStatus.TODO, label: TaskStatusLabel[TaskStatus.TODO] },
+  { status: TaskStatus.NOT_STARTED, label: TaskStatusLabel[TaskStatus.NOT_STARTED] },
   { status: TaskStatus.IN_PROGRESS, label: TaskStatusLabel[TaskStatus.IN_PROGRESS] },
-  { status: TaskStatus.IN_REVIEW, label: TaskStatusLabel[TaskStatus.IN_REVIEW] },
   { status: TaskStatus.DONE, label: TaskStatusLabel[TaskStatus.DONE] },
 ]
 
 const columnHeaderColors: Record<string, string> = {
-  [TaskStatus.BACKLOG]: '#909399',
-  [TaskStatus.TODO]: '#409EFF',
+  [TaskStatus.NOT_STARTED]: '#909399',
   [TaskStatus.IN_PROGRESS]: '#E6A23C',
-  [TaskStatus.IN_REVIEW]: '#9B59B6',
   [TaskStatus.DONE]: '#67C23A',
 }
 
 // Reactive column data: each column is an array of tasks
 const columnTasks = ref<Record<string, Task[]>>({
-  [TaskStatus.BACKLOG]: [],
-  [TaskStatus.TODO]: [],
+  [TaskStatus.NOT_STARTED]: [],
   [TaskStatus.IN_PROGRESS]: [],
-  [TaskStatus.IN_REVIEW]: [],
   [TaskStatus.DONE]: [],
 })
 
@@ -67,6 +68,10 @@ const createForm = ref({
   estimated_hours: null as number | null,
   deadline: '',
 })
+const createAiEstimating = ref(false)
+const createAiStatusMsg = ref('')
+const createAiEstimateInfo = ref<any>(null)
+const createAiRecommendations = ref<any[]>([])
 
 const createRules = {
   title: [{ required: true, message: '请输入任务标题', trigger: 'blur' }],
@@ -81,7 +86,45 @@ function openCreateDialog() {
     estimated_hours: null,
     deadline: '',
   }
+  createAiStatusMsg.value = ''
+  createAiEstimateInfo.value = null
+  createAiRecommendations.value = []
   createDialogVisible.value = true
+}
+
+async function handleCreateAiEstimate() {
+  if (!createForm.value.title.trim()) {
+    ElMessage.warning('请先填写任务标题')
+    return
+  }
+  createAiEstimating.value = true
+  createAiStatusMsg.value = '正在启动 AI...'
+  createAiEstimateInfo.value = null
+  createAiRecommendations.value = []
+  try {
+    const data = await aiApi.estimateTask(
+      projectId,
+      createForm.value.title,
+      createForm.value.description,
+      (msg: string) => { createAiStatusMsg.value = msg },
+    )
+    createAiEstimateInfo.value = data
+    createAiRecommendations.value = data.recommended_assignees || []
+    if (data.estimated_hours != null && createForm.value.estimated_hours == null) {
+      createForm.value.estimated_hours = data.estimated_hours
+    }
+    createAiStatusMsg.value = ''
+  } catch {
+    createAiStatusMsg.value = ''
+    ElMessage.error('AI 评估失败')
+  } finally {
+    createAiEstimating.value = false
+  }
+}
+
+function applyCreateRecommendation(rec: any) {
+  createForm.value.assignee_id = rec.user_id
+  ElMessage.success('已采纳推荐人选')
 }
 
 async function handleCreateTask() {
@@ -113,6 +156,9 @@ const drawerVisible = ref(false)
 const selectedTask = ref<Task | null>(null)
 const progressHistory = ref<TaskProgress[]>([])
 const loadingProgress = ref(false)
+const signoffAssistLoading = ref(false)
+const signoffAssistStatus = ref('')
+const signoffAssistResult = ref<any>(null)
 
 const progressForm = ref({
   progress_pct: 0,
@@ -149,8 +195,27 @@ function isOverdue(task: Task): boolean {
   return new Date(task.deadline) < new Date()
 }
 
+function taskStatusType(status: TaskStatus | string): string {
+  const map: Record<string, string> = {
+    [TaskStatus.NOT_STARTED]: 'info',
+    [TaskStatus.IN_PROGRESS]: 'warning',
+    [TaskStatus.DONE]: 'success',
+  }
+  return map[status] || 'info'
+}
+
+function needsSignoff(task: Task): boolean {
+  return task.status !== TaskStatus.DONE && (task.progress_pct || 0) >= 100
+}
+
+function canSignoff(task: Task): boolean {
+  return canSignoffTask.value && needsSignoff(task)
+}
+
 async function openTaskDrawer(task: Task) {
   selectedTask.value = task
+  signoffAssistStatus.value = ''
+  signoffAssistResult.value = null
   progressForm.value = {
     progress_pct: task.progress_pct || 0,
     note: '',
@@ -196,26 +261,34 @@ async function handleLogProgress() {
   }
 }
 
-// Drag & drop
-async function onDragEnd(status: TaskStatus) {
-  const tasksInColumn = columnTasks.value[status]
-  if (!tasksInColumn) return
-  // Find tasks that changed columns (their status doesn't match the column)
-  for (let i = 0; i < tasksInColumn.length; i++) {
-    const task = tasksInColumn[i]
-    if (!task) continue
-    if (task.status !== status) {
-      try {
-        await tasksApi.updateStatus(task.id, status)
-        taskStore.updateTaskLocally(task.id, { status, sort_order: i })
-        // Update the local copy
-        tasksInColumn[i] = { ...task, status, sort_order: i } as Task
-      } catch {
-        ElMessage.error('更新任务状态失败')
-        await loadTasks()
-        return
-      }
-    }
+async function handleSignoffTask(task: Task) {
+  try {
+    const res = await tasksApi.signoff(task.id)
+    taskStore.updateTaskLocally(task.id, res.data)
+    if (selectedTask.value?.id === task.id) selectedTask.value = res.data
+    syncColumnsFromStore()
+    ElMessage.success('任务已会签完成')
+  } catch {
+    ElMessage.error('会签失败，请确认进度已达到 100%')
+  }
+}
+
+async function handleSignoffAssist() {
+  if (!selectedTask.value) return
+  signoffAssistLoading.value = true
+  signoffAssistStatus.value = '正在生成会签建议...'
+  signoffAssistResult.value = null
+  try {
+    signoffAssistResult.value = await aiApi.signoffAssist(
+      selectedTask.value.id,
+      (msg: string) => { signoffAssistStatus.value = msg },
+    )
+    signoffAssistStatus.value = ''
+  } catch {
+    signoffAssistStatus.value = ''
+    ElMessage.error('会签建议生成失败')
+  } finally {
+    signoffAssistLoading.value = false
   }
 }
 
@@ -389,10 +462,8 @@ async function handleAdoptAll() {
 
 function subtaskStatusType(status: TaskStatus): string {
   const map: Record<string, string> = {
-    [TaskStatus.BACKLOG]: 'info',
-    [TaskStatus.TODO]: '',
+    [TaskStatus.NOT_STARTED]: 'info',
     [TaskStatus.IN_PROGRESS]: 'warning',
-    [TaskStatus.IN_REVIEW]: '',
     [TaskStatus.DONE]: 'success',
   }
   return map[status] || 'info'
@@ -499,7 +570,7 @@ onMounted(async () => {
           class="column-body"
           ghost-class="ghost-card"
           :animation="200"
-          @end="onDragEnd(col.status)"
+          :disabled="true"
         >
           <template #item="{ element: task }">
             <div
@@ -541,6 +612,18 @@ onMounted(async () => {
                 :show-text="false"
                 class="task-progress"
               />
+              <div v-if="needsSignoff(task)" class="signoff-row">
+                <el-tag type="warning" size="small" effect="plain">待会签</el-tag>
+                <el-button
+                  v-if="canSignoff(task)"
+                  type="success"
+                  link
+                  size="small"
+                  @click.stop="handleSignoffTask(task)"
+                >
+                  会签确认
+                </el-button>
+              </div>
             </div>
           </template>
         </draggable>
@@ -549,6 +632,7 @@ onMounted(async () => {
 
     <!-- Floating Create Button -->
     <el-button
+      v-if="canCreateTask"
       class="fab-button"
       type="primary"
       :icon="Plus"
@@ -559,6 +643,7 @@ onMounted(async () => {
 
     <!-- AI Risk Analysis Floating Button -->
     <el-button
+      v-if="canUseAiRisk"
       class="fab-button-risk"
       type="warning"
       :icon="Warning"
@@ -590,6 +675,48 @@ onMounted(async () => {
             :rows="3"
             placeholder="请输入任务描述"
           />
+        </el-form-item>
+        <el-form-item v-if="canUseAiEstimate" label="AI 评估">
+          <div class="create-ai-wrap">
+            <div class="create-ai-row">
+              <el-button
+                type="warning"
+                :loading="createAiEstimating"
+                :disabled="!createForm.title.trim()"
+                @click="handleCreateAiEstimate"
+              >
+                AI 推荐人选 + 预估工时
+              </el-button>
+              <span v-if="createAiStatusMsg" class="create-ai-status">{{ createAiStatusMsg }}</span>
+            </div>
+            <div v-if="createAiEstimateInfo" class="create-ai-box">
+              <div class="create-ai-head">AI 评估结果</div>
+              <div class="create-ai-estimate">
+                预估工时:
+                <strong>{{ createAiEstimateInfo.estimated_hours ?? '-' }}h</strong>
+                <el-tag
+                  v-if="createAiEstimateInfo.confidence"
+                  :type="createAiEstimateInfo.confidence === 'high' ? 'success' : createAiEstimateInfo.confidence === 'medium' ? 'warning' : 'info'"
+                  size="small"
+                >
+                  {{ createAiEstimateInfo.confidence === 'high' ? '高置信' : createAiEstimateInfo.confidence === 'medium' ? '中置信' : '低置信' }}
+                </el-tag>
+              </div>
+              <div v-if="createAiEstimateInfo.reasoning" class="create-ai-reason">
+                {{ createAiEstimateInfo.reasoning }}
+              </div>
+              <div v-if="createAiRecommendations.length" class="create-ai-recs">
+                <div class="create-ai-recs-title">推荐人选</div>
+                <div v-for="(rec, idx) in createAiRecommendations" :key="idx" class="create-ai-rec">
+                  <span class="create-ai-rank">#{{ idx + 1 }}</span>
+                  <span class="create-ai-name">{{ rec.name }}</span>
+                  <el-tag v-if="rec.score != null" size="small" type="warning">{{ rec.score }}分</el-tag>
+                  <el-button type="primary" size="small" link @click="applyCreateRecommendation(rec)">采纳</el-button>
+                  <div v-if="rec.reason" class="create-ai-rec-reason">{{ rec.reason }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="优先级">
           <el-select v-model="createForm.priority" style="width: 100%">
@@ -657,7 +784,7 @@ onMounted(async () => {
             <h4>基本信息</h4>
             <el-descriptions :column="1" border size="small">
               <el-descriptions-item label="状态">
-                <el-tag size="small">
+                <el-tag :type="(taskStatusType(selectedTask.status) as any)" size="small">
                   {{ TaskStatusLabel[selectedTask.status as TaskStatus] || selectedTask.status }}
                 </el-tag>
               </el-descriptions-item>
@@ -683,10 +810,48 @@ onMounted(async () => {
               <el-descriptions-item label="当前进度">
                 <el-progress :percentage="selectedTask.progress_pct" :stroke-width="10" />
               </el-descriptions-item>
+              <el-descriptions-item v-if="selectedTask.signed_off_at" label="会签时间">
+                {{ formatDateTime(selectedTask.signed_off_at) }}
+              </el-descriptions-item>
+              <el-descriptions-item v-if="selectedTask.signed_off_by_name" label="会签人">
+                {{ selectedTask.signed_off_by_name }}
+              </el-descriptions-item>
               <el-descriptions-item label="创建时间">
                 {{ formatDateTime(selectedTask.created_at) }}
               </el-descriptions-item>
             </el-descriptions>
+            <div v-if="needsSignoff(selectedTask)" class="detail-signoff">
+              <el-tag type="warning" effect="plain">进度 100%，等待会签</el-tag>
+              <el-button
+                v-if="canUseAiRisk"
+                type="warning"
+                size="small"
+                :loading="signoffAssistLoading"
+                @click="handleSignoffAssist"
+              >
+                AI 会签建议
+              </el-button>
+              <el-button
+                v-if="canSignoff(selectedTask)"
+                type="success"
+                size="small"
+                @click="handleSignoffTask(selectedTask)"
+              >
+                会签确认
+              </el-button>
+            </div>
+            <div v-if="signoffAssistStatus || signoffAssistResult" class="signoff-assist">
+              <span v-if="signoffAssistStatus" class="create-ai-status">{{ signoffAssistStatus }}</span>
+              <template v-if="signoffAssistResult">
+                <el-tag :type="signoffAssistResult.recommendation === 'approve' ? 'success' : 'warning'" size="small">
+                  {{ signoffAssistResult.recommendation === 'approve' ? '建议会签' : '建议暂缓' }}
+                </el-tag>
+                <p>{{ signoffAssistResult.summary }}</p>
+                <ul v-if="Array.isArray(signoffAssistResult.risks) && signoffAssistResult.risks.length">
+                  <li v-for="(risk, idx) in signoffAssistResult.risks" :key="idx">{{ risk }}</li>
+                </ul>
+              </template>
+            </div>
           </div>
 
           <!-- Description -->
@@ -700,8 +865,8 @@ onMounted(async () => {
             <div class="section-header-row">
               <h4>子任务</h4>
               <div class="section-header-actions">
-                <el-button size="small" @click="openSubtaskForm">手动添加子任务</el-button>
-                <el-button size="small" type="primary" :loading="decomposing" @click="handleAIDecompose">AI 智能分解</el-button>
+                <el-button v-if="canCreateTask" size="small" @click="openSubtaskForm">手动添加子任务</el-button>
+                <el-button v-if="canUseAiEstimate && canCreateTask" size="small" type="primary" :loading="decomposing" @click="handleAIDecompose">AI 智能分解</el-button>
               </div>
             </div>
 
@@ -792,7 +957,7 @@ onMounted(async () => {
           </div>
 
           <!-- Progress Log Form -->
-          <div class="detail-section">
+          <div v-if="canSubmitProgress" class="detail-section">
             <h4>更新进度</h4>
             <el-form label-width="80px" size="small">
               <el-form-item label="进度 (%)">
@@ -1099,6 +1264,94 @@ onMounted(async () => {
   margin-top: 4px;
 }
 
+.signoff-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.create-ai-wrap {
+  width: 100%;
+}
+
+.create-ai-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.create-ai-status {
+  font-size: 12px;
+  color: #e6a23c;
+  animation: pulse 1.5s infinite;
+}
+
+.create-ai-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #faecd8;
+  border-radius: 6px;
+  background: #fdf6ec;
+}
+
+.create-ai-head {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #b88230;
+}
+
+.create-ai-estimate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: #303133;
+}
+
+.create-ai-reason {
+  margin-bottom: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #606266;
+}
+
+.create-ai-recs-title {
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.create-ai-rec {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-top: 1px solid #faecd8;
+  flex-wrap: wrap;
+}
+
+.create-ai-rank {
+  font-weight: 700;
+  color: #b88230;
+}
+
+.create-ai-name {
+  font-weight: 500;
+  color: #303133;
+}
+
+.create-ai-rec-reason {
+  width: 100%;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #909399;
+}
+
 /* Floating action buttons */
 .fab-button {
   position: fixed;
@@ -1136,6 +1389,34 @@ onMounted(async () => {
   font-weight: 600;
   margin: 0 0 12px 0;
   color: #303133;
+}
+
+.detail-signoff {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.signoff-assist {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #faecd8;
+  background: #fdf6ec;
+  font-size: 12px;
+  color: #606266;
+}
+
+.signoff-assist p {
+  margin: 6px 0;
+  line-height: 1.5;
+}
+
+.signoff-assist ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
 }
 
 .task-description {

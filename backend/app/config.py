@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin123"
-    ADMIN_EMAIL: str = "admin@teampilot.com"
     ADMIN_FULL_NAME: str = "System Administrator"
     SEED_DEMO_USERS: bool = True
 

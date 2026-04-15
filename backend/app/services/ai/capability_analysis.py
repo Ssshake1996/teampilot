@@ -69,7 +69,7 @@ async def analyze_capability(db: AsyncSession, user_id: uuid.UUID, llm: LLMClien
 
     prompt = CAPABILITY_ANALYSIS_USER.format(
         full_name=user.full_name,
-        role=user.role,
+        role=f"{user.role}；个人介绍：{user.bio or '未填写'}",
         skills=skills_text,
         completed_tasks=done,
         on_time_rate=on_time_rate,

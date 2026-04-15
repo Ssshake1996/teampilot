@@ -13,10 +13,8 @@ export enum ProjectStatus {
 }
 
 export enum TaskStatus {
-  BACKLOG = 'backlog',
-  TODO = 'todo',
+  NOT_STARTED = 'not_started',
   IN_PROGRESS = 'in_progress',
-  IN_REVIEW = 'in_review',
   DONE = 'done',
 }
 
@@ -28,10 +26,8 @@ export enum TaskPriority {
 }
 
 export const TaskStatusLabel: Record<TaskStatus, string> = {
-  [TaskStatus.BACKLOG]: '待办池',
-  [TaskStatus.TODO]: '待处理',
+  [TaskStatus.NOT_STARTED]: '待开始',
   [TaskStatus.IN_PROGRESS]: '进行中',
-  [TaskStatus.IN_REVIEW]: '审核中',
   [TaskStatus.DONE]: '已完成',
 }
 

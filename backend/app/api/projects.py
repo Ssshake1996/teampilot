@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_permission
 from app.models.user import User
 from app.schemas.project import (
     ProjectCreate, ProjectMemberAdd, ProjectMemberOut, ProjectOut, ProjectUpdate,
@@ -30,7 +30,7 @@ async def list_projects(
 async def create_project(
     data: ProjectCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("project.create")),
 ):
     project = await project_service.create_project(db, data, current_user.id)
     return {
@@ -59,7 +59,7 @@ async def update_project(
     project_id: uuid.UUID,
     data: ProjectUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("project.edit")),
 ):
     project = await project_service.update_project(db, project_id, data)
     if not project:
@@ -74,7 +74,7 @@ async def update_project(
 async def delete_project(
     project_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("project.archive")),
 ):
     ok = await project_service.delete_project(db, project_id)
     if not ok:
@@ -106,7 +106,7 @@ async def add_member(
     project_id: uuid.UUID,
     data: ProjectMemberAdd,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("project.member.manage")),
 ):
     await project_service.add_project_member(db, project_id, data.user_id, data.role_in_project.value)
     return {"message": "Member added"}
@@ -117,7 +117,7 @@ async def remove_member(
     project_id: uuid.UUID,
     user_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("project.member.manage")),
 ):
     await project_service.remove_project_member(db, project_id, user_id)
     return {"message": "Member removed"}

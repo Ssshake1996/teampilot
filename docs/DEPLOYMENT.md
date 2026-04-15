@@ -31,6 +31,7 @@ What `deploy.sh` now does:
 - Generates `JWT_SECRET_KEY`, `AI_ENCRYPTION_KEY`, and `ADMIN_PASSWORD` when placeholders are still present or values are blank.
 - Builds and starts the Compose stack.
 - Lets the backend auto-create tables on first start.
+- Runs the current lightweight schema compatibility step for PostgreSQL/SQLite: remove the legacy `users.email` column when present and add `users.bio` when missing.
 - Fails fast if the backend health check does not become ready.
 
 ## Production checklist
@@ -40,6 +41,7 @@ What `deploy.sh` now does:
 - Put HTTPS in front of the frontend container before opening the service to the public internet.
 - Keep `SEED_DEMO_USERS=false` unless you explicitly want demo accounts.
 - Back up the database before every upgrade.
+- User accounts are keyed by `username`; the current schema no longer stores email addresses.
 
 ## Server migration
 
@@ -69,3 +71,4 @@ Recommended migration sequence:
 - The backend now constructs its PostgreSQL connection from `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` when `DATABASE_URL` is not provided.
 - `docker-compose.yml` no longer relies on Compose-time interpolation from `env_file`, which was the main source of server-to-server drift.
 - The current repository does not yet include a complete Alembic migration workflow (`alembic.ini` and revision scripts are not present), so first-run schema setup still relies on application startup.
+- Application startup also handles the current user-table compatibility changes on PostgreSQL: `ALTER TABLE users DROP COLUMN IF EXISTS email` and `ALTER TABLE users ADD COLUMN bio TEXT` when `bio` is missing. Keep database backups before upgrades because this intentionally removes the legacy email column.

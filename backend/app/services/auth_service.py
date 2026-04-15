@@ -12,15 +12,12 @@ from app.utils.security import (
 
 
 async def register_user(db: AsyncSession, data: RegisterRequest) -> User:
-    existing = await db.execute(
-        select(User).where((User.username == data.username) | (User.email == data.email))
-    )
+    existing = await db.execute(select(User).where(User.username == data.username))
     if existing.scalar_one_or_none():
-        raise ValueError("Username or email already exists")
+        raise ValueError("Username already exists")
 
     user = User(
         username=data.username,
-        email=data.email,
         hashed_password=hash_password(data.password),
         full_name=data.full_name,
     )

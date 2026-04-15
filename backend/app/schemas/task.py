@@ -10,11 +10,12 @@ from app.models.task import TaskStatus, TaskPriority
 class TaskCreate(BaseModel):
     title: str
     description: str | None = None
-    status: TaskStatus = TaskStatus.BACKLOG
+    status: TaskStatus | None = None
     priority: TaskPriority = TaskPriority.MEDIUM
     assignee_id: uuid.UUID | None = None
     parent_task_id: uuid.UUID | None = None
     estimated_hours: float | None = None
+    start_date: datetime | None = None
     deadline: datetime | None = None
 
 
@@ -26,6 +27,7 @@ class TaskUpdate(BaseModel):
     assignee_id: uuid.UUID | None = None
     estimated_hours: float | None = None
     actual_hours: float | None = None
+    start_date: datetime | None = None
     deadline: datetime | None = None
 
 
@@ -42,8 +44,12 @@ class TaskOut(BaseModel):
     parent_task_id: uuid.UUID | None = None
     estimated_hours: float | None = None
     actual_hours: float | None = None
+    start_date: datetime | None = None
     deadline: datetime | None = None
     completed_at: datetime | None = None
+    signed_off_by_id: uuid.UUID | None = None
+    signed_off_by_name: str | None = None
+    signed_off_at: datetime | None = None
     sort_order: int
     created_at: datetime
     updated_at: datetime

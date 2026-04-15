@@ -21,6 +21,9 @@ export const tasksApi = {
   updateStatus(taskId: string, status: TaskStatus) {
     return http.patch<Task>(`/tasks/${taskId}/status`, { status })
   },
+  signoff(taskId: string) {
+    return http.post<Task>(`/tasks/${taskId}/signoff`)
+  },
   assign(taskId: string, assigneeId: string | null) {
     return http.patch<Task>(`/tasks/${taskId}/assign`, { assignee_id: assigneeId })
   },

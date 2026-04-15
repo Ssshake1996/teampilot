@@ -42,7 +42,8 @@ async def estimate_task(
         )).scalar()
 
         members_text_parts.append(
-            f"- ID: {user.id} | {user.full_name} | 技能: {skills_str} | 当前任务: {task_count}个"
+            f"- ID: {user.id} | {user.full_name} | 技能: {skills_str} | "
+            f"当前任务: {task_count}个 | 个人介绍: {user.bio or '未填写'}"
         )
 
     prompt = TASK_ESTIMATE_USER.format(

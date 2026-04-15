@@ -80,7 +80,11 @@ npm run dev
 
 - **AI 集成**: 不依赖任何 SDK，用 `httpx` 直连 OpenAI 兼容 API，在 `backend/app/services/ai/llm_client.py`
 - **认证**: JWT Access Token (30min) + Refresh Token (7days)，token 存 `localStorage`
-- **实时更新**: WebSocket 推送任务状态变更到前端
+- **用户账号**: 以 `username` 为唯一登录标识，不采集邮箱；`User.bio` 保存个人介绍，并进入 AI 派单/预估/能力分析上下文
+- **任务状态**: 对外只显示待开始、进行中、已完成；待开始按开始时间自动判断，已完成必须在进度 100% 后由 `task.signoff` 权限会签确认
+- **群消息进展导入**: 项目管理页汇总栏可粘贴“姓名/时间/任务进展”，AI 跨未归档项目识别匹配项目和任务，确认后写入 `task_progress`
+- **AI 项目管理助手**: 支持自然语言生成项目和任务树、跨项目日报巡检、任务会签建议、项目复盘，相关接口在 `/api/v1/ai`
+- **实时更新**: WebSocket 推送任务和进度变更到前端
 - **看板拖拽**: `vuedraggable` 实现跨列拖放
 
 ## 数据库模型关系
@@ -90,6 +94,7 @@ User 1──N Task (assignee)
 User 1──N ProjectMember N──1 Project
 User 1──N UserSkill N──1 Skill
 User 1──1 CapabilityProfile
+User.bio ──> AI task assignment / estimate / capability context
 Task N──1 Project
 Task 1──N TaskProgress
 Task N──N Skill (required_skills via TaskRequiredSkill)
@@ -120,5 +125,6 @@ pytest tests/ -v
 
 - **添加新的 API**: 在 `api/` 添加路由，在 `services/` 添加业务逻辑，在 `schemas/` 添加数据模型，并在 `api/router.py` 注册
 - **添加新的数据表**: 在 `models/` 添加模型，在 `models/__init__.py` 导入；当前仓库尚未补齐完整 Alembic 配置，首次建表仍主要依赖应用启动时自动创建
+- **修改用户字段**: 同步 `models/user.py`、`schemas/user.py`、前端 `types/models.ts`，并在 `main.py` 中补齐 PostgreSQL/SQLite 兼容迁移；当前启动兼容迁移会删除旧 `users.email` 并补齐 `users.bio`
 - **修改 AI Prompt**: 编辑 `services/ai/prompts.py`
 - **添加前端页面**: 在 `views/` 添加组件，在 `router/index.ts` 添加路由

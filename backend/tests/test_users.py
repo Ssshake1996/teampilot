@@ -28,9 +28,27 @@ async def test_update_user(client: AsyncClient, auth_headers, test_user):
     user, _ = test_user
     res = await client.patch(f"/api/v1/users/{user.id}", json={
         "full_name": "Updated Name",
+        "bio": "Focused on backend services and project delivery.",
     }, headers=auth_headers)
     assert res.status_code == 200
     assert res.json()["full_name"] == "Updated Name"
+    assert res.json()["bio"] == "Focused on backend services and project delivery."
+
+
+@pytest.mark.asyncio
+async def test_users_table_columns_are_current(db_session):
+    """Ensure backend DB columns match the current user model contract."""
+    from sqlalchemy import inspect
+
+    columns = await db_session.run_sync(
+        lambda sync_session: {
+            col["name"]
+            for col in inspect(sync_session.get_bind()).get_columns("users")
+        }
+    )
+
+    assert "bio" in columns
+    assert "email" not in columns
 
 
 @pytest.mark.asyncio

@@ -3,9 +3,10 @@ import type { ProjectStatus, TaskStatus, TaskPriority } from './enums'
 export interface User {
   id: string
   username: string
-  email: string
   full_name: string
   role: string
+  department: string | null
+  bio: string | null
   avatar_url: string | null
   is_active: boolean
   created_at: string
@@ -38,8 +39,12 @@ export interface Task {
   parent_task_id: string | null
   estimated_hours: number | null
   actual_hours: number | null
+  start_date: string | null
   deadline: string | null
   completed_at: string | null
+  signed_off_by_id: string | null
+  signed_off_by_name: string | null
+  signed_off_at: string | null
   sort_order: number
   created_at: string
   updated_at: string

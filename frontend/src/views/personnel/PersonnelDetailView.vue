@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -16,13 +16,19 @@ import { usersApi } from '@/api/users'
 import { capabilitiesApi } from '@/api/capabilities'
 import { aiApi } from '@/api/ai'
 import { skillsApi } from '@/api/skills'
+import { useAuthStore } from '@/stores/auth'
 import type { User, UserSkill, CapabilityProfile } from '@/types/models'
 import { UserRole } from '@/types/enums'
 
 use([CanvasRenderer, RadarChart, TitleComponent, TooltipComponent, RadarComponent])
 
 const route = useRoute()
+const router = useRouter()
+const auth = useAuthStore()
 const userId = computed(() => route.params.id as string)
+const canEditSkills = computed(() => auth.can('personnel.edit_skills'))
+const canAnalyzeCapability = computed(() => auth.can('ai.capability'))
+const canEditBio = computed(() => auth.user?.id === userId.value || auth.can('personnel.edit'))
 
 const user = ref<User | null>(null)
 const skills = ref<UserSkill[]>([])
@@ -31,6 +37,9 @@ const workload = ref<any>(null)
 const userTasks = ref<any[]>([])
 const loading = ref(false)
 const analyzing = ref(false)
+const editingBio = ref(false)
+const savingBio = ref(false)
+const bioDraft = ref('')
 
 const roleLabel: Record<string, string> = {
   [UserRole.ADMIN]: '管理员',
@@ -118,6 +127,7 @@ async function loadData() {
       usersApi.getSkills(userId.value),
     ])
     user.value = userRes.data
+    bioDraft.value = userRes.data.bio || ''
     skills.value = skillsRes.data
 
     try {
@@ -150,6 +160,7 @@ async function loadAllSkills() {
 }
 
 function openSkillEditor() {
+  if (!canEditSkills.value) return
   editingSkills.value = true
   loadAllSkills()
 }
@@ -185,6 +196,28 @@ async function saveSkills(updatedSkills: UserSkill[]) {
   }
 }
 
+function openBioEditor() {
+  bioDraft.value = user.value?.bio || ''
+  editingBio.value = true
+}
+
+async function saveBio() {
+  if (!user.value) return
+  savingBio.value = true
+  try {
+    const res = await usersApi.update(userId.value, { bio: bioDraft.value.trim() || null })
+    user.value = res.data
+    bioDraft.value = res.data.bio || ''
+    editingBio.value = false
+    ElMessage.success('个人介绍已保存')
+    if (auth.user?.id === userId.value) await auth.fetchUser()
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '保存失败')
+  } finally {
+    savingBio.value = false
+  }
+}
+
 const aiStatusMsg = ref('')
 
 async function analyzeCapability() {
@@ -204,8 +237,8 @@ async function analyzeCapability() {
 }
 
 function formatDateTime(d: string | null) { return d ? d.replace('T', ' ').slice(0, 16) : '' }
-function taskStatusLabel(s: string) { return ({ backlog: '待办池', todo: '待处理', in_progress: '进行中', in_review: '审核中', done: '已完成' } as any)[s] || s }
-function taskStatusType(s: string) { return ({ backlog: 'info', todo: '', in_progress: 'warning', in_review: '', done: 'success' } as any)[s] || 'info' }
+function taskStatusLabel(s: string) { return ({ not_started: '待开始', in_progress: '进行中', done: '已完成' } as any)[s] || s }
+function taskStatusType(s: string) { return ({ not_started: 'info', in_progress: 'warning', done: 'success' } as any)[s] || 'info' }
 
 onMounted(() => {
   loadData()
@@ -215,6 +248,10 @@ onMounted(() => {
 <template>
   <div v-loading="loading" class="personnel-detail">
     <template v-if="user">
+      <div class="detail-toolbar">
+        <el-button @click="router.push('/personnel')">返回人员列表</el-button>
+      </div>
+
       <!-- Profile Header -->
       <el-card class="profile-header-card">
         <div class="profile-header">
@@ -227,16 +264,41 @@ onMounted(() => {
               <el-tag :type="roleTagType[user.role] || 'info'" size="small">
                 {{ roleLabel[user.role] || user.role }}
               </el-tag>
-              <span class="profile-email">{{ user.email }}</span>
+              <span v-if="user.department" class="profile-department">{{ user.department }}</span>
             </div>
           </div>
-          <div class="profile-actions">
+          <div v-if="canAnalyzeCapability" class="profile-actions">
             <el-button type="primary" :loading="analyzing" @click="analyzeCapability">
               AI 能力分析
             </el-button>
             <div v-if="aiStatusMsg" class="ai-status-text">{{ aiStatusMsg }}</div>
           </div>
         </div>
+      </el-card>
+
+      <el-card class="bio-card">
+        <template #header>
+          <div class="card-header-row">
+            <span>个人介绍</span>
+            <el-button v-if="canEditBio && !editingBio" type="primary" link size="small" @click="openBioEditor">编辑</el-button>
+          </div>
+        </template>
+        <div v-if="editingBio" class="bio-editor">
+          <el-input
+            v-model="bioDraft"
+            type="textarea"
+            :rows="5"
+            maxlength="1000"
+            show-word-limit
+            placeholder="填写擅长领域、项目经验、偏好的工作类型、当前限制等，AI 分析工作安排时会作为参考。"
+          />
+          <div class="bio-actions">
+            <el-button @click="editingBio = false">取消</el-button>
+            <el-button type="primary" :loading="savingBio" @click="saveBio">保存</el-button>
+          </div>
+        </div>
+        <p v-else-if="user.bio" class="bio-text">{{ user.bio }}</p>
+        <el-empty v-else description="暂无个人介绍" :image-size="60" />
       </el-card>
 
       <!-- Stats Row -->
@@ -269,7 +331,7 @@ onMounted(() => {
           <template #header>
             <div class="card-header-row">
               <span>能力雷达图</span>
-              <el-button type="primary" link size="small" @click="openSkillEditor">
+              <el-button v-if="canEditSkills" type="primary" link size="small" @click="openSkillEditor">
                 {{ editingSkills ? '收起' : '编辑维度' }}
               </el-button>
             </div>
@@ -277,7 +339,7 @@ onMounted(() => {
           <div v-if="radarOption" class="radar-chart-wrapper">
             <v-chart :option="radarOption" autoresize class="radar-chart" />
           </div>
-          <el-empty v-else description="暂无技能数据，请点击编辑维度添加" />
+          <el-empty v-else :description="canEditSkills ? '暂无技能数据，请点击编辑维度添加' : '暂无技能数据'" />
 
           <!-- Skill Editor Panel -->
           <div v-if="editingSkills" class="skill-editor">
@@ -393,8 +455,33 @@ onMounted(() => {
   min-height: 300px;
 }
 
+.detail-toolbar {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}
+
 .profile-header-card {
   margin-bottom: 20px;
+}
+
+.bio-card {
+  margin-bottom: 20px;
+}
+
+.bio-text {
+  margin: 0;
+  color: #606266;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.bio-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .profile-header {
@@ -420,7 +507,7 @@ onMounted(() => {
   gap: 12px;
 }
 
-.profile-email {
+.profile-department {
   color: #909399;
   font-size: 14px;
 }

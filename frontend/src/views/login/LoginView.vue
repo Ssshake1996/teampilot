@@ -22,7 +22,6 @@ const loginForm = reactive({
 
 const registerForm = reactive({
   username: '',
-  email: '',
   full_name: '',
   password: '',
   confirmPassword: '',
@@ -37,10 +36,6 @@ const registerRules = reactive<FormRules>({
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 3, max: 32, message: '用户名长度在 3 到 32 个字符', trigger: 'blur' },
-  ],
-  email: [
-    { required: true, message: '请输入邮箱', trigger: 'blur' },
-    { type: 'email', message: '请输入有效的邮箱地址', trigger: 'blur' },
   ],
   full_name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   password: [
@@ -89,7 +84,6 @@ async function handleRegister() {
   try {
     await authApi.register({
       username: registerForm.username,
-      email: registerForm.email,
       full_name: registerForm.full_name,
       password: registerForm.password,
     })
@@ -170,13 +164,6 @@ function toggleMode() {
             v-model="registerForm.username"
             placeholder="用户名"
             prefix-icon="User"
-          />
-        </el-form-item>
-        <el-form-item prop="email">
-          <el-input
-            v-model="registerForm.email"
-            placeholder="邮箱"
-            prefix-icon="Message"
           />
         </el-form-item>
         <el-form-item prop="full_name">

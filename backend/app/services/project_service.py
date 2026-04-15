@@ -8,6 +8,7 @@ from app.models.project import Project, ProjectMember, ProjectStatus
 from app.models.task import Task, TaskStatus
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectUpdate
+from app.services.task_service import effective_task_status
 
 
 async def list_projects(db: AsyncSession, page: int = 1, page_size: int = 20, include_archived: bool = False) -> tuple[list[dict], int]:
@@ -126,10 +127,11 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
     all_tasks = {}
     children_map: dict[str, list] = {}
     for t, assignee_name in rows:
+        status = effective_task_status(t).value
         td = {
             "id": str(t.id),
             "title": t.title,
-            "status": t.status.value,
+            "status": status,
             "priority": t.priority.value,
             "assignee_id": str(t.assignee_id) if t.assignee_id else None,
             "assignee_name": assignee_name,
@@ -138,10 +140,12 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
             "start_date": (t.start_date or t.created_at).isoformat() if (t.start_date or t.created_at) else None,
             "deadline": t.deadline.isoformat() if t.deadline else None,
             "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            "signed_off_by_id": str(t.signed_off_by_id) if t.signed_off_by_id else None,
+            "signed_off_at": t.signed_off_at.isoformat() if t.signed_off_at else None,
             "created_at": t.created_at.isoformat() if t.created_at else None,
             "parent_task_id": str(t.parent_task_id) if t.parent_task_id else None,
             "is_deleted": bool(t.is_deleted),
-            "is_overdue": bool(not t.is_deleted and t.deadline and t.deadline.replace(tzinfo=None) < now and t.status.value != "done"),
+            "is_overdue": bool(not t.is_deleted and t.deadline and t.deadline.replace(tzinfo=None) < now and status != "done"),
             "children": [],
         }
         all_tasks[str(t.id)] = td

@@ -114,6 +114,15 @@ docker compose logs -f --tail=50
 因此，下面的 `alembic upgrade head` 只有在你们后续补齐 Alembic 配置后才适用。
 在当前仓库里，自动建表仍主要依赖应用启动时的 `Base.metadata.create_all()`。
 
+当前后端启动时还包含一个轻量兼容迁移，适用于 PostgreSQL 生产库和 SQLite 本地库：
+
+- 如果旧表仍有 `users.email`，启动时会删除该列。
+- 如果 `users.bio` 不存在，启动时会添加 `bio TEXT`。
+- 注册和登录只依赖 `username`，不再使用邮箱。
+
+升级生产环境前仍应先备份 PostgreSQL；删除 `users.email` 是不可逆结构变更。
+当前数据库表字段说明见 [DATABASE.md](DATABASE.md)。
+
 如果只是空库首次启动或开发环境重建表，可使用下面的建表脚本：
 
 ```bash
