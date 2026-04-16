@@ -394,8 +394,12 @@ async def daily_briefing(
         llm = None
         try:
             yield sse_status("正在加载 AI 配置...")
-            llm = await _get_llm_from_db()
-            yield sse_status("正在汇总项目、任务和进展数据...")
+            try:
+                llm = await _get_llm_from_db()
+                yield sse_status("正在汇总项目、任务和进展数据...")
+                yield sse_status("正在调用 AI 生成日报巡检...")
+            except Exception:
+                yield sse_status("AI 配置不可用，正在使用系统规则巡检...")
             async with async_session() as db:
                 result = await daily_brief(db, llm)
             yield sse_status("日报巡检完成")

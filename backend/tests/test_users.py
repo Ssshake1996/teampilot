@@ -14,6 +14,20 @@ async def test_list_users(client: AsyncClient, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_users_overview_returns_people(client: AsyncClient, auth_headers):
+    """Personnel overview should include user rows for the frontend list."""
+    res = await client.get("/api/v1/users/overview?page=1&page_size=100", headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] >= 1
+    assert len(data["items"]) >= 1
+    assert data["items"][0]["user"]["username"] == "testuser"
+    assert "skills" in data["items"][0]
+    assert "workload" in data["items"][0]
+    assert "departments" in data
+
+
+@pytest.mark.asyncio
 async def test_get_user(client: AsyncClient, auth_headers, test_user):
     """Test getting user by id."""
     user, _ = test_user

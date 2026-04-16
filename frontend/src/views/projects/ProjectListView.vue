@@ -65,7 +65,6 @@ const progressImportLoading = ref(false)
 const progressImportSubmitting = ref(false)
 
 // AI project setup
-const projectPlanDialogVisible = ref(false)
 const projectPlanPrompt = ref('')
 const projectPlanStatus = ref('')
 const projectPlanPreview = ref<any>(null)
@@ -274,11 +273,16 @@ async function commitProgressImport() {
   }
 }
 
-function openProjectPlanDialog() {
+function resetProjectPlan() {
   projectPlanPrompt.value = ''
   projectPlanStatus.value = ''
   projectPlanPreview.value = null
-  projectPlanDialogVisible.value = true
+}
+
+function openCreateProjectDialog() {
+  createForm.value = { name: '', description: '', start_date: '', end_date: '' }
+  resetProjectPlan()
+  createDialogVisible.value = true
 }
 
 async function previewProjectPlan() {
@@ -310,7 +314,8 @@ async function commitProjectPlan() {
     const res = await aiApi.commitProjectPlan(projectPlanPreview.value)
     const project = (res.data as any).project
     ElMessage.success('项目和任务树已创建')
-    projectPlanDialogVisible.value = false
+    createDialogVisible.value = false
+    resetProjectPlan()
     await loadProjects()
     if (project?.id) {
       expandedProjects.value.add(project.id)
@@ -331,9 +336,9 @@ async function openDailyBrief() {
   try {
     dailyBriefResult.value = await aiApi.dailyBrief((msg: string) => { dailyBriefStatus.value = msg })
     dailyBriefStatus.value = ''
-  } catch {
+  } catch (err: any) {
     dailyBriefStatus.value = ''
-    ElMessage.error('日报巡检生成失败')
+    ElMessage.error(err?.message || '日报巡检生成失败')
   } finally {
     dailyBriefLoading.value = false
   }
@@ -424,6 +429,7 @@ async function handleCreate() {
     await projectsApi.create({ name: createForm.value.name, description: createForm.value.description || undefined, start_date: createForm.value.start_date || undefined, end_date: createForm.value.end_date || undefined })
     ElMessage.success('项目已创建'); createDialogVisible.value = false
     createForm.value = { name: '', description: '', start_date: '', end_date: '' }
+    resetProjectPlan()
     await loadProjects()
   } catch { ElMessage.error('创建失败') } finally { creating.value = false }
 }
@@ -495,16 +501,21 @@ onMounted(loadProjects)
   <div v-loading="loading" class="plv">
     <!-- Summary -->
     <div class="summary-bar">
-      <div class="si"><span class="sv">{{ summaryStats.total }}</span><span class="sl">项目总数</span></div>
-      <div class="si"><span class="sv active">{{ summaryStats.active }}</span><span class="sl">进行中</span></div>
-      <div class="si"><span class="sv">{{ summaryStats.totalTasks }}</span><span class="sl">总任务数</span></div>
-      <div class="si"><span class="sv done">{{ summaryStats.doneTasks }}</span><span class="sl">已完成</span></div>
-      <div class="si"><span class="sv" :class="{ warn: summaryStats.overallRate < 50 }">{{ summaryStats.overallRate }}%</span><span class="sl">完成率</span></div>
-      <el-switch v-model="showArchived" active-text="含归档" style="margin-left:auto" @change="onArchivedChange" />
-      <el-button v-if="canUseAiEstimate && canCreateProject" type="warning" @click="openProjectPlanDialog">AI 创建项目</el-button>
-      <el-button v-if="canUseAiRisk" type="warning" plain @click="openDailyBrief">日报巡检</el-button>
-      <el-button v-if="canUseAiEstimate" type="warning" @click="openProgressImport">进展更新</el-button>
-      <el-button v-if="canCreateProject" type="primary" @click="createDialogVisible = true">新建项目</el-button>
+      <div class="summary-stats">
+        <div class="si"><span class="sv">{{ summaryStats.total }}</span><span class="sl">项目总数</span></div>
+        <div class="si"><span class="sv active">{{ summaryStats.active }}</span><span class="sl">进行中</span></div>
+        <div class="si"><span class="sv">{{ summaryStats.totalTasks }}</span><span class="sl">总任务数</span></div>
+        <div class="si"><span class="sv done">{{ summaryStats.doneTasks }}</span><span class="sl">已完成</span></div>
+        <div class="si"><span class="sv" :class="{ warn: summaryStats.overallRate < 50 }">{{ summaryStats.overallRate }}%</span><span class="sl">完成率</span></div>
+      </div>
+      <div v-if="canUseAiEstimate" class="summary-progress-action">
+        <el-button type="warning" @click="openProgressImport">进展更新</el-button>
+      </div>
+      <div class="summary-actions">
+        <el-switch v-model="showArchived" active-text="含归档" @change="onArchivedChange" />
+        <el-button v-if="canUseAiRisk" type="warning" plain @click="openDailyBrief">日报巡检</el-button>
+        <el-button v-if="canCreateProject" type="primary" @click="openCreateProjectDialog">新建项目</el-button>
+      </div>
     </div>
 
     <!-- Project List -->
@@ -635,34 +646,27 @@ onMounted(loadProjects)
     </div>
 
     <!-- Create Project Dialog -->
-    <el-dialog v-model="createDialogVisible" title="新建项目" width="500px">
+    <el-dialog v-model="createDialogVisible" title="新建项目" :width="canUseAiEstimate ? '880px' : '520px'" :close-on-click-modal="false">
       <el-form label-width="80px">
         <el-form-item label="项目名称"><el-input v-model="createForm.name" placeholder="请输入项目名称" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="createForm.description" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="开始日期"><el-date-picker v-model="createForm.start_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
         <el-form-item label="截止日期"><el-date-picker v-model="createForm.end_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="handleCreate">创建</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- AI Project Plan Dialog -->
-    <el-dialog v-model="projectPlanDialogVisible" title="AI 创建项目" width="880px" :close-on-click-modal="false">
-      <el-form label-width="90px">
-        <el-form-item label="项目目标">
-          <el-input
-            v-model="projectPlanPrompt"
-            type="textarea"
-            :rows="5"
-            placeholder="描述项目目标、周期、交付物、约束条件。AI 会生成项目、任务树、负责人建议、工时和时间计划。"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="warning" :loading="projectPlanLoading" :disabled="!projectPlanPrompt.trim()" @click="previewProjectPlan">生成计划</el-button>
-          <span v-if="projectPlanStatus" class="ai-st">{{ projectPlanStatus }}</span>
-        </el-form-item>
+        <template v-if="canUseAiEstimate">
+          <el-divider content-position="left">AI 创建</el-divider>
+          <el-form-item label="项目目标">
+            <el-input
+              v-model="projectPlanPrompt"
+              type="textarea"
+              :rows="4"
+              placeholder="项目目标、周期、交付物、约束条件"
+            />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="warning" :loading="projectPlanLoading" :disabled="!projectPlanPrompt.trim()" @click="previewProjectPlan">生成计划</el-button>
+            <span v-if="projectPlanStatus" class="ai-st">{{ projectPlanStatus }}</span>
+          </el-form-item>
+        </template>
       </el-form>
 
       <div v-if="projectPlanPreview" class="ai-result">
@@ -684,8 +688,17 @@ onMounted(loadProjects)
       </div>
 
       <template #footer>
-        <el-button @click="projectPlanDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="projectPlanSubmitting" :disabled="!projectPlanPreview" @click="commitProjectPlan">确认创建项目和任务</el-button>
+        <el-button @click="createDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="handleCreate">创建项目</el-button>
+        <el-button
+          v-if="canUseAiEstimate"
+          type="warning"
+          :loading="projectPlanSubmitting"
+          :disabled="!projectPlanPreview"
+          @click="commitProjectPlan"
+        >
+          确认 AI 创建
+        </el-button>
       </template>
     </el-dialog>
 
@@ -694,7 +707,16 @@ onMounted(loadProjects)
       <div v-loading="dailyBriefLoading" class="ai-result">
         <span v-if="dailyBriefStatus" class="ai-st">{{ dailyBriefStatus }}</span>
         <template v-if="dailyBriefResult">
-          <div class="ai-result-title">今日摘要</div>
+          <div class="ai-result-head">
+            <div class="ai-result-title">今日摘要</div>
+            <el-tag
+              size="small"
+              :type="dailyBriefResult.source === 'ai' ? 'success' : 'warning'"
+              effect="plain"
+            >
+              {{ dailyBriefResult.source_label || (dailyBriefResult.source === 'ai' ? 'AI 生成' : '系统规则巡检') }}
+            </el-tag>
+          </div>
           <p class="ai-result-summary">{{ dailyBriefResult.summary }}</p>
           <div class="ai-section" v-for="section in ['completed','in_progress','risks','actions','signoff_candidates']" :key="section">
             <h4>{{ dailySectionLabel(section) }}</h4>
@@ -863,7 +885,10 @@ onMounted(loadProjects)
 
 <style scoped>
 .plv { padding: 0; }
-.summary-bar { display: flex; align-items: center; gap: 24px; padding: 14px 20px; background: #fff; border-radius: 8px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.summary-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 20px; background: #fff; border-radius: 8px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.summary-stats { display: flex; align-items: center; gap: 24px; flex: 0 0 auto; }
+.summary-progress-action { display: flex; align-items: center; flex: 0 0 auto; padding-left: 2px; }
+.summary-actions { margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 .si { display: flex; flex-direction: column; align-items: center; }
 .sv { font-size: 22px; font-weight: 700; color: #303133; }
 .sv.active { color: #409EFF; } .sv.done { color: #67C23A; } .sv.warn { color: #E6A23C; }
@@ -947,7 +972,9 @@ onMounted(loadProjects)
 .import-preview { margin-top: 8px; }
 .import-title { font-size: 13px; font-weight: 600; color: #303133; margin-bottom: 8px; }
 .ai-result { min-height: 80px; }
+.ai-result-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .ai-result-title { font-size: 15px; font-weight: 700; color: #303133; margin-bottom: 8px; }
+.ai-result-head .ai-result-title { margin-bottom: 0; }
 .ai-result-summary { margin: 0 0 8px; font-size: 13px; line-height: 1.6; color: #606266; white-space: pre-wrap; }
 .ai-result-meta { font-size: 12px; color: #909399; }
 .ai-section { margin-top: 14px; }

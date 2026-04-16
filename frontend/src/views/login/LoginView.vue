@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { authApi } from '@/api/auth'
@@ -11,6 +11,8 @@ const authStore = useAuthStore()
 
 const isRegister = ref(false)
 const loading = ref(false)
+const rememberPassword = ref(false)
+const rememberedLoginKey = 'teampilot.rememberedLogin'
 
 const loginFormRef = ref<FormInstance>()
 const registerFormRef = ref<FormInstance>()
@@ -31,6 +33,30 @@ const loginRules = reactive<FormRules>({
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
 })
+
+function loadRememberedLogin() {
+  try {
+    const raw = localStorage.getItem(rememberedLoginKey)
+    if (!raw) return
+    const saved = JSON.parse(raw) as { username?: string; password?: string }
+    loginForm.username = saved.username || ''
+    loginForm.password = saved.password || ''
+    rememberPassword.value = Boolean(saved.username && saved.password)
+  } catch {
+    localStorage.removeItem(rememberedLoginKey)
+  }
+}
+
+function syncRememberedLogin() {
+  if (rememberPassword.value) {
+    localStorage.setItem(rememberedLoginKey, JSON.stringify({
+      username: loginForm.username,
+      password: loginForm.password,
+    }))
+  } else {
+    localStorage.removeItem(rememberedLoginKey)
+  }
+}
 
 const registerRules = reactive<FormRules>({
   username: [
@@ -64,6 +90,7 @@ async function handleLogin() {
   loading.value = true
   try {
     await authStore.login(loginForm.username, loginForm.password)
+    syncRememberedLogin()
     ElMessage.success('登录成功')
     router.push('/dashboard')
   } catch (err: unknown) {
@@ -103,6 +130,8 @@ async function handleRegister() {
 function toggleMode() {
   isRegister.value = !isRegister.value
 }
+
+onMounted(loadRememberedLogin)
 </script>
 
 <template>
@@ -138,6 +167,9 @@ function toggleMode() {
             show-password
           />
         </el-form-item>
+        <div class="login-options">
+          <el-checkbox v-model="rememberPassword">记住密码</el-checkbox>
+        </div>
         <el-form-item>
           <el-button
             type="primary"
@@ -254,6 +286,13 @@ function toggleMode() {
   height: 44px;
   font-size: 16px;
   border-radius: 8px;
+}
+
+.login-options {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin: -4px 0 14px;
 }
 
 .login-footer {

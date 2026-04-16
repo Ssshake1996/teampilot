@@ -11,12 +11,11 @@ import {
   RadarComponent,
 } from 'echarts/components'
 import VChart from 'vue-echarts'
-import http from '@/api/index'
 import { usersApi } from '@/api/users'
-import { capabilitiesApi } from '@/api/capabilities'
 import { aiApi } from '@/api/ai'
 import { skillsApi } from '@/api/skills'
 import { useAuthStore } from '@/stores/auth'
+import { useUserStore } from '@/stores/user'
 import type { User, UserSkill, CapabilityProfile } from '@/types/models'
 import { UserRole } from '@/types/enums'
 
@@ -25,6 +24,7 @@ use([CanvasRenderer, RadarChart, TitleComponent, TooltipComponent, RadarComponen
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const userStore = useUserStore()
 const userId = computed(() => route.params.id as string)
 const canEditSkills = computed(() => auth.can('personnel.edit_skills'))
 const canAnalyzeCapability = computed(() => auth.can('ai.capability'))
@@ -122,34 +122,27 @@ const taskHistory = computed(() => {
 async function loadData() {
   loading.value = true
   try {
-    const [userRes, skillsRes] = await Promise.all([
-      usersApi.get(userId.value),
-      usersApi.getSkills(userId.value),
-    ])
-    user.value = userRes.data
-    bioDraft.value = userRes.data.bio || ''
-    skills.value = skillsRes.data
-
-    try {
-      const capRes = await capabilitiesApi.get(userId.value)
-      capability.value = capRes.data
-    } catch {
-      capability.value = null
-    }
-
-    try {
-      const wlRes = await usersApi.getWorkload(userId.value)
-      workload.value = wlRes.data
-    } catch { workload.value = null }
-
-    // Load user's tasks across all projects
-    try {
-      const res = await http.get('/users/' + userId.value + '/tasks')
-      userTasks.value = res.data
-    } catch { userTasks.value = [] }
+    const data = await userStore.fetchDetailBundle(userId.value)
+    user.value = data.user
+    bioDraft.value = data.user?.bio || ''
+    skills.value = data.skills || []
+    capability.value = data.capability || null
+    workload.value = data.workload || null
+    userTasks.value = data.tasks || []
   } finally {
     loading.value = false
   }
+}
+
+async function refreshData() {
+  userStore.invalidate(userId.value)
+  const data = await userStore.fetchDetailBundle(userId.value, true)
+  user.value = data.user
+  bioDraft.value = data.user?.bio || ''
+  skills.value = data.skills || []
+  capability.value = data.capability || null
+  workload.value = data.workload || null
+  userTasks.value = data.tasks || []
 }
 
 async function loadAllSkills() {
@@ -188,8 +181,7 @@ async function updateProficiency(skillId: string, val: number) {
 async function saveSkills(updatedSkills: UserSkill[]) {
   try {
     await usersApi.updateSkills(userId.value, updatedSkills.map(s => ({ skill_id: s.skill_id, proficiency: s.proficiency })))
-    const res = await usersApi.getSkills(userId.value)
-    skills.value = res.data
+    await refreshData()
     ElMessage.success('技能已更新')
   } catch {
     ElMessage.error('技能更新失败')
@@ -209,6 +201,7 @@ async function saveBio() {
     user.value = res.data
     bioDraft.value = res.data.bio || ''
     editingBio.value = false
+    userStore.invalidate(userId.value)
     ElMessage.success('个人介绍已保存')
     if (auth.user?.id === userId.value) await auth.fetchUser()
   } catch (e: any) {
@@ -226,8 +219,7 @@ async function analyzeCapability() {
   try {
     await aiApi.analyzeCapability(userId.value, (msg: string) => { aiStatusMsg.value = msg })
     ElMessage.success('AI 能力分析已完成')
-    // Refresh all data so report and stats are in sync
-    await loadData()
+    await refreshData()
   } catch {
     ElMessage.error('AI 能力分析失败，请稍后重试')
   } finally {

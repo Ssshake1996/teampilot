@@ -39,6 +39,27 @@ async def list_departments(
     return await user_service.list_departments(db)
 
 
+@router.get("/overview")
+async def users_overview(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+    search: str = Query("", description="Search by name/username"),
+    department: str = Query("", description="Filter by department"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    data = await user_service.get_users_overview(db, page, page_size, search, department)
+    data["items"] = [
+        {
+            **item,
+            "user": UserOut.model_validate(item["user"]),
+        }
+        for item in data["items"]
+    ]
+    data["departments"] = await user_service.list_departments(db)
+    return data
+
+
 @router.post("", status_code=201)
 async def create_user(
     data: dict,
@@ -91,6 +112,19 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+
+@router.get("/{user_id}/detail-bundle")
+async def get_user_detail_bundle(
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    data = await user_service.get_user_detail_bundle(db, user_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="User not found")
+    data["user"] = UserOut.model_validate(data["user"])
+    return data
 
 
 @router.get("/{user_id}/workload", response_model=UserWorkload)

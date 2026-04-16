@@ -222,7 +222,78 @@ async def commit_project_plan(db: AsyncSession, plan: dict, owner_id: uuid.UUID)
     }
 
 
-async def daily_brief(db: AsyncSession, llm: LLMClient) -> dict:
+def _task_line(project: dict, task: dict) -> str:
+    assignee = task.get("assignee") or "未分配"
+    progress = task.get("progress_pct") or 0
+    return f"{project.get('name', '')} / {task.get('title', '')}（{assignee}，{progress}%）"
+
+
+def _rule_based_daily_brief(projects: list[dict], progress: list[dict], ai_error: str | None = None) -> dict:
+    today = date.today()
+    completed: list[str] = []
+    in_progress: list[str] = []
+    risks: list[str] = []
+    actions: list[str] = []
+    signoff_candidates: list[str] = []
+
+    for project in projects:
+        for task in project.get("tasks") or []:
+            status = task.get("status")
+            progress_pct = task.get("progress_pct") or 0
+            line = _task_line(project, task)
+
+            if status == TaskStatus.DONE.value:
+                completed.append(line)
+                continue
+            if status == TaskStatus.IN_PROGRESS.value:
+                in_progress.append(line)
+
+            if progress_pct >= 100 and not task.get("signed_off_at"):
+                signoff_candidates.append(line)
+                risks.append(f"{line} 已到 100%，待会签确认")
+
+            deadline = _parse_date(task.get("deadline"))
+            if deadline and deadline < today and status != TaskStatus.DONE.value:
+                risks.append(f"{line} 已超过截止日期 {deadline.isoformat()}")
+
+    blocked = [
+        item for item in progress
+        if any(word in str(item.get("note") or "") for word in ["阻塞", "卡住", "风险", "延期", "无法", "待确认"])
+    ]
+    for item in blocked[:10]:
+        risks.append(f"{item.get('project')} / {item.get('task')} 最近进展提示风险：{item.get('note')}")
+
+    if signoff_candidates:
+        actions.append("优先处理待会签任务，确认后自动标记为已完成。")
+    overdue_count = sum(1 for risk in risks if "超过截止日期" in risk)
+    if overdue_count:
+        actions.append(f"复核 {overdue_count} 个逾期任务的负责人、截止日期和阻塞原因。")
+    if blocked:
+        actions.append("跟进进展记录中出现阻塞、延期或待确认的任务。")
+    if not actions:
+        actions.append("今日暂无明显异常，保持当前节奏并继续收集进展。")
+
+    summary = (
+        f"当前活跃项目 {len(projects)} 个，"
+        f"完成任务 {len(completed)} 个，进行中任务 {len(in_progress)} 个，"
+        f"待会签 {len(signoff_candidates)} 个，风险 {len(risks)} 条。"
+    )
+    if ai_error:
+        summary += " AI 生成失败，已使用系统规则生成本次巡检。"
+
+    return {
+        "source": "rules",
+        "source_label": "系统规则巡检",
+        "summary": summary,
+        "completed": completed[:20],
+        "in_progress": in_progress[:20],
+        "risks": risks[:20],
+        "actions": actions[:10],
+        "signoff_candidates": signoff_candidates[:20],
+    }
+
+
+async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
     projects = await _project_snapshot(db, include_tasks=True)
     recent_rows = (await db.execute(
         select(TaskProgress, Task.title, Project.name, User.full_name)
@@ -244,6 +315,9 @@ async def daily_brief(db: AsyncSession, llm: LLMClient) -> dict:
         }
         for log, task_title, project_name, user_name in recent_rows
     ]
+    if not llm:
+        return _rule_based_daily_brief(projects, progress)
+
     messages = [
         {
             "role": "system",
@@ -263,7 +337,19 @@ async def daily_brief(db: AsyncSession, llm: LLMClient) -> dict:
             }, ensure_ascii=False, default=_json_default),
         },
     ]
-    return await llm.chat_json(messages, temperature=0.2, max_tokens=4096)
+    try:
+        result = await llm.chat_json(messages, temperature=0.2, max_tokens=4096)
+        result.setdefault("summary", "")
+        result.setdefault("completed", [])
+        result.setdefault("in_progress", [])
+        result.setdefault("risks", [])
+        result.setdefault("actions", [])
+        result.setdefault("signoff_candidates", [])
+        result["source"] = "ai"
+        result["source_label"] = "AI 生成"
+        return result
+    except Exception as exc:
+        return _rule_based_daily_brief(projects, progress, f"{type(exc).__name__}: {exc}")
 
 
 async def signoff_assistant(db: AsyncSession, task_id: uuid.UUID, llm: LLMClient) -> dict:

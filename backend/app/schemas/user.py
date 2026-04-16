@@ -29,8 +29,10 @@ class UserUpdate(BaseModel):
 class UserWorkload(BaseModel):
     user_id: uuid.UUID
     full_name: str
+    assigned_tasks: int
     total_tasks: int
     in_progress_tasks: int
+    completed_tasks: int
     overdue_tasks: int
     estimated_hours: float
     actual_hours: float

@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select, func
+from sqlalchemy import case, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -8,7 +8,9 @@ from app.models.user import User
 from app.models.task import Task, TaskStatus
 from app.models.project import Project
 from app.models.skill import UserSkill, Skill
+from app.models.capability_profile import CapabilityProfile
 from app.schemas.user import UserUpdate
+from app.services.task_service import effective_task_status
 
 
 async def list_users(db: AsyncSession, page: int = 1, page_size: int = 20,
@@ -118,12 +120,19 @@ async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
     )
     act_hours = float(act_q.scalar())
 
+    completed_q = await db.execute(
+        select(func.count(Task.id)).where(Task.assignee_id == user_id, Task.status == TaskStatus.DONE)
+    )
+    completed = completed_q.scalar()
+
     user = await get_user(db, user_id)
     return {
         "user_id": user_id,
         "full_name": user.full_name if user else "",
+        "assigned_tasks": total,
         "total_tasks": total,
         "in_progress_tasks": in_progress,
+        "completed_tasks": completed,
         "overdue_tasks": overdue,
         "estimated_hours": est_hours,
         "actual_hours": act_hours,
@@ -160,7 +169,7 @@ async def get_user_tasks(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
         {
             "id": str(t.id),
             "title": t.title,
-            "status": t.status.value,
+            "status": effective_task_status(t).value,
             "priority": t.priority.value,
             "project_id": str(t.project_id),
             "project_name": pname,
@@ -169,6 +178,87 @@ async def get_user_tasks(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
         }
         for t, pname in result.all()
     ]
+
+
+def _capability_to_dict(profile: CapabilityProfile | None) -> dict | None:
+    if not profile:
+        return None
+    return {
+        "user_id": profile.user_id,
+        "summary": profile.summary,
+        "ai_analysis": profile.ai_analysis,
+        "performance_score": float(profile.performance_score) if profile.performance_score is not None else None,
+        "on_time_rate": float(profile.on_time_rate) if profile.on_time_rate is not None else None,
+        "last_analyzed_at": profile.last_analyzed_at,
+    }
+
+
+async def get_users_overview(
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 100,
+    search: str = "",
+    department: str = "",
+) -> dict:
+    users, total = await list_users(db, page, page_size, search, department)
+    user_ids = [u.id for u in users]
+    if not user_ids:
+        return {"items": [], "total": total, "page": page, "page_size": page_size}
+
+    skill_rows = (await db.execute(
+        select(UserSkill.user_id, UserSkill.skill_id, Skill.name, Skill.category, UserSkill.proficiency)
+        .join(Skill, UserSkill.skill_id == Skill.id)
+        .where(UserSkill.user_id.in_(user_ids))
+        .order_by(Skill.name)
+    )).all()
+    skills_map: dict[uuid.UUID, list[dict]] = {uid: [] for uid in user_ids}
+    for uid, skill_id, skill_name, category, proficiency in skill_rows:
+        skills_map.setdefault(uid, []).append({
+            "skill_id": skill_id,
+            "skill_name": skill_name,
+            "category": category,
+            "proficiency": proficiency,
+        })
+
+    count_rows = (await db.execute(
+        select(
+            Task.assignee_id,
+            func.count(Task.id).label("assigned"),
+            func.sum(case((Task.status == TaskStatus.IN_PROGRESS, 1), else_=0)).label("in_progress"),
+        )
+        .where(Task.assignee_id.in_(user_ids), Task.is_deleted == False, Task.status != TaskStatus.DONE)
+        .group_by(Task.assignee_id)
+    )).all()
+    workload_map = {
+        uid: {"assigned_tasks": int(assigned or 0), "in_progress_tasks": int(in_progress or 0)}
+        for uid, assigned, in_progress in count_rows
+    }
+
+    items = []
+    for user in users:
+        workload = workload_map.get(user.id, {"assigned_tasks": 0, "in_progress_tasks": 0})
+        items.append({
+            "user": user,
+            "skills": skills_map.get(user.id, []),
+            "workload": workload,
+        })
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+async def get_user_detail_bundle(db: AsyncSession, user_id: uuid.UUID) -> dict | None:
+    user = await get_user(db, user_id)
+    if not user:
+        return None
+    capability = (await db.execute(
+        select(CapabilityProfile).where(CapabilityProfile.user_id == user_id)
+    )).scalar_one_or_none()
+    return {
+        "user": user,
+        "skills": await get_user_skills(db, user_id),
+        "workload": await get_user_workload(db, user_id),
+        "tasks": await get_user_tasks(db, user_id),
+        "capability": _capability_to_dict(capability),
+    }
 
 
 async def update_user_skills(db: AsyncSession, user_id: uuid.UUID, skills: list[dict]) -> None:

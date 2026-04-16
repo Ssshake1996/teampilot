@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { computed } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
+const router = useRouter()
+const auth = useAuthStore()
+
 const activeMenu = computed(() => {
   const path = route.path
   if (path.startsWith('/projects')) return '/projects'
@@ -10,12 +14,41 @@ const activeMenu = computed(() => {
   if (path.startsWith('/settings')) return '/settings'
   return '/dashboard'
 })
+
+const roleNames: Record<string, string> = {
+  admin: '系统管理员',
+  manager: '项目经理',
+  member: '成员',
+}
+const roleLabel = computed(() => roleNames[auth.user?.role || 'member'] || '成员')
+
+function handleLogout() {
+  auth.logout()
+  router.push('/login')
+}
 </script>
 
 <template>
   <div class="sidebar">
     <div class="sidebar-logo">
-      <h2>TeamPilot</h2>
+      <div class="brand-block">
+        <h2>TeamPilot</h2>
+        <span class="brand-role">{{ roleLabel }}</span>
+      </div>
+      <el-dropdown trigger="click" class="sidebar-user">
+        <button class="sidebar-user-btn" type="button">
+          <el-avatar :size="28">{{ auth.user?.full_name?.[0] || 'U' }}</el-avatar>
+          <span class="sidebar-user-text">
+            <span class="sidebar-user-name">{{ auth.user?.full_name || '用户' }}</span>
+            <span class="sidebar-user-action">账号操作</span>
+          </span>
+        </button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item @click="handleLogout">退出登录</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </div>
     <el-menu :default-active="activeMenu" router class="sidebar-menu">
       <el-menu-item index="/dashboard">
@@ -48,15 +81,70 @@ const activeMenu = computed(() => {
   flex-direction: column;
 }
 .sidebar-logo {
-  height: 56px;
+  min-height: 118px;
+  padding: 14px 14px 12px;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 12px;
   background: #263445;
+}
+.brand-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0 0;
 }
 .sidebar-logo h2 {
   font-size: 18px;
   color: #409eff;
+  margin: 0;
+  line-height: 1.2;
+}
+.brand-role {
+  font-size: 12px;
+  line-height: 1.2;
+  color: #bfcbd9;
+}
+.sidebar-user {
+  width: 100%;
+}
+.sidebar-user-btn {
+  width: 100%;
+  height: 46px;
+  border: none;
+  border-radius: 6px;
+  background: #304156;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+.sidebar-user-btn:hover {
+  background: #263445;
+}
+.sidebar-user-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.25;
+}
+.sidebar-user-name {
+  max-width: 128px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #fff;
+}
+.sidebar-user-action {
+  font-size: 11px;
+  color: #bfcbd9;
 }
 .sidebar-menu {
   flex: 1;
