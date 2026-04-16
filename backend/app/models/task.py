@@ -34,9 +34,6 @@ class Task(Base, UUIDMixin, TimestampMixin):
         Enum(TaskStatus), default=TaskStatus.NOT_STARTED, index=True
     )
     priority: Mapped[TaskPriority] = mapped_column(Enum(TaskPriority), default=TaskPriority.MEDIUM)
-    assignee_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("users.id"), nullable=True, index=True
-    )
     creator_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id"), nullable=False
     )
@@ -58,12 +55,26 @@ class Task(Base, UUIDMixin, TimestampMixin):
 
     # Relationships
     project = relationship("Project", back_populates="tasks")
-    assignee = relationship("User", back_populates="assigned_tasks", foreign_keys=[assignee_id])
+    assignee_links = relationship("TaskAssignee", back_populates="task", cascade="all, delete-orphan")
     creator = relationship("User", back_populates="created_tasks", foreign_keys=[creator_id])
     signed_off_by = relationship("User", foreign_keys=[signed_off_by_id])
     parent_task = relationship("Task", remote_side="Task.id", backref="subtasks")
     progress_logs = relationship("TaskProgress", back_populates="task", cascade="all, delete-orphan")
     required_skills = relationship("TaskRequiredSkill", back_populates="task", cascade="all, delete-orphan")
+
+
+class TaskAssignee(Base):
+    __tablename__ = "task_assignees"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("tasks.id"), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id"), primary_key=True
+    )
+
+    task = relationship("Task", back_populates="assignee_links")
+    user = relationship("User", back_populates="task_assignments")
 
 
 class TaskRequiredSkill(Base):

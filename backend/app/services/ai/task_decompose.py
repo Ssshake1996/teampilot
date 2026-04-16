@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.task import Task, TaskStatus
+from app.models.task import Task, TaskAssignee, TaskStatus
 from app.models.user import User
 from app.models.project import ProjectMember
 from app.models.skill import UserSkill, Skill
@@ -36,7 +36,9 @@ async def decompose_task(db: AsyncSession, task_id: uuid.UUID, llm: LLMClient) -
 
         # Current task count
         task_count = (await db.execute(
-            select(func.count(Task.id)).where(Task.assignee_id == user.id, Task.status != TaskStatus.DONE)
+            select(func.count(Task.id))
+            .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+            .where(TaskAssignee.user_id == user.id, Task.status != TaskStatus.DONE)
         )).scalar()
 
         members_text_parts.append(

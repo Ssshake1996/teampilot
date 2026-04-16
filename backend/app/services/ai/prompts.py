@@ -111,7 +111,7 @@ TASK_DECOMPOSE_USER = """## 父任务信息
       "description": "子任务描述",
       "estimated_hours": 4,
       "priority": "medium",
-      "recommended_assignee_id": "user-uuid",
+      "recommended_assignee_ids": ["user-uuid"],
       "recommended_assignee_name": "姓名",
       "reason": "推荐理由"
     }}

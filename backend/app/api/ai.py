@@ -524,8 +524,7 @@ async def test_connection(
 ):
     llm = await _get_llm(db)
     try:
-        ok = await llm.test_connection()
-        return {"success": ok, "message": "Connection successful" if ok else "Connection failed"}
+        return await llm.test_connection()
     finally:
         await llm.close()
 

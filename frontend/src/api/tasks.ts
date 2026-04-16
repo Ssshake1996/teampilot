@@ -3,7 +3,7 @@ import type { Task, TaskProgress, PaginatedResponse } from '@/types/models'
 import type { TaskStatus } from '@/types/enums'
 
 export const tasksApi = {
-  list(projectId: string, params?: { status?: TaskStatus; assignee_id?: string; page?: number; page_size?: number }) {
+  list(projectId: string, params?: { status?: TaskStatus; user_id?: string; page?: number; page_size?: number }) {
     return http.get<PaginatedResponse<Task>>(`/projects/${projectId}/tasks`, { params })
   },
   create(projectId: string, data: Partial<Task>) {
@@ -18,14 +18,13 @@ export const tasksApi = {
   delete(taskId: string) {
     return http.delete(`/tasks/${taskId}`)
   },
-  updateStatus(taskId: string, status: TaskStatus) {
-    return http.patch<Task>(`/tasks/${taskId}/status`, { status })
-  },
   signoff(taskId: string) {
     return http.post<Task>(`/tasks/${taskId}/signoff`)
   },
-  assign(taskId: string, assigneeId: string | null) {
-    return http.patch<Task>(`/tasks/${taskId}/assign`, { assignee_id: assigneeId })
+  assign(taskId: string, assigneeIds: string[]) {
+    return http.patch<Task>(`/tasks/${taskId}/assign`, {
+      assignee_ids: assigneeIds,
+    })
   },
   logProgress(taskId: string, data: { progress_pct: number; note?: string; hours_spent?: number }) {
     return http.post<TaskProgress>(`/tasks/${taskId}/progress`, data)

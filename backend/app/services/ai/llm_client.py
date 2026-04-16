@@ -23,7 +23,7 @@ class LLMClient:
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self._http = httpx.AsyncClient(timeout=180.0)
+        self._http = httpx.AsyncClient(timeout=180.0, verify=False)
 
     def _build_payload(self, messages: list[dict], stream: bool = False, **kwargs) -> dict:
         payload = {
@@ -108,16 +108,47 @@ class LLMClient:
             return json.loads(content[start:end].strip())
         raise ValueError(f"Could not parse JSON from LLM response: {content[:200]}")
 
-    async def test_connection(self) -> bool:
+    async def test_connection(self) -> dict:
         try:
             result = await self.chat(
                 [{"role": "user", "content": "Say 'OK' and nothing else."}],
                 max_tokens=10,
             )
-            return bool(result.strip())
+            return {
+                "success": bool(result.strip()),
+                "message": "Connection successful" if result.strip() else "Empty response from model service",
+                "status_code": 200,
+                "error_type": None,
+                "backend_detail": result.strip() or None,
+            }
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text
+            logger.warning(f"LLM connection test failed: {exc}")
+            return {
+                "success": False,
+                "message": f"HTTP {exc.response.status_code}: {exc.response.reason_phrase}",
+                "status_code": exc.response.status_code,
+                "error_type": exc.__class__.__name__,
+                "backend_detail": body[:1000] if body else None,
+            }
+        except httpx.RequestError as exc:
+            logger.warning(f"LLM connection test failed: {exc}")
+            return {
+                "success": False,
+                "message": str(exc),
+                "status_code": None,
+                "error_type": exc.__class__.__name__,
+                "backend_detail": repr(exc),
+            }
         except Exception as e:
             logger.warning(f"LLM connection test failed: {e}")
-            return False
+            return {
+                "success": False,
+                "message": str(e),
+                "status_code": None,
+                "error_type": e.__class__.__name__,
+                "backend_detail": repr(e),
+            }
 
     async def close(self):
         await self._http.aclose()

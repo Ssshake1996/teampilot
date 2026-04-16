@@ -6,12 +6,10 @@ import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { usersApi } from '@/api/users'
 import http from '@/api/index'
 import { useAuthStore } from '@/stores/auth'
-import { useUserStore } from '@/stores/user'
 import type { User, UserSkill } from '@/types/models'
 
 const router = useRouter()
 const auth = useAuthStore()
-const userStore = useUserStore()
 const queryClient = useQueryClient()
 const canAdd = computed(() => auth.can('personnel.add'))
 const canEditProfile = computed(() => auth.can('personnel.edit'))
@@ -157,7 +155,6 @@ async function handleAdd() {
     ElMessage.success('人员已添加')
     addDialogVisible.value = false
     addForm.value = { username: '', full_name: '', password: '123456', department: '', role: 'member' }
-    userStore.invalidate()
     await refreshPersonnel()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail || '添加失败')
@@ -190,7 +187,6 @@ async function handleSaveEdit() {
     await usersApi.update(editUser.value.id, payload)
     ElMessage.success('人员信息已更新')
     editDialogVisible.value = false
-    userStore.invalidate(editUser.value.id)
     await refreshPersonnel()
     if (editUser.value.id === auth.user?.id) await auth.fetchUser()
   } catch (e: any) {
@@ -203,7 +199,6 @@ async function handleDeactivate(user: User) {
     await ElMessageBox.confirm(`删除/停用 ${user.full_name}？该用户将无法登录，历史数据会保留。`, '确认删除', { type: 'warning' })
     await http.delete('/users/' + user.id)
     ElMessage.success('已删除/停用')
-    userStore.invalidate(user.id)
     await refreshPersonnel()
   } catch {}
 }

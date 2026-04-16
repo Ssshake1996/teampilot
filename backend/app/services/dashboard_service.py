@@ -4,7 +4,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project, ProjectStatus
-from app.models.task import Task, TaskStatus
+from app.models.task import Task, TaskAssignee, TaskStatus
 from app.models.task_progress import TaskProgress
 from app.models.user import User
 
@@ -42,7 +42,9 @@ async def get_team_workload(db: AsyncSession) -> list[dict]:
     result = []
     for u in users:
         base_q = select(func.count(Task.id)).join(Project, Task.project_id == Project.id).where(
-            Task.assignee_id == u.id, Project.status != ProjectStatus.ARCHIVED, Task.is_deleted == False
+            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == u.id)),
+            Project.status != ProjectStatus.ARCHIVED,
+            Task.is_deleted == False,
         )
         assigned = (await db.execute(base_q.where(Task.status != TaskStatus.DONE))).scalar()
         in_prog = (await db.execute(base_q.where(Task.status == TaskStatus.IN_PROGRESS))).scalar()
@@ -93,7 +95,9 @@ async def get_my_tasks_quadrant(db: AsyncSession, user_id) -> dict:
         select(Task, Project.name)
         .join(Project, Task.project_id == Project.id)
         .where(
-            Task.assignee_id == (user_id if isinstance(user_id, uuid_mod.UUID) else uuid_mod.UUID(str(user_id))),
+            Task.id.in_(select(TaskAssignee.task_id).where(
+                TaskAssignee.user_id == (user_id if isinstance(user_id, uuid_mod.UUID) else uuid_mod.UUID(str(user_id)))
+            )),
             Task.status != TaskStatus.DONE,
             Task.is_deleted == False,
             Project.status != ProjectStatus.ARCHIVED,

@@ -1,46 +1,71 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import select, func, delete, case
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project, ProjectMember, ProjectStatus
 from app.models.task import Task, TaskStatus
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectUpdate
-from app.services.task_service import effective_task_status
+from app.services.task_service import effective_task_status, get_task_assignee_map
 
 
-async def list_projects(db: AsyncSession, page: int = 1, page_size: int = 20, include_archived: bool = False) -> tuple[list[dict], int]:
+async def list_projects(
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+    include_archived: bool = False,
+) -> tuple[list[dict], int]:
     base_filter = [] if include_archived else [Project.status != ProjectStatus.ARCHIVED]
 
-    total_q = await db.execute(select(func.count(Project.id)).where(*base_filter))
-    total = total_q.scalar()
-
-    result = await db.execute(
-        select(Project).where(*base_filter).order_by(Project.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
-    )
-    projects = result.scalars().all()
+    total = (await db.execute(select(func.count(Project.id)).where(*base_filter))).scalar()
+    projects = (
+        await db.execute(
+            select(Project)
+            .where(*base_filter)
+            .order_by(Project.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
 
     items = []
-    for p in projects:
-        task_count_q = await db.execute(select(func.count(Task.id)).where(Task.project_id == p.id, Task.is_deleted == False))
-        task_count = task_count_q.scalar()
-        done_count_q = await db.execute(
-            select(func.count(Task.id)).where(Task.project_id == p.id, Task.status == TaskStatus.DONE, Task.is_deleted == False)
-        )
-        done_count = done_count_q.scalar()
-        member_count_q = await db.execute(
-            select(func.count(ProjectMember.user_id)).where(ProjectMember.project_id == p.id)
-        )
-        member_count = member_count_q.scalar()
+    for project in projects:
+        task_count = (
+            await db.execute(
+                select(func.count(Task.id)).where(
+                    Task.project_id == project.id,
+                    Task.is_deleted == False,
+                )
+            )
+        ).scalar()
+        done_count = (
+            await db.execute(
+                select(func.count(Task.id)).where(
+                    Task.project_id == project.id,
+                    Task.status == TaskStatus.DONE,
+                    Task.is_deleted == False,
+                )
+            )
+        ).scalar()
+        member_count = (
+            await db.execute(
+                select(func.count(ProjectMember.user_id)).where(ProjectMember.project_id == project.id)
+            )
+        ).scalar()
 
         items.append({
-            "id": p.id, "name": p.name, "description": p.description,
-            "status": p.status, "owner_id": p.owner_id,
-            "start_date": p.start_date, "end_date": p.end_date,
-            "created_at": p.created_at,
-            "task_count": task_count, "completed_count": done_count,
+            "id": project.id,
+            "name": project.name,
+            "description": project.description,
+            "status": project.status,
+            "owner_id": project.owner_id,
+            "start_date": project.start_date,
+            "end_date": project.end_date,
+            "created_at": project.created_at,
+            "task_count": task_count,
+            "completed_count": done_count,
             "member_count": member_count,
         })
     return items, total
@@ -50,15 +75,15 @@ async def create_project(db: AsyncSession, data: ProjectCreate, owner_id: uuid.U
     project = Project(**data.model_dump(), owner_id=owner_id)
     db.add(project)
     await db.flush()
-    # Add owner as lead member
     db.add(ProjectMember(project_id=project.id, user_id=owner_id, role_in_project="lead"))
     await db.flush()
     return project
 
 
 async def get_project(db: AsyncSession, project_id: uuid.UUID) -> Project | None:
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    return result.scalar_one_or_none()
+    return (
+        await db.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one_or_none()
 
 
 async def update_project(db: AsyncSession, project_id: uuid.UUID, data: ProjectUpdate) -> Project | None:
@@ -82,20 +107,24 @@ async def delete_project(db: AsyncSession, project_id: uuid.UUID) -> bool:
 
 
 async def get_project_members(db: AsyncSession, project_id: uuid.UUID) -> list[dict]:
-    result = await db.execute(
-        select(ProjectMember, User)
-        .join(User, ProjectMember.user_id == User.id)
-        .where(ProjectMember.project_id == project_id)
-    )
-    rows = result.all()
+    rows = (
+        await db.execute(
+            select(ProjectMember, User)
+            .join(User, ProjectMember.user_id == User.id)
+            .where(ProjectMember.project_id == project_id)
+        )
+    ).all()
     return [
-        {"user_id": pm.user_id, "full_name": u.full_name, "role_in_project": pm.role_in_project}
-        for pm, u in rows
+        {"user_id": pm.user_id, "full_name": user.full_name, "role_in_project": pm.role_in_project}
+        for pm, user in rows
     ]
 
 
 async def add_project_member(
-    db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID, role: str
+    db: AsyncSession,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    role: str,
 ) -> None:
     db.add(ProjectMember(project_id=project_id, user_id=user_id, role_in_project=role))
     await db.flush()
@@ -104,99 +133,104 @@ async def add_project_member(
 async def remove_project_member(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) -> None:
     await db.execute(
         delete(ProjectMember).where(
-            ProjectMember.project_id == project_id, ProjectMember.user_id == user_id
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
         )
     )
     await db.flush()
 
 
 async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list[dict]:
-    """Get parent tasks with subtask children, assignee info, and progress."""
-    now = datetime.utcnow()  # naive UTC for SQLite compatibility
+    now = datetime.utcnow()
+    tasks = (
+        await db.execute(
+            select(Task)
+            .where(Task.project_id == project_id)
+            .order_by(Task.sort_order, Task.created_at)
+        )
+    ).scalars().all()
+    assignee_map = await get_task_assignee_map(db, tasks)
 
-    # All tasks for this project, joined with assignee
-    result = await db.execute(
-        select(Task, User.full_name)
-        .outerjoin(User, Task.assignee_id == User.id)
-        .where(Task.project_id == project_id)
-        .order_by(Task.sort_order, Task.created_at)
-    )
-    rows = result.all()
-
-    # Build lookup: task_id -> task dict, and parent_id -> children list
-    all_tasks = {}
-    children_map: dict[str, list] = {}
-    for t, assignee_name in rows:
-        status = effective_task_status(t).value
-        td = {
-            "id": str(t.id),
-            "title": t.title,
+    all_tasks: dict[str, dict] = {}
+    children_map: dict[str, list[dict]] = {}
+    for task in tasks:
+        status = effective_task_status(task).value
+        assignees = assignee_map.get(task.id, [])
+        assignee_names = [item["full_name"] for item in assignees if item["full_name"]]
+        task_dict = {
+            "id": str(task.id),
+            "title": task.title,
             "status": status,
-            "priority": t.priority.value,
-            "assignee_id": str(t.assignee_id) if t.assignee_id else None,
-            "assignee_name": assignee_name,
-            "estimated_hours": float(t.estimated_hours) if t.estimated_hours else None,
-            "actual_hours": float(t.actual_hours) if t.actual_hours else None,
-            "start_date": (t.start_date or t.created_at).isoformat() if (t.start_date or t.created_at) else None,
-            "deadline": t.deadline.isoformat() if t.deadline else None,
-            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-            "signed_off_by_id": str(t.signed_off_by_id) if t.signed_off_by_id else None,
-            "signed_off_at": t.signed_off_at.isoformat() if t.signed_off_at else None,
-            "created_at": t.created_at.isoformat() if t.created_at else None,
-            "parent_task_id": str(t.parent_task_id) if t.parent_task_id else None,
-            "is_deleted": bool(t.is_deleted),
-            "is_overdue": bool(not t.is_deleted and t.deadline and t.deadline.replace(tzinfo=None) < now and status != "done"),
+            "priority": task.priority.value,
+            "assignee_name": "、".join(assignee_names) if assignee_names else None,
+            "assignee_ids": [str(item["user_id"]) for item in assignees],
+            "assignee_names": assignee_names,
+            "estimated_hours": float(task.estimated_hours) if task.estimated_hours else None,
+            "actual_hours": float(task.actual_hours) if task.actual_hours else None,
+            "start_date": (task.start_date or task.created_at).isoformat() if (task.start_date or task.created_at) else None,
+            "deadline": task.deadline.isoformat() if task.deadline else None,
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+            "signed_off_by_id": str(task.signed_off_by_id) if task.signed_off_by_id else None,
+            "signed_off_at": task.signed_off_at.isoformat() if task.signed_off_at else None,
+            "created_at": task.created_at.isoformat() if task.created_at else None,
+            "parent_task_id": str(task.parent_task_id) if task.parent_task_id else None,
+            "is_deleted": bool(task.is_deleted),
+            "is_overdue": bool(
+                not task.is_deleted
+                and task.deadline
+                and task.deadline.replace(tzinfo=None) < now
+                and status != "done"
+            ),
             "children": [],
         }
-        all_tasks[str(t.id)] = td
-        if t.parent_task_id:
-            pid = str(t.parent_task_id)
-            children_map.setdefault(pid, []).append(td)
+        all_tasks[str(task.id)] = task_dict
+        if task.parent_task_id:
+            children_map.setdefault(str(task.parent_task_id), []).append(task_dict)
 
-    # Get latest progress_pct per task from task_progress table
     from app.models.task_progress import TaskProgress
+
     progress_map: dict[str, int] = {}
     note_map: dict[str, str] = {}
-    prog_result = await db.execute(
-        select(TaskProgress.task_id, TaskProgress.progress_pct, TaskProgress.note)
-        .join(Task, TaskProgress.task_id == Task.id)
-        .where(Task.project_id == project_id)
-        .order_by(TaskProgress.created_at.desc())
-    )
-    for tid_raw, pct, note in prog_result.all():
-        tid_str = str(tid_raw)
-        if tid_str not in progress_map:
-            progress_map[tid_str] = pct
-            note_map[tid_str] = note or ""
+    progress_rows = (
+        await db.execute(
+            select(TaskProgress.task_id, TaskProgress.progress_pct, TaskProgress.note)
+            .join(Task, TaskProgress.task_id == Task.id)
+            .where(Task.project_id == project_id)
+            .order_by(TaskProgress.created_at.desc())
+        )
+    ).all()
+    for task_id, progress_pct, note in progress_rows:
+        task_id_str = str(task_id)
+        if task_id_str not in progress_map:
+            progress_map[task_id_str] = progress_pct
+            note_map[task_id_str] = note or ""
 
-    # Assemble tree: attach children, compute progress
     roots = []
-    for tid, td in all_tasks.items():
-        td["children"] = children_map.get(tid, [])
-        children = td["children"]
+    for task_id, task_dict in all_tasks.items():
+        task_dict["children"] = children_map.get(task_id, [])
+        children = task_dict["children"]
 
         if children:
-            active_children = [c for c in children if not c.get("is_deleted")]
-            done_children = sum(1 for c in active_children if c["status"] == "done")
+            active_children = [child for child in children if not child.get("is_deleted")]
+            done_children = sum(1 for child in active_children if child["status"] == "done")
             total_active = len(active_children) or 1
-            td["progress_pct"] = round(done_children / total_active * 100)
-            td["subtask_total"] = len(active_children)
-            td["subtask_done"] = done_children
+            task_dict["progress_pct"] = round(done_children / total_active * 100)
+            task_dict["subtask_total"] = len(active_children)
+            task_dict["subtask_done"] = done_children
         else:
-            # Leaf task: use logged progress, or 100 if done, 0 if not
-            logged = progress_map.get(tid)
-            if td["status"] == "done":
-                td["progress_pct"] = 100
+            logged = progress_map.get(task_id)
+            if task_dict["status"] == "done":
+                task_dict["progress_pct"] = 100
             elif logged is not None:
-                td["progress_pct"] = logged
+                task_dict["progress_pct"] = logged
             else:
-                td["progress_pct"] = 0
-            td["subtask_total"] = 0
-            td["subtask_done"] = 0
+                task_dict["progress_pct"] = 0
+            task_dict["subtask_total"] = 0
+            task_dict["subtask_done"] = 0
 
-        td["latest_note"] = note_map.get(tid, "")
+        task_dict["latest_note"] = note_map.get(task_id, "")
 
-        if td["parent_task_id"] is None:
-            roots.append(td)
+        if task_dict["parent_task_id"] is None:
+            roots.append(task_dict)
 
     return roots

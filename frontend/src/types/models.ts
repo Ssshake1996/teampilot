@@ -33,8 +33,9 @@ export interface Task {
   description: string | null
   status: TaskStatus
   priority: TaskPriority
-  assignee_id: string | null
   assignee_name: string | null
+  assignee_ids: string[]
+  assignee_names: string[]
   creator_id: string
   parent_task_id: string | null
   estimated_hours: number | null

@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.task import Task, TaskStatus, TaskRequiredSkill
+from app.models.task import Task, TaskAssignee, TaskStatus, TaskRequiredSkill
 from app.models.skill import Skill, UserSkill
 from app.models.user import User
 from app.models.project import ProjectMember
@@ -37,7 +37,9 @@ async def recommend_assignee(db: AsyncSession, task_id: uuid.UUID, llm: LLMClien
     for pm, user in members:
         # Current workload
         task_count = (await db.execute(
-            select(func.count(Task.id)).where(Task.assignee_id == user.id, Task.status != TaskStatus.DONE)
+            select(func.count(Task.id))
+            .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+            .where(TaskAssignee.user_id == user.id, Task.status != TaskStatus.DONE)
         )).scalar()
 
         # User skills
@@ -50,9 +52,15 @@ async def recommend_assignee(db: AsyncSession, task_id: uuid.UUID, llm: LLMClien
 
         # Completion rate
         done_count = (await db.execute(
-            select(func.count(Task.id)).where(Task.assignee_id == user.id, Task.status == TaskStatus.DONE)
+            select(func.count(Task.id))
+            .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+            .where(TaskAssignee.user_id == user.id, Task.status == TaskStatus.DONE)
         )).scalar()
-        total_assigned = (await db.execute(select(func.count(Task.id)).where(Task.assignee_id == user.id))).scalar()
+        total_assigned = (await db.execute(
+            select(func.count(Task.id))
+            .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+            .where(TaskAssignee.user_id == user.id)
+        )).scalar()
         completion_rate = round(done_count / total_assigned * 100, 1) if total_assigned > 0 else 0
 
         candidates_text.append(

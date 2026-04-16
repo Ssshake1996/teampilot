@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.task import Task, TaskStatus
+from app.models.task import Task, TaskAssignee, TaskStatus
 from app.models.skill import UserSkill, Skill
 from app.models.user import User
 from app.models.capability_profile import CapabilityProfile
@@ -30,12 +30,14 @@ async def analyze_capability(db: AsyncSession, user_id: uuid.UUID, llm: LLMClien
 
     # Task stats
     done = (await db.execute(
-        select(func.count(Task.id)).where(Task.assignee_id == user_id, Task.status == TaskStatus.DONE)
+        select(func.count(Task.id))
+        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .where(TaskAssignee.user_id == user_id, Task.status == TaskStatus.DONE)
     )).scalar()
 
     on_time = (await db.execute(
         select(func.count(Task.id)).where(
-            Task.assignee_id == user_id,
+            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user_id)),
             Task.status == TaskStatus.DONE,
             Task.completed_at <= Task.deadline,
         )
@@ -45,12 +47,16 @@ async def analyze_capability(db: AsyncSession, user_id: uuid.UUID, llm: LLMClien
     # Hours deviation
     est_sum = (await db.execute(
         select(func.sum(Task.estimated_hours)).where(
-            Task.assignee_id == user_id, Task.status == TaskStatus.DONE, Task.estimated_hours.isnot(None)
+            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user_id)),
+            Task.status == TaskStatus.DONE,
+            Task.estimated_hours.isnot(None),
         )
     )).scalar() or 0
     act_sum = (await db.execute(
         select(func.sum(Task.actual_hours)).where(
-            Task.assignee_id == user_id, Task.status == TaskStatus.DONE, Task.actual_hours.isnot(None)
+            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user_id)),
+            Task.status == TaskStatus.DONE,
+            Task.actual_hours.isnot(None),
         )
     )).scalar() or 0
     deviation = round((float(act_sum) - float(est_sum)) / float(est_sum) * 100, 1) if est_sum > 0 else 0
@@ -58,7 +64,10 @@ async def analyze_capability(db: AsyncSession, user_id: uuid.UUID, llm: LLMClien
     # Recent tasks
     recent = (await db.execute(
         select(Task.title, Task.status, Task.priority, Task.completed_at)
-        .where(Task.assignee_id == user_id, Task.status == TaskStatus.DONE)
+        .where(
+            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user_id)),
+            Task.status == TaskStatus.DONE,
+        )
         .order_by(Task.completed_at.desc())
         .limit(10)
     )).all()

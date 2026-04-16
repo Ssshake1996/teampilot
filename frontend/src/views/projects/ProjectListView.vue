@@ -40,7 +40,7 @@ const creating = ref(false)
 // Add subtask
 const subtaskDialogVisible = ref(false)
 const subtaskParent = ref<{ id: string | null; title: string; projectId: string } | null>(null)
-const subtaskForm = ref({ title: '', description: '', assignee_id: '', estimated_hours: null as number | null, deadline: '' })
+const subtaskForm = ref({ title: '', description: '', assignee_ids: [] as string[], estimated_hours: null as number | null, deadline: '' })
 const creatingSubtask = ref(false)
 const aiEstimating = ref(false)
 const aiStatusMsg = ref('')
@@ -84,9 +84,12 @@ const retrospectiveStatus = ref('')
 const retrospectiveResult = ref<any>(null)
 const retrospectiveLoading = ref(false)
 
-function userName(id: string | null): string {
-  if (!id) return '未分配'
-  return users.value.find(u => u.id === id)?.full_name || '未分配'
+function userNames(ids: string[] | null | undefined): string {
+  if (!ids?.length) return '未分配'
+  return ids
+    .map((id) => users.value.find(u => u.id === id)?.full_name)
+    .filter(Boolean)
+    .join('、') || '未分配'
 }
 
 // ── Data Loading ──
@@ -136,11 +139,14 @@ function toggleProject(pid: string) {
 function isExpanded(pid: string) { return expandedProjects.value.has(pid) }
 
 // ── Inline Edit (admin only) ──
-async function handleAssigneeChange(task: any, newId: string) {
+async function handleAssigneeChange(task: any, newIds: string[]) {
   try {
-    await tasksApi.assign(task.id, newId || null)
-    task.assignee_id = newId || null
-    task.assignee_name = userName(newId)
+    await tasksApi.assign(task.id, newIds || [])
+    task.assignee_ids = newIds || []
+    task.assignee_names = task.assignee_ids
+      .map((id: string) => users.value.find(u => u.id === id)?.full_name)
+      .filter(Boolean)
+    task.assignee_name = userNames(task.assignee_ids)
   } catch { ElMessage.error('更新失败') }
 }
 
@@ -364,14 +370,14 @@ async function openRetrospective(project: Project) {
 // ── Add Subtask (admin only) ──
 function openSubtaskDialog(task: any, projectId: string) {
   subtaskParent.value = { id: task.id, title: task.title, projectId }
-  subtaskForm.value = { title: '', description: '', assignee_id: '', estimated_hours: null, deadline: '' }
+  subtaskForm.value = { title: '', description: '', assignee_ids: [], estimated_hours: null, deadline: '' }
   aiRecommendations.value = []; aiEstimateInfo.value = null
   subtaskDialogVisible.value = true
 }
 
 function openRootTaskDialog(project: Project) {
   subtaskParent.value = { id: null, title: project.name, projectId: project.id }
-  subtaskForm.value = { title: '', description: '', assignee_id: '', estimated_hours: null, deadline: '' }
+  subtaskForm.value = { title: '', description: '', assignee_ids: [], estimated_hours: null, deadline: '' }
   aiRecommendations.value = []; aiEstimateInfo.value = null
   subtaskDialogVisible.value = true
 }
@@ -382,7 +388,7 @@ async function handleCreateSubtask() {
   try {
     const payload: any = { title: subtaskForm.value.title }
     if (subtaskForm.value.description) payload.description = subtaskForm.value.description
-    if (subtaskForm.value.assignee_id) payload.assignee_id = subtaskForm.value.assignee_id
+    if (subtaskForm.value.assignee_ids.length) payload.assignee_ids = subtaskForm.value.assignee_ids
     if (subtaskForm.value.estimated_hours) payload.estimated_hours = subtaskForm.value.estimated_hours
     if (subtaskForm.value.deadline) payload.deadline = subtaskForm.value.deadline
     if (subtaskParent.value.id) {
@@ -413,7 +419,7 @@ async function handleAiEstimate() {
   finally { aiEstimating.value = false }
 }
 
-function applyRecommendation(rec: any) { subtaskForm.value.assignee_id = rec.user_id; ElMessage.success('已采纳') }
+function applyRecommendation(rec: any) { subtaskForm.value.assignee_ids = rec.user_id ? [rec.user_id] : []; ElMessage.success('已采纳') }
 
 // ── Archive / Create ──
 async function archiveProject(pid: string) {
@@ -584,7 +590,7 @@ onMounted(loadProjects)
               <!-- Assignee -->
               <div class="col-who" @click.stop>
                 <template v-if="canAssignTask && !task.is_deleted">
-                  <el-select :model-value="task.assignee_id || ''" size="small" placeholder="未分配" clearable filterable class="isel" @change="(v: string) => handleAssigneeChange(task, v)">
+                  <el-select :model-value="task.assignee_ids || []" size="small" placeholder="未分配" clearable filterable multiple collapse-tags collapse-tags-tooltip class="isel" @change="(v: string[]) => handleAssigneeChange(task, v)">
                     <el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" />
                   </el-select>
                 </template>
@@ -755,7 +761,7 @@ onMounted(loadProjects)
             </div>
           </div>
         </div>
-        <el-form-item label="负责人"><el-select v-model="subtaskForm.assignee_id" placeholder="选择负责人" clearable filterable style="width:100%"><el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" /></el-select></el-form-item>
+        <el-form-item label="负责人"><el-select v-model="subtaskForm.assignee_ids" placeholder="选择负责人" clearable filterable multiple collapse-tags collapse-tags-tooltip style="width:100%"><el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" /></el-select></el-form-item>
         <el-form-item label="预估工时"><el-input-number v-model="subtaskForm.estimated_hours" :min="0" :max="999" :precision="1" style="width:100%" /></el-form-item>
         <el-form-item label="截止日期"><el-date-picker v-model="subtaskForm.deadline" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
       </el-form>

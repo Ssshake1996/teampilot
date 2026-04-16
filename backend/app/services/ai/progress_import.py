@@ -9,7 +9,7 @@ from app.models.project import Project, ProjectStatus
 from app.models.task import Task, TaskStatus
 from app.models.user import User
 from app.services.ai.llm_client import LLMClient
-from app.services.task_service import effective_task_status, get_task_progress_pct
+from app.services.task_service import effective_task_status, get_task_assignee_map, get_task_progress_pct
 
 
 def _fallback_parse(raw_text: str) -> dict:
@@ -53,24 +53,26 @@ async def parse_progress_updates(
     if project_id:
         filters.append(Task.project_id == project_id)
 
-    result = await db.execute(
-        select(Task, User.full_name, Project.name)
-        .join(Project, Task.project_id == Project.id)
-        .outerjoin(User, Task.assignee_id == User.id)
-        .where(*filters)
-        .order_by(Task.created_at.desc())
-    )
-    rows = result.all()
+    rows = (
+        await db.execute(
+            select(Task, Project.name)
+            .join(Project, Task.project_id == Project.id)
+            .where(*filters)
+            .order_by(Task.created_at.desc())
+        )
+    ).all()
+    assignee_map = await get_task_assignee_map(db, [task for task, _ in rows])
 
     tasks = []
-    for task, assignee_name, project_name in rows:
+    for task, project_name in rows:
+        assignee_names = [item["full_name"] for item in assignee_map.get(task.id, []) if item["full_name"]]
         tasks.append({
             "id": str(task.id),
             "project_id": str(task.project_id),
             "project_name": project_name,
             "title": task.title,
             "description": task.description or "",
-            "assignee_name": assignee_name or "",
+            "assignee_name": "、".join(assignee_names),
             "status": effective_task_status(task).value,
             "progress_pct": await get_task_progress_pct(db, task),
             "start_date": task.start_date.isoformat() if task.start_date else "",

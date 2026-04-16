@@ -61,14 +61,29 @@ async function testConnection() {
   testingConnection.value = true
   try {
     const res = await aiApi.testConnection()
-    const result = res.data as { success: boolean; message?: string }
+    const result = res.data as {
+      success: boolean
+      message?: string
+      status_code?: number | null
+      error_type?: string | null
+      backend_detail?: string | null
+    }
     if (result.success) {
       ElMessage.success(result.message || '连接成功')
     } else {
-      ElMessage.warning(result.message || '连接失败')
+      await ElMessageBox.alert(
+        [
+          `消息: ${result.message || '连接失败'}`,
+          `状态码: ${result.status_code ?? '-'}`,
+          `错误类型: ${result.error_type || '-'}`,
+          `后端返回: ${result.backend_detail || '-'}`,
+        ].join('\n'),
+        '测试连接失败',
+        { confirmButtonText: '知道了' },
+      )
     }
-  } catch {
-    ElMessage.error('连接测试失败，请检查配置是否正确')
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '连接测试失败，请检查配置是否正确')
   } finally {
     testingConnection.value = false
   }

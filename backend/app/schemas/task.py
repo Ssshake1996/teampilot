@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.task import TaskStatus, TaskPriority
 
@@ -12,7 +12,7 @@ class TaskCreate(BaseModel):
     description: str | None = None
     status: TaskStatus | None = None
     priority: TaskPriority = TaskPriority.MEDIUM
-    assignee_id: uuid.UUID | None = None
+    assignee_ids: list[uuid.UUID] = Field(default_factory=list)
     parent_task_id: uuid.UUID | None = None
     estimated_hours: float | None = None
     start_date: datetime | None = None
@@ -24,7 +24,7 @@ class TaskUpdate(BaseModel):
     description: str | None = None
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
-    assignee_id: uuid.UUID | None = None
+    assignee_ids: list[uuid.UUID] | None = None
     estimated_hours: float | None = None
     actual_hours: float | None = None
     start_date: datetime | None = None
@@ -38,8 +38,9 @@ class TaskOut(BaseModel):
     description: str | None = None
     status: TaskStatus
     priority: TaskPriority
-    assignee_id: uuid.UUID | None = None
     assignee_name: str | None = None
+    assignee_ids: list[uuid.UUID] = Field(default_factory=list)
+    assignee_names: list[str] = Field(default_factory=list)
     creator_id: uuid.UUID
     parent_task_id: uuid.UUID | None = None
     estimated_hours: float | None = None
@@ -58,12 +59,8 @@ class TaskOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class TaskStatusUpdate(BaseModel):
-    status: TaskStatus
-
-
 class TaskAssign(BaseModel):
-    assignee_id: uuid.UUID | None
+    assignee_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class TaskReorder(BaseModel):

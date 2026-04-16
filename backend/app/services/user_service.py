@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.user import User
-from app.models.task import Task, TaskStatus
+from app.models.task import Task, TaskAssignee, TaskStatus
 from app.models.project import Project
 from app.models.skill import UserSkill, Skill
 from app.models.capability_profile import CapabilityProfile
@@ -90,38 +90,49 @@ async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
     now = datetime.now(timezone.utc)
 
     total_q = await db.execute(
-        select(func.count(Task.id)).where(Task.assignee_id == user_id, Task.status != TaskStatus.DONE)
+        select(func.count(func.distinct(Task.id)))
+        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .where(TaskAssignee.user_id == user_id, Task.status != TaskStatus.DONE, Task.is_deleted == False)
     )
     total = total_q.scalar()
 
     in_progress_q = await db.execute(
-        select(func.count(Task.id)).where(Task.assignee_id == user_id, Task.status == TaskStatus.IN_PROGRESS)
+        select(func.count(func.distinct(Task.id)))
+        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .where(TaskAssignee.user_id == user_id, Task.status == TaskStatus.IN_PROGRESS, Task.is_deleted == False)
     )
     in_progress = in_progress_q.scalar()
 
     overdue_q = await db.execute(
-        select(func.count(Task.id)).where(
-            Task.assignee_id == user_id,
+        select(func.count(func.distinct(Task.id))).join(TaskAssignee, TaskAssignee.task_id == Task.id).where(
+            TaskAssignee.user_id == user_id,
             Task.status != TaskStatus.DONE,
+            Task.is_deleted == False,
             Task.deadline < now,
         )
     )
     overdue = overdue_q.scalar()
 
     est_q = await db.execute(
-        select(func.coalesce(func.sum(Task.estimated_hours), 0)).where(
-            Task.assignee_id == user_id, Task.status != TaskStatus.DONE
+        select(func.coalesce(func.sum(Task.estimated_hours), 0))
+        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .where(
+            TaskAssignee.user_id == user_id, Task.status != TaskStatus.DONE, Task.is_deleted == False
         )
     )
     est_hours = float(est_q.scalar())
 
     act_q = await db.execute(
-        select(func.coalesce(func.sum(Task.actual_hours), 0)).where(Task.assignee_id == user_id)
+        select(func.coalesce(func.sum(Task.actual_hours), 0))
+        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .where(TaskAssignee.user_id == user_id, Task.is_deleted == False)
     )
     act_hours = float(act_q.scalar())
 
     completed_q = await db.execute(
-        select(func.count(Task.id)).where(Task.assignee_id == user_id, Task.status == TaskStatus.DONE)
+        select(func.count(func.distinct(Task.id)))
+        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .where(TaskAssignee.user_id == user_id, Task.status == TaskStatus.DONE, Task.is_deleted == False)
     )
     completed = completed_q.scalar()
 
@@ -161,8 +172,9 @@ async def get_user_tasks(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
     """Get all tasks assigned to a user with project name."""
     result = await db.execute(
         select(Task, Project.name)
+        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
         .join(Project, Task.project_id == Project.id)
-        .where(Task.assignee_id == user_id, Task.is_deleted == False)
+        .where(TaskAssignee.user_id == user_id, Task.is_deleted == False)
         .order_by(Task.status, Task.deadline)
     )
     return [
@@ -222,12 +234,13 @@ async def get_users_overview(
 
     count_rows = (await db.execute(
         select(
-            Task.assignee_id,
-            func.count(Task.id).label("assigned"),
+            TaskAssignee.user_id,
+            func.count(func.distinct(Task.id)).label("assigned"),
             func.sum(case((Task.status == TaskStatus.IN_PROGRESS, 1), else_=0)).label("in_progress"),
         )
-        .where(Task.assignee_id.in_(user_ids), Task.is_deleted == False, Task.status != TaskStatus.DONE)
-        .group_by(Task.assignee_id)
+        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .where(TaskAssignee.user_id.in_(user_ids), Task.is_deleted == False, Task.status != TaskStatus.DONE)
+        .group_by(TaskAssignee.user_id)
     )).all()
     workload_map = {
         uid: {"assigned_tasks": int(assigned or 0), "in_progress_tasks": int(in_progress or 0)}

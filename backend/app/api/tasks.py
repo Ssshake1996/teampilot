@@ -9,7 +9,7 @@ from app.models.task import TaskStatus
 from app.models.user import User
 from app.schemas.task import (
     TaskAssign, TaskCreate, TaskOut, TaskProgressCreate, TaskProgressOut,
-    TaskReorder, TaskStatusUpdate, TaskUpdate,
+    TaskReorder, TaskUpdate,
 )
 from app.services import task_service
 from app.websocket.events import emit_task_event, emit_progress_event
@@ -22,7 +22,7 @@ async def require_task_update_permissions(db: AsyncSession, user: User, data: Ta
     required: set[str] = set()
     if fields & {"title", "description", "priority"}:
         required.add("task.edit")
-    if fields & {"assignee_id"}:
+    if "assignee_ids" in fields:
         required.add("task.assign")
     if fields & {"deadline"}:
         required.add("task.set_deadline")
@@ -43,13 +43,13 @@ async def require_task_update_permissions(db: AsyncSession, user: User, data: Ta
 async def list_tasks(
     project_id: uuid.UUID,
     status: TaskStatus | None = None,
-    assignee_id: uuid.UUID | None = None,
+    user_id: uuid.UUID | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    items, total = await task_service.list_tasks(db, project_id, status, assignee_id, page, page_size)
+    items, total = await task_service.list_tasks(db, project_id, status, user_id, page, page_size)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -108,23 +108,6 @@ async def delete_task(
     return {"message": "Task deleted"}
 
 
-@router.patch("/tasks/{task_id}/status", response_model=TaskOut)
-async def update_status(
-    task_id: uuid.UUID,
-    data: TaskStatusUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    try:
-        task = await task_service.update_task_status(db, task_id, data.status)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    await emit_task_event("task.status_changed", {"task_id": str(task_id), "status": data.status.value})
-    return await task_service.task_to_out(db, task)
-
-
 @router.post("/tasks/{task_id}/signoff", response_model=TaskOut)
 async def signoff_task(
     task_id: uuid.UUID,
@@ -148,10 +131,13 @@ async def assign_task(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("task.assign")),
 ):
-    task = await task_service.assign_task(db, task_id, data.assignee_id)
+    task = await task_service.assign_task(db, task_id, data.assignee_ids)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    await emit_task_event("task.assigned", {"task_id": str(task_id), "assignee_id": str(data.assignee_id)})
+    await emit_task_event("task.assigned", {
+        "task_id": str(task_id),
+        "assignee_ids": [str(item) for item in data.assignee_ids],
+    })
     return await task_service.task_to_out(db, task)
 
 

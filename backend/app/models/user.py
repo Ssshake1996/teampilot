@@ -26,7 +26,7 @@ class User(Base, UUIDMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # Relationships
-    assigned_tasks = relationship("Task", back_populates="assignee", foreign_keys="Task.assignee_id")
+    task_assignments = relationship("TaskAssignee", back_populates="user", cascade="all, delete-orphan")
     created_tasks = relationship("Task", back_populates="creator", foreign_keys="Task.creator_id")
     owned_projects = relationship("Project", back_populates="owner")
     skills = relationship("UserSkill", back_populates="user", cascade="all, delete-orphan")

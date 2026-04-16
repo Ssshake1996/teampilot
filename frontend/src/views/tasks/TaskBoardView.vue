@@ -64,7 +64,7 @@ const createForm = ref({
   title: '',
   description: '',
   priority: TaskPriority.MEDIUM,
-  assignee_id: '',
+  assignee_ids: [] as string[],
   estimated_hours: null as number | null,
   deadline: '',
 })
@@ -82,7 +82,7 @@ function openCreateDialog() {
     title: '',
     description: '',
     priority: TaskPriority.MEDIUM,
-    assignee_id: '',
+    assignee_ids: [],
     estimated_hours: null,
     deadline: '',
   }
@@ -123,7 +123,7 @@ async function handleCreateAiEstimate() {
 }
 
 function applyCreateRecommendation(rec: any) {
-  createForm.value.assignee_id = rec.user_id
+  createForm.value.assignee_ids = rec.user_id ? [rec.user_id] : []
   ElMessage.success('已采纳推荐人选')
 }
 
@@ -137,7 +137,7 @@ async function handleCreateTask() {
       priority: createForm.value.priority,
     }
     if (createForm.value.description) payload.description = createForm.value.description
-    if (createForm.value.assignee_id) payload.assignee_id = createForm.value.assignee_id
+    if (createForm.value.assignee_ids.length) payload.assignee_ids = createForm.value.assignee_ids
     if (createForm.value.estimated_hours !== null) payload.estimated_hours = createForm.value.estimated_hours
     if (createForm.value.deadline) payload.deadline = createForm.value.deadline
     await tasksApi.create(projectId, payload)
@@ -318,7 +318,6 @@ async function fetchUsers() {
 interface SubtaskItem {
   id?: string
   title: string
-  assignee_id: string | null
   assignee_name: string | null
   estimated_hours: number | null
   deadline: string | null
@@ -332,7 +331,7 @@ const creatingSubtask = ref(false)
 
 const subtaskForm = ref({
   title: '',
-  assignee_id: '',
+  assignee_ids: [] as string[],
   estimated_hours: null as number | null,
   deadline: '',
 })
@@ -350,7 +349,7 @@ async function loadSubtasks(taskId: string) {
 }
 
 function openSubtaskForm() {
-  subtaskForm.value = { title: '', assignee_id: '', estimated_hours: null, deadline: '' }
+  subtaskForm.value = { title: '', assignee_ids: [], estimated_hours: null, deadline: '' }
   showSubtaskForm.value = true
 }
 
@@ -368,7 +367,7 @@ async function handleCreateSubtask() {
     const payload: Partial<Task> = {
       title: subtaskForm.value.title.trim(),
     }
-    if (subtaskForm.value.assignee_id) payload.assignee_id = subtaskForm.value.assignee_id
+    if (subtaskForm.value.assignee_ids.length) payload.assignee_ids = subtaskForm.value.assignee_ids
     if (subtaskForm.value.estimated_hours !== null) payload.estimated_hours = subtaskForm.value.estimated_hours
     if (subtaskForm.value.deadline) payload.deadline = subtaskForm.value.deadline
     await tasksApi.createSubtask(selectedTask.value.id, payload)
@@ -598,8 +597,8 @@ onMounted(async () => {
                 >
                   {{ TaskPriorityLabel[task.priority as TaskPriority] || task.priority }}
                 </el-tag>
-                <span v-if="task.assignee_name" class="assignee">
-                  {{ task.assignee_name }}
+                <span v-if="task.assignee_names?.length || task.assignee_name" class="assignee">
+                  {{ task.assignee_names?.join('、') || task.assignee_name }}
                 </span>
               </div>
               <div v-if="task.deadline" class="task-deadline" :class="{ overdue: isOverdue(task) }">
@@ -730,10 +729,13 @@ onMounted(async () => {
         </el-form-item>
         <el-form-item label="指派给">
           <el-select
-            v-model="createForm.assignee_id"
+            v-model="createForm.assignee_ids"
             placeholder="选择负责人"
             clearable
             filterable
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
             style="width: 100%"
           >
             <el-option
@@ -794,7 +796,7 @@ onMounted(async () => {
                 </el-tag>
               </el-descriptions-item>
               <el-descriptions-item label="负责人">
-                {{ selectedTask.assignee_name || '未指派' }}
+                {{ selectedTask.assignee_names?.join('、') || selectedTask.assignee_name || '未指派' }}
               </el-descriptions-item>
               <el-descriptions-item label="截止日期">
                 <span :class="{ overdue: isOverdue(selectedTask) }">
@@ -878,10 +880,13 @@ onMounted(async () => {
                 </el-form-item>
                 <el-form-item label="负责人">
                   <el-select
-                    v-model="subtaskForm.assignee_id"
+                    v-model="subtaskForm.assignee_ids"
                     placeholder="选择负责人"
                     clearable
                     filterable
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
                     style="width: 100%"
                   >
                     <el-option
@@ -931,7 +936,7 @@ onMounted(async () => {
                 <el-table-column label="标题" prop="title" min-width="120" show-overflow-tooltip />
                 <el-table-column label="负责人" width="80" align="center">
                   <template #default="{ row }">
-                    {{ row.assignee_name || '未分配' }}
+                    {{ row.assignee_names?.join('、') || row.assignee_name || '未分配' }}
                   </template>
                 </el-table-column>
                 <el-table-column label="工时" width="60" align="center">

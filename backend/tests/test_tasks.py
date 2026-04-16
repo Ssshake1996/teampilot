@@ -37,20 +37,6 @@ async def test_list_tasks(client: AsyncClient, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_update_task_status(client: AsyncClient, auth_headers):
-    """Task status is automatic and cannot be changed manually."""
-    proj = await client.post("/api/v1/projects", json={"name": "Status Project"}, headers=auth_headers)
-    pid = proj.json()["id"]
-    task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Move Me"}, headers=auth_headers)
-    tid = task.json()["id"]
-
-    res = await client.patch(f"/api/v1/tasks/{tid}/status", json={
-        "status": "in_progress",
-    }, headers=auth_headers)
-    assert res.status_code == 400
-
-
-@pytest.mark.asyncio
 async def test_complete_task_sets_completed_at(client: AsyncClient, auth_headers):
     """Test that signoff after 100% progress sets completed_at."""
     proj = await client.post("/api/v1/projects", json={"name": "Complete Project"}, headers=auth_headers)
@@ -80,16 +66,23 @@ async def test_complete_task_sets_completed_at(client: AsyncClient, auth_headers
 async def test_assign_task(client: AsyncClient, auth_headers, test_user):
     """Test assigning a task to a user."""
     user, _ = test_user
+    second_user = await client.post("/api/v1/auth/register", json={
+        "username": "multitask",
+        "password": "password123",
+        "full_name": "Multi Task",
+    })
+    second_user_id = second_user.json()["id"]
     proj = await client.post("/api/v1/projects", json={"name": "Assign Project"}, headers=auth_headers)
     pid = proj.json()["id"]
     task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Assign Me"}, headers=auth_headers)
     tid = task.json()["id"]
 
     res = await client.patch(f"/api/v1/tasks/{tid}/assign", json={
-        "assignee_id": str(user.id),
+        "assignee_ids": [str(user.id), second_user_id],
     }, headers=auth_headers)
     assert res.status_code == 200
-    assert res.json()["assignee_id"] == str(user.id)
+    assert set(res.json()["assignee_ids"]) == {str(user.id), second_user_id}
+    assert len(res.json()["assignee_names"]) == 2
 
 
 @pytest.mark.asyncio

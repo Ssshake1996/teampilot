@@ -76,7 +76,7 @@ async function fetchTasks() {
       page_size: pageSize.value,
     }
     if (filterStatus.value) params.status = filterStatus.value
-    if (filterAssignee.value) params.assignee_id = filterAssignee.value
+    if (filterAssignee.value) params.user_id = filterAssignee.value
     // Priority filter is applied client-side since the API may not support it
     const res = await tasksApi.list(projectId, params)
     let items = res.data.items
@@ -225,7 +225,7 @@ onMounted(async () => {
 
       <el-table-column prop="assignee_name" label="负责人" width="120" sortable>
         <template #default="{ row }">
-          {{ row.assignee_name || '未指派' }}
+          {{ row.assignee_names?.join('、') || row.assignee_name || '未指派' }}
         </template>
       </el-table-column>
 
