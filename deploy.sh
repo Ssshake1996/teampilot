@@ -33,6 +33,26 @@ fail() {
     exit 1
 }
 
+version_gte() {
+    local current="$1"
+    local minimum="$2"
+    if command -v dpkg >/dev/null 2>&1; then
+        dpkg --compare-versions "$current" ge "$minimum"
+        return
+    fi
+    [ "$(printf '%s\n' "$minimum" "$current" | sort -V | head -n1)" = "$minimum" ]
+}
+
+check_supported_environment() {
+    [ "$(uname -s)" = "Linux" ] || fail "deploy.sh only supports Linux hosts. Use Ubuntu 20.04.5+ for deployment."
+    [ -f /etc/os-release ] || fail "Could not detect the Linux distribution. Use Ubuntu 20.04.5+ for deployment."
+
+    . /etc/os-release
+
+    [ "${ID:-}" = "ubuntu" ] || fail "Unsupported distribution: ${PRETTY_NAME:-unknown}. deploy.sh currently supports Ubuntu 20.04.5+ only."
+    version_gte "${VERSION_ID:-0}" "20.04" || fail "Unsupported Ubuntu version: ${PRETTY_NAME:-unknown}. Please use Ubuntu 20.04.5 or newer."
+}
+
 require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "$1 is required but was not found."
 }
@@ -92,6 +112,8 @@ echo -e "${GREEN}========================================${NC}"
 echo ""
 
 echo -e "${YELLOW}[1/6] Checking prerequisites...${NC}"
+check_supported_environment
+echo -e "${GREEN}  OS: Ubuntu ${VERSION_ID}${NC}"
 
 if ! command -v docker >/dev/null 2>&1; then
     log_warn "Docker not found. Installing..."

@@ -1,22 +1,30 @@
 # TeamPilot Deployment Guide
 
-This guide is the canonical production deployment and server migration reference for TeamPilot.
+## Supported deployment target
+
+- Ubuntu `20.04.5+`
+
+说明：
+
+- 当前一键部署脚本 `deploy.sh` 是 Bash 脚本，面向 Ubuntu / Linux 服务器
+- Windows 11 适合作为本地开发环境，不作为当前仓库的一键部署目标
 
 ## Runtime versions
 
-- Backend runtime: Python `3.11`
-- Frontend build runtime: Node.js `20.19+`
-- Database: PostgreSQL `16`
+- Python `3.11`
+- Node.js `20.19+`
+- PostgreSQL `16`
+- Docker Compose Plugin
 
 ## One-click deployment
 
-1. Clone the repository on the target Linux server.
-2. Copy `deploy.env.example` to `deploy.env` if `deploy.env` does not already exist.
-   Keep `deploy.env` as a server-local configuration file and do not commit it back into the repository.
-3. Update at least these values in `deploy.env` before exposing the service:
+1. Clone the repository on the target Ubuntu server.
+2. Copy `deploy.env.example` to `deploy.env` if it does not exist.
+3. Update at least these values in `deploy.env`:
    - `POSTGRES_PASSWORD`
    - `CORS_ORIGINS`
-   - `FRONTEND_PORT` and `BACKEND_PORT` if the defaults conflict
+   - `FRONTEND_PORT`
+   - `BACKEND_PORT`
    - `SEED_DEMO_USERS=false` for production
 4. Run:
 
@@ -24,51 +32,66 @@ This guide is the canonical production deployment and server migration reference
 bash deploy.sh
 ```
 
-What `deploy.sh` now does:
+What `deploy.sh` does:
 
-- Installs Docker and Docker Compose when possible.
-- Creates `deploy.env` from `deploy.env.example` if needed.
-- Generates `JWT_SECRET_KEY`, `AI_ENCRYPTION_KEY`, and `ADMIN_PASSWORD` when placeholders are still present or values are blank.
-- Builds and starts the Compose stack.
-- Lets the backend auto-create tables on first start.
-- Runs the current lightweight schema compatibility step for PostgreSQL/SQLite: remove the legacy `users.email` column when present and add `users.bio` when missing.
-- Fails fast if the backend health check does not become ready.
+- Installs Docker and Docker Compose when possible
+- Creates `deploy.env` from the example when missing
+- Generates `JWT_SECRET_KEY`, `AI_ENCRYPTION_KEY`, and `ADMIN_PASSWORD` when placeholders are still present
+- Builds and starts the Compose stack
+- Waits for the backend health check
 
 ## Production checklist
 
-- Change the generated admin password after the first login.
-- Replace `CORS_ORIGINS` with your public domain, for example `["https://pm.example.com"]`.
-- Put HTTPS in front of the frontend container before opening the service to the public internet.
-- Keep `SEED_DEMO_USERS=false` unless you explicitly want demo accounts.
-- Back up the database before every upgrade.
-- User accounts are keyed by `username`; the current schema no longer stores email addresses.
+- Change the generated admin password after the first login
+- Replace `CORS_ORIGINS` with your real public domain
+- Put HTTPS in front of the frontend container
+- Keep `SEED_DEMO_USERS=false` unless you explicitly need demo accounts
+- Back up PostgreSQL before every upgrade
+
+## Upgrade policy
+
+Current repository status:
+
+- The project is experimental
+- The repository does not provide a full Alembic revision workflow
+- The backend no longer includes startup-time compatibility patches for legacy columns or legacy task states
+
+That means:
+
+- On clean deployment, tables are created from the current models
+- On breaking schema changes, preferred practice is backup + rebuild or backup + explicit migration script
+- Do not rely on application startup to reshape old production tables
 
 ## Server migration
 
-Use the helper script added in this repository:
+Export on the old server:
 
 ```bash
 scripts/migrate_db.sh export backups/teampilot_$(date +%Y%m%d_%H%M%S).sql.gz
 ```
 
-Copy the generated archive to the new server, deploy the new stack there, and then restore:
+Import on the new server:
 
 ```bash
 scripts/migrate_db.sh import backups/teampilot_YYYYMMDD_HHMMSS.sql.gz
 ```
 
-Recommended migration sequence:
+Recommended sequence:
 
-1. On the old server, stop application writes or schedule a maintenance window.
-2. Run `scripts/migrate_db.sh export ...`.
-3. Copy the backup archive and your finalized `deploy.env` to the new server.
-4. Run `bash deploy.sh` on the new server.
-5. Run `scripts/migrate_db.sh import ...` on the new server.
-6. Verify `http://127.0.0.1:${BACKEND_PORT}/health` and log in with the bootstrap admin.
+1. Stop application writes or open a maintenance window
+2. Export the current PostgreSQL data
+3. Copy the backup file and finalized `deploy.env` to the new server
+4. Run `bash deploy.sh` on the new server
+5. Import the backup
+6. Verify `http://127.0.0.1:${BACKEND_PORT}/health`
 
 ## Notes
 
-- The backend now constructs its PostgreSQL connection from `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` when `DATABASE_URL` is not provided.
-- `docker-compose.yml` no longer relies on Compose-time interpolation from `env_file`, which was the main source of server-to-server drift.
-- The current repository does not yet include a complete Alembic migration workflow (`alembic.ini` and revision scripts are not present), so first-run schema setup still relies on application startup.
-- Application startup also handles the current user-table compatibility changes on PostgreSQL: `ALTER TABLE users DROP COLUMN IF EXISTS email` and `ALTER TABLE users ADD COLUMN bio TEXT` when `bio` is missing. Keep database backups before upgrades because this intentionally removes the legacy email column.
+- When `DATABASE_URL` is not set, the backend constructs the PostgreSQL connection from:
+  - `POSTGRES_HOST`
+  - `POSTGRES_PORT`
+  - `POSTGRES_USER`
+  - `POSTGRES_PASSWORD`
+  - `POSTGRES_DB`
+- `docker-compose.yml` no longer depends on Compose-time interpolation from `env_file`
+- If you need Windows deployment support later, it should be treated as a separate delivery target with its own scripts and service setup

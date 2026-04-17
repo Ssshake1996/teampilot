@@ -1,50 +1,50 @@
 # TeamPilot
 
-TeamPilot 是一个面向中小型团队的项目任务进度管理系统，提供项目管理、任务看板、人员管理、仪表盘分析，以及 AI 辅助分配和风险分析能力。
+TeamPilot 是一个面向中小团队的项目与任务进度管理系统，包含项目管理、任务看板、人员管理、进展汇总、日报巡检和多种 AI 辅助能力。
 
 ## 功能概览
 
-- 项目管理：项目列表、详情、进度跟踪
-- 任务管理：待开始/进行中/已完成三态自动判断，100% 后会签确认完成
-- 进展更新：项目管理页汇总栏可粘贴跨项目群消息，AI 识别项目和任务进展并确认同步到历史记录
-- 任务看板：子任务拆解、进度记录、完成会签
-- 人员管理：成员列表、个人介绍、能力画像、技能维度
-- 数据仪表盘：任务总览、项目风险、团队负载
-- AI 辅助：自然语言创建项目和任务树、任务分解、日报巡检、智能会签、项目复盘、风险分析、能力分析、任务分配建议、群消息进展识别
-- 权限控制：登录认证、角色与权限管理
+- 项目管理：项目列表、项目详情、成员管理、任务树
+- 任务管理：任务列表、任务看板、子任务拆解、进度记录、会签完成
+- 进展更新：支持粘贴群消息，由 AI 识别项目和任务并生成待确认更新
+- 人员管理：成员列表、个人介绍、技能维度、能力分析
+- 权限控制：登录认证、角色权限、菜单和接口校验
+- AI 辅助：任务分配建议、任务估时、任务拆解、项目计划生成、日报巡检、风险分析、会签建议、项目复盘
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | Vue 3 + TypeScript + Vite + Element Plus + Pinia + ECharts |
+| 前端 | Vue 3 + TypeScript + Vite + Element Plus + Vue Query |
 | 后端 | FastAPI + SQLAlchemy 2.0 + asyncpg |
-| 数据库 | PostgreSQL 16 |
+| 数据库 | PostgreSQL 16 / SQLite |
 | 部署 | Docker Compose |
 
-## 环境要求
+## 支持环境
 
-### 一键部署
+### 部署环境
 
-- Linux 服务器
-- Docker
-- Docker Compose
-
-`deploy.sh` 会尽量自动安装 Docker / Docker Compose，并自动补齐部署所需的密钥与管理员密码。
-
-### 本地开发
-
-- Python `3.11`
-- Node.js `20.19+`
-- PostgreSQL `16`
+- Ubuntu `20.04.5+`
+- Docker Engine
+- Docker Compose Plugin
 
 说明：
+- 仓库根目录的 `deploy.sh` 是 Linux Bash 脚本，面向 Ubuntu 服务器部署。
+- 当前没有为原生 Windows Server 提供一键部署脚本。
 
-- 后端当前容器基础镜像：`python:3.11-slim`
-- 前端当前构建镜像：`node:20-alpine`
-- 前端依赖要求的 Node 范围：`^20.19.0 || >=22.12.0`
+### 本地开发环境
 
-## 一键部署
+- Ubuntu `20.04.5+` 或 Windows `11+`
+- Python `3.11`
+- Node.js `20.19+` 或 `22.12+`
+- PostgreSQL `16` 可选；本地开发默认可直接使用 SQLite
+
+说明：
+- 前端依赖在 [frontend/package.json](frontend/package.json) 中声明的 Node 范围是 `^20.19.0 || >=22.12.0`
+- Ubuntu 20.04 自带的软件源通常拿不到满足要求的 Node 版本，建议使用 `nvm` 或 NodeSource 安装
+- Windows 11 建议使用官方 Python 安装包 + Node.js 官方安装包，或使用 `winget`
+
+## 快速开始
 
 ### 1. 获取代码
 
@@ -53,91 +53,37 @@ git clone https://github.com/Ssshake1996/teampilot.git
 cd teampilot
 ```
 
-### 2. 准备部署配置
-
-如果仓库根目录没有 `deploy.env`，脚本会自动根据 `deploy.env.example` 生成一份。
-`deploy.env` 应作为当前服务器的本地部署配置保留，不建议提交回仓库。
-
-建议至少检查这些配置项：
-
-- `POSTGRES_PASSWORD`
-- `CORS_ORIGINS`
-- `BACKEND_PORT`
-- `FRONTEND_PORT`
-- `SEED_DEMO_USERS=false`
-
-参考模板见 [deploy.env.example](deploy.env.example)。
-
-### 3. 执行部署
+### 2. Ubuntu 服务器一键部署
 
 ```bash
 bash deploy.sh
 ```
 
-部署脚本会执行这些动作：
+部署脚本会：
 
-- 检查并安装 Docker / Docker Compose
-- 自动生成 `JWT_SECRET_KEY`
-- 自动生成 `AI_ENCRYPTION_KEY`
-- 自动生成管理员初始密码（占位值或留空时）
-- 构建并启动前后端与数据库容器
-- 后端启动时自动补齐当前轻量 schema 变更（PostgreSQL/SQLite 均适用）
-- 等待后端健康检查通过，失败时直接退出
+- 检查并尽量安装 Docker / Docker Compose
+- 自动生成 `deploy.env`
+- 自动补齐 `JWT_SECRET_KEY`、`AI_ENCRYPTION_KEY`、`ADMIN_PASSWORD`
+- 构建并启动前端、后端和 PostgreSQL
+- 等待后端健康检查通过
 
-### 4. 部署完成后
+部署完成后：
 
-- 前端地址：`http://<服务器IP>:<FRONTEND_PORT>`
+- 前端：`http://<服务器IP>:<FRONTEND_PORT>`
 - API 文档：`http://<服务器IP>:<BACKEND_PORT>/docs`
-- 初始管理员账号：来自 `deploy.env` 中的 `ADMIN_USERNAME / ADMIN_PASSWORD`
 
-注意：
+### 3. 本地开发
 
-- 当前不再使用固定默认口令 `admin / admin123`
-- 建议首次登录后立刻修改管理员密码
-- 生产环境建议将 `CORS_ORIGINS` 改成正式域名
+完整说明见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
 
-## 数据迁移
-
-项目已提供数据库迁移辅助脚本：
-
-```bash
-scripts/migrate_db.sh export backups/teampilot_$(date +%Y%m%d_%H%M%S).sql.gz
-scripts/migrate_db.sh import backups/teampilot_YYYYMMDD_HHMMSS.sql.gz
-```
-
-推荐迁移步骤：
-
-1. 在旧服务器暂停写入或安排维护窗口
-2. 执行导出命令
-3. 把备份文件和新的 `deploy.env` 拷到新服务器
-4. 在新服务器运行 `bash deploy.sh`
-5. 执行导入命令
-6. 验证后端健康检查和登录
-
-更完整的生产部署与迁移说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
-
-## 本地开发
-
-### 后端
+后端：
 
 ```bash
 cd backend
-
-pip install fastapi "uvicorn[standard]" "sqlalchemy[asyncio]" asyncpg alembic \
-  pydantic-settings "python-jose[cryptography]" "passlib[bcrypt]" httpx \
-  cryptography python-multipart aiosqlite
-
-cat > .env << 'EOF'
-DATABASE_URL=sqlite+aiosqlite:///./teampilot.db
-JWT_SECRET_KEY=dev-secret-key
-AI_ENCRYPTION_KEY=dev-ai-encryption-key
-CORS_ORIGINS=["http://localhost:5173"]
-EOF
-
-uvicorn app.main:app --reload --port 8000
+python -m venv .venv
 ```
 
-### 前端
+前端：
 
 ```bash
 cd frontend
@@ -145,64 +91,68 @@ npm install
 npm run dev
 ```
 
-前端默认访问地址：
+开发模式下前端默认访问地址：
 
 ```text
 http://localhost:5173
 ```
 
-开发模式下前端会把 `/api` 代理到 `http://localhost:8000`。
+## 本地开发建议
+
+- Ubuntu 20.04.5+：
+  - Python：系统包或 `deadsnakes`
+  - Node：`nvm install 20.19.0`
+- Windows 11+：
+  - Python：官方安装包，勾选加入 PATH
+  - Node：官方安装包或 `winget install OpenJS.NodeJS.LTS`
+  - PostgreSQL：官方安装包或 Docker Desktop
+
+## 数据库说明
+
+- 生产部署默认使用 PostgreSQL 16
+- 本地开发和测试可以直接使用 SQLite
+- 当前仓库不再维护“启动时自动兼容旧字段/旧状态”的迁移逻辑
+- 当前项目定位为实验性项目；如果模型字段有破坏性变化，推荐先备份，再重建或重灌数据，不再为旧数据做兼容补丁
+
+数据库字段说明见 [docs/DATABASE.md](docs/DATABASE.md)。
 
 ## 测试与构建
 
-### 前端构建
+前端构建：
 
 ```bash
 cd frontend
 npm run build
 ```
 
-### 后端测试
+后端测试：
 
 ```bash
 cd backend
-pip install pytest pytest-asyncio httpx aiosqlite
 pytest tests/ -v
 ```
 
-## 数据库结构说明
+## 数据重建
 
-- 生产部署默认使用 PostgreSQL 16；本地开发可用 SQLite。
-- 用户账号以 `username` 作为唯一登录标识，不再保存邮箱字段。
-- `users.bio` 保存人员详情页的个人介绍，AI 派单、任务预估和能力分析会把它作为候选人上下文参考。
-- 当前仓库尚未补齐完整 Alembic 流程；后端启动时会自动创建缺失表，并兼容处理本次用户表变更：删除旧 `users.email` 列、补齐 `users.bio` 列。生产升级前仍建议先备份 PostgreSQL。
+如果需要重建演示数据：
 
-## 项目结构
-
-```text
-teampilot/
-├── backend/                # FastAPI 后端
-├── frontend/               # Vue 3 前端
-├── docs/                   # 部署、维护、开发文档
-├── deploy.sh               # 一键部署脚本
-├── deploy.env.example      # 部署配置模板
-├── docker-compose.yml      # 容器编排
-└── README.md               # 项目入口文档
+```bash
+cd backend
+python seed_demo.py
+python seed_new_projects.py
 ```
+
+说明：
+- `seed_demo.py` 会清空并重建当前数据库
+- `seed_new_projects.py` 会在现有库上追加演示项目
 
 ## 相关文档
 
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)：生产部署与服务器迁移
-- [docs/MAINTENANCE.md](docs/MAINTENANCE.md)：运维维护
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)：开发说明
-- [docs/API.md](docs/API.md)：接口文档
-- [docs/DATABASE.md](docs/DATABASE.md)：数据库表字段说明
-- [CLAUDE.md](CLAUDE.md)：项目上下文说明
-
-## 当前说明
-
-- 根目录 `README.md` 是项目主入口文档
-- 不使用 `READER.md`
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)：开发环境与本地运行
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)：Ubuntu 服务器部署与迁移
+- [docs/MAINTENANCE.md](docs/MAINTENANCE.md)：运维与排障
+- [docs/DATABASE.md](docs/DATABASE.md)：数据库字段与约束
+- [docs/API.md](docs/API.md)：接口说明
 
 ## License
 

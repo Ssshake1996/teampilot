@@ -1,42 +1,123 @@
-# TeamPilot 开发指南
+# TeamPilot 开发说明
 
-## 开发环境
+## 适用环境
 
-当前项目的实际开发版本建议如下：
+- Ubuntu `20.04.5+`
+- Windows `11+`
+
+## 运行时要求
 
 - Python `3.11`
-- Node.js `20.19+`
-- PostgreSQL `16`
+- Node.js `20.19+` 或 `22.12+`
+- PostgreSQL `16` 可选
 
 说明：
 
-- 后端容器基础镜像是 `python:3.11-slim`
-- 前端构建镜像是 `node:20-alpine`
-- 前端依赖实际要求的 Node 范围是 `^20.19.0 || >=22.12.0`
+- 本地默认推荐直接使用 SQLite，不强制依赖 PostgreSQL
+- 前端当前 Node 版本要求来自 [frontend/package.json](../frontend/package.json)
+- Ubuntu 20.04 的默认软件源通常不满足 Node 版本要求，建议用 `nvm`
 
-## 后端开发
+## Ubuntu 20.04.5+ 本地开发
+
+### 1. 安装 Python 3.11
+
+```bash
+python3 --version
+```
+
+如果不是 3.11，请先安装 Python 3.11。
+
+### 2. 安装 Node.js
+
+推荐：
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+source ~/.bashrc
+nvm install 20.19.0
+nvm use 20.19.0
+```
+
+### 3. 启动后端
 
 ```bash
 cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
 pip install fastapi "uvicorn[standard]" "sqlalchemy[asyncio]" asyncpg alembic \
   pydantic-settings "python-jose[cryptography]" "passlib[bcrypt]" httpx \
-  cryptography python-multipart aiosqlite
-
-# 使用 SQLite 进行本地开发（无需额外安装 PostgreSQL）
-# 可直接复制仓库根目录的 .env.example 到 backend/.env
-copy ..\\.env.example .env
-# 或手动创建等价配置
-# echo 'DATABASE_URL=sqlite+aiosqlite:///./teampilot.db' > .env
-# echo 'JWT_SECRET_KEY=dev-secret-key' >> .env
-# echo 'AI_ENCRYPTION_KEY=dev-ai-encryption-key' >> .env
-# echo 'CORS_ORIGINS=["http://localhost:5173"]' >> .env
-
+  cryptography python-multipart aiosqlite pytest pytest-asyncio
+cp ../.env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-## 前端开发
+如果只做本地开发，确认 `backend/.env` 使用 SQLite：
+
+```env
+DATABASE_URL=sqlite+aiosqlite:///./teampilot.db
+```
+
+### 4. 启动前端
 
 ```bash
+cd frontend
+npm install
+npm run dev
+```
+
+前端默认地址：
+
+```text
+http://localhost:5173
+```
+
+## Windows 11+ 本地开发
+
+### 1. 安装 Python 3.11
+
+建议使用官方安装包，安装时勾选“Add Python to PATH”。
+
+验证：
+
+```powershell
+python --version
+```
+
+### 2. 安装 Node.js
+
+建议使用官方安装包或：
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
+验证：
+
+```powershell
+node -v
+npm -v
+```
+
+### 3. 启动后端
+
+```powershell
+cd backend
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+pip install fastapi "uvicorn[standard]" "sqlalchemy[asyncio]" asyncpg alembic `
+  pydantic-settings "python-jose[cryptography]" "passlib[bcrypt]" httpx `
+  cryptography python-multipart aiosqlite pytest pytest-asyncio
+Copy-Item ..\.env.example .env
+uvicorn app.main:app --reload --port 8000
+```
+
+如果你本地不装 PostgreSQL，确认 `backend/.env` 使用 SQLite。
+
+### 4. 启动前端
+
+```powershell
 cd frontend
 npm install
 npm run dev
@@ -46,53 +127,21 @@ npm run dev
 
 ```bash
 cd backend
-pip install pytest pytest-asyncio httpx aiosqlite
 pytest tests/ -v
 ```
 
-## 代码结构
+## 构建
 
-## 用户字段约定
-
-- 登录和注册只使用 `username`，不再采集或保存邮箱。
-- `users.bio` 保存人员详情页的个人介绍。AI 派单、任务预估和能力分析会读取该字段作为成员背景参考。
-- 开发库和生产 PostgreSQL 启动时都会自动补齐当前轻量 schema 变更：删除旧 `users.email`，添加缺失的 `users.bio`。
-- 数据库表字段以 [DATABASE.md](DATABASE.md) 为准；修改模型时需要同步 ORM、Pydantic schema、前端类型、启动兼容迁移和字段回归测试。
-
-### 新增后端 API
-
-1. `backend/app/models/`：新增 SQLAlchemy 模型
-2. `backend/app/schemas/`：新增 Pydantic schema
-3. `backend/app/services/`：新增业务逻辑
-4. `backend/app/api/`：新增路由处理
-5. `backend/app/api/router.py`：注册路由
-6. `backend/tests/`：补测试
-
-### 新增前端页面
-
-1. `frontend/src/views/`：新增页面组件
-2. `frontend/src/router/index.ts`：新增路由
-3. `frontend/src/api/`：新增 API 调用
-4. `frontend/src/types/`：新增类型定义
-
-### 修改 AI Prompt
-
-有两种方式：
-
-- 运行时：系统设置 > AI Prompt 页面中修改
-- 代码方式：`backend/app/services/ai/prompts.py`
-
-## 数据模型关系
-
-```text
-User --> Task (assignee)
-User --> ProjectMember --> Project
-User --> UserSkill --> Skill
-User --> CapabilityProfile
-User.bio --> AI task assignment / estimate / capability context
-Task --> Project
-Task --> TaskProgress
-Task --> TaskRequiredSkill --> Skill
-RolePermission (role -> permissions JSON)
-AIConfig (singleton, AI settings + custom prompts)
+```bash
+cd frontend
+npm run build
 ```
+
+## 当前开发约束
+
+- 登录与注册只使用 `username`
+- 不再维护邮箱字段
+- 任务负责人使用多负责人模型：`task_assignees`
+- 任务状态只保留三态：`NOT_STARTED / IN_PROGRESS / DONE`
+- 当前仓库不再维护“启动时兼容旧数据结构”的自动迁移逻辑
+- 如果字段结构发生破坏性变化，默认做法是备份后重建，不做旧数据兼容
