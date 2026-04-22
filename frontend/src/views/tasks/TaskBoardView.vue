@@ -24,6 +24,7 @@ const project = ref<Project | null>(null)
 const users = ref<User[]>([])
 const canCreateTask = computed(() => auth.can('task.create'))
 const canSignoffTask = computed(() => auth.can('task.signoff'))
+const canSubmitProgress = computed(() => auth.can('progress.submit'))
 const canUseAiRisk = computed(() => auth.can('ai.risk'))
 const canUseAiEstimate = computed(() => auth.can('ai.estimate'))
 
@@ -160,6 +161,11 @@ const loadingProgress = ref(false)
 const signoffAssistLoading = ref(false)
 const signoffAssistStatus = ref('')
 const signoffAssistResult = ref<any>(null)
+const progressForm = ref({
+  progress_pct: 0,
+  note: '',
+  hours_spent: null as number | null,
+})
 
 function getPriorityColor(priority: TaskPriority): string {
   return PriorityColor[priority] || '#909399'
@@ -211,6 +217,11 @@ async function openTaskDrawer(task: Task) {
   selectedTask.value = task
   signoffAssistStatus.value = ''
   signoffAssistResult.value = null
+  progressForm.value = {
+    progress_pct: task.progress_pct || 0,
+    note: '',
+    hours_spent: null,
+  }
   drawerVisible.value = true
   await Promise.all([
     loadProgressHistory(task.id),
@@ -227,6 +238,35 @@ async function loadProgressHistory(taskId: string) {
     progressHistory.value = []
   } finally {
     loadingProgress.value = false
+  }
+}
+
+async function handleLogProgress() {
+  if (!selectedTask.value) return
+  if (selectedTask.value.is_deleted) {
+    ElMessage.warning('已删除任务不支持反馈进展')
+    return
+  }
+  if (!progressForm.value.note.trim()) {
+    ElMessage.warning('请填写进展说明')
+    return
+  }
+  try {
+    const data: { progress_pct: number; note?: string; hours_spent?: number } = {
+      progress_pct: progressForm.value.progress_pct,
+    }
+    if (progressForm.value.note) data.note = progressForm.value.note
+    if (progressForm.value.hours_spent !== null) data.hours_spent = progressForm.value.hours_spent
+    await tasksApi.logProgress(selectedTask.value.id, data)
+    ElMessage.success('进度已更新')
+    taskStore.updateTaskLocally(selectedTask.value.id, { progress_pct: progressForm.value.progress_pct })
+    selectedTask.value = { ...selectedTask.value, progress_pct: progressForm.value.progress_pct }
+    syncColumnsFromStore()
+    progressForm.value.note = ''
+    progressForm.value.hours_spent = null
+    await loadProgressHistory(selectedTask.value.id)
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || '更新进度失败')
   }
 }
 
@@ -1216,16 +1256,52 @@ onMounted(async () => {
               type="info"
               :closable="false"
               show-icon
-              title="任务进展统一从项目管理页顶部的进展更新进入；这里仅展示历史记录。"
+              title="这里可以手动提交真实进展；项目管理页顶部的进展更新更适合批量导入群消息。"
             />
           </div>
 
-          <div v-if="selectedTask.is_deleted" class="detail-section">
+          <div v-if="canSubmitProgress && !selectedTask.is_deleted" class="detail-section">
+            <h4>手动提交</h4>
+            <el-form label-width="80px" size="small">
+              <el-form-item label="进度 (%)">
+                <el-slider v-model="progressForm.progress_pct" :min="0" :max="100" show-input />
+              </el-form-item>
+              <el-form-item label="备注">
+                <el-input
+                  v-model="progressForm.note"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="说明真实进展、阻塞或结果"
+                />
+              </el-form-item>
+              <el-form-item label="工时 (h)">
+                <el-input-number
+                  v-model="progressForm.hours_spent"
+                  :min="0"
+                  :max="999"
+                  :precision="1"
+                />
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" size="default" @click="handleLogProgress">提交进展</el-button>
+              </el-form-item>
+            </el-form>
+          </div>
+
+          <div v-else-if="selectedTask.is_deleted" class="detail-section">
             <el-alert
               type="warning"
               :closable="false"
               show-icon
               title="任务已删除，当前仅保留详情和历史记录，不支持继续反馈进展。"
+            />
+          </div>
+          <div v-else class="detail-section">
+            <el-alert
+              type="warning"
+              :closable="false"
+              show-icon
+              title="当前账号没有手动提交进展的权限。"
             />
           </div>
 

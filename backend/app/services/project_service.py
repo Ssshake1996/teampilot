@@ -1,14 +1,26 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project, ProjectMember, ProjectStatus
-from app.models.task import Task, TaskStatus
+from app.models.task import Task, TaskAssignee, TaskStatus
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectUpdate
 from app.services.task_service import effective_task_status, get_task_assignee_map
+
+
+async def get_project_member_count(db: AsyncSession, project_id: uuid.UUID) -> int:
+    member_union = union(
+        select(ProjectMember.user_id.label("user_id")).where(ProjectMember.project_id == project_id),
+        select(TaskAssignee.user_id.label("user_id"))
+        .join(Task, TaskAssignee.task_id == Task.id)
+        .where(Task.project_id == project_id, Task.is_deleted == False),
+    ).subquery()
+    return (
+        await db.execute(select(func.count()).select_from(member_union))
+    ).scalar() or 0
 
 
 async def project_to_out(db: AsyncSession, project: Project) -> dict:
@@ -29,11 +41,7 @@ async def project_to_out(db: AsyncSession, project: Project) -> dict:
             )
         )
     ).scalar() or 0
-    member_count = (
-        await db.execute(
-            select(func.count(ProjectMember.user_id)).where(ProjectMember.project_id == project.id)
-        )
-    ).scalar() or 0
+    member_count = await get_project_member_count(db, project.id)
     return {
         "id": project.id,
         "name": project.name,

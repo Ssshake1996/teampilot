@@ -8,11 +8,11 @@ from app.dependencies import get_current_user, require_permission, user_has_perm
 from app.models.task import TaskStatus
 from app.models.user import User
 from app.schemas.task import (
-    TaskAssign, TaskCreate, TaskOut, TaskProgressOut,
+    TaskAssign, TaskCreate, TaskOut, TaskProgressCreate, TaskProgressOut,
     TaskReorder, TaskUpdate,
 )
 from app.services import task_service
-from app.websocket.events import emit_task_event
+from app.websocket.events import emit_task_event, emit_progress_event
 
 router = APIRouter(tags=["任务"])
 
@@ -161,13 +161,23 @@ async def assign_task(
 @router.post("/tasks/{task_id}/progress", response_model=TaskProgressOut, status_code=201)
 async def log_progress(
     task_id: uuid.UUID,
-    _current_user: User = Depends(get_current_user),
+    data: TaskProgressCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("progress.submit")),
 ):
-    _ = task_id
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Progress updates must be submitted through progress import.",
-    )
+    try:
+        entry = await task_service.log_progress(
+            db, task_id, current_user.id, data.progress_pct, data.note, data.hours_spent,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await emit_progress_event({"task_id": str(task_id), "progress_pct": data.progress_pct})
+    return {
+        "id": entry.id, "task_id": entry.task_id, "user_id": entry.user_id,
+        "user_name": current_user.full_name, "progress_pct": entry.progress_pct,
+        "note": entry.note, "hours_spent": float(entry.hours_spent) if entry.hours_spent else None,
+        "created_at": entry.created_at,
+    }
 
 
 @router.get("/tasks/{task_id}/progress", response_model=list[TaskProgressOut])

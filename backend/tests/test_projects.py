@@ -50,6 +50,37 @@ async def test_get_project(client: AsyncClient, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_project_member_count_includes_task_assignees(client: AsyncClient, auth_headers):
+    second_user = await client.post("/api/v1/auth/register", json={
+        "username": "project_member_count",
+        "password": "password123",
+        "full_name": "Project Member Count",
+    })
+    second_user_id = second_user.json()["id"]
+
+    create_res = await client.post("/api/v1/projects", json={
+        "name": "Count Project",
+    }, headers=auth_headers)
+    pid = create_res.json()["id"]
+
+    task_res = await client.post(
+        f"/api/v1/projects/{pid}/tasks",
+        json={"title": "Assigned Task", "assignee_ids": [second_user_id]},
+        headers=auth_headers,
+    )
+    assert task_res.status_code == 201
+
+    detail_res = await client.get(f"/api/v1/projects/{pid}", headers=auth_headers)
+    assert detail_res.status_code == 200
+    assert detail_res.json()["member_count"] == 2
+
+    list_res = await client.get("/api/v1/projects", headers=auth_headers)
+    assert list_res.status_code == 200
+    project = next(item for item in list_res.json()["items"] if item["id"] == pid)
+    assert project["member_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_update_project(client: AsyncClient, auth_headers):
     """Test updating a project."""
     create_res = await client.post("/api/v1/projects", json={

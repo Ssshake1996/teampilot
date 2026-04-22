@@ -87,8 +87,8 @@ async def test_assign_task(client: AsyncClient, auth_headers, test_user):
 
 
 @pytest.mark.asyncio
-async def test_manual_progress_updates_are_disabled(client: AsyncClient, auth_headers):
-    """Manual task progress updates should be blocked in favor of progress import."""
+async def test_log_progress(client: AsyncClient, auth_headers):
+    """Test logging progress on a task manually."""
     proj = await client.post("/api/v1/projects", json={"name": "Progress Project"}, headers=auth_headers)
     pid = proj.json()["id"]
     task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Progress Task"}, headers=auth_headers)
@@ -99,8 +99,10 @@ async def test_manual_progress_updates_are_disabled(client: AsyncClient, auth_he
         "note": "Half done",
         "hours_spent": 4.0,
     }, headers=auth_headers)
-    assert res.status_code == 403
-    assert res.json()["detail"] == "Progress updates must be submitted through progress import."
+    assert res.status_code == 201
+    data = res.json()
+    assert data["progress_pct"] == 50
+    assert data["note"] == "Half done"
 
 
 @pytest.mark.asyncio
@@ -210,6 +212,25 @@ async def test_deleted_task_cannot_accept_progress_import_updates(client: AsyncC
     progress_res = await client.post(
         "/api/v1/ai/progress-import/commit",
         json={"updates": [{"task_id": tid, "progress_pct": 10, "note": "Should fail"}]},
+        headers=auth_headers,
+    )
+    assert progress_res.status_code == 400
+    assert progress_res.json()["detail"] == "Deleted tasks cannot accept progress updates."
+
+
+@pytest.mark.asyncio
+async def test_deleted_task_cannot_log_progress_manually(client: AsyncClient, auth_headers):
+    proj = await client.post("/api/v1/projects", json={"name": "Deleted Manual Progress Project"}, headers=auth_headers)
+    pid = proj.json()["id"]
+    task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Deleted Manual Task"}, headers=auth_headers)
+    tid = task.json()["id"]
+
+    delete_res = await client.delete(f"/api/v1/tasks/{tid}", headers=auth_headers)
+    assert delete_res.status_code == 200
+
+    progress_res = await client.post(
+        f"/api/v1/tasks/{tid}/progress",
+        json={"progress_pct": 10, "note": "Should fail"},
         headers=auth_headers,
     )
     assert progress_res.status_code == 400

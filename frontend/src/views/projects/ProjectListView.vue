@@ -55,6 +55,8 @@ const feedbackDialogVisible = ref(false)
 const feedbackTask = ref<any>(null)
 const feedbackHistory = ref<TaskProgress[]>([])
 const feedbackLoading = ref(false)
+const feedbackForm = ref({ progress_pct: 0, note: '', hours_spent: null as number | null })
+const feedbackSubmitting = ref(false)
 const projectDetailVisible = ref(false)
 const projectDetailLoading = ref(false)
 const projectDetailSaving = ref(false)
@@ -269,8 +271,13 @@ function openTaskDetail(task: any, projectId: string) {
   taskDetailVisible.value = true
 }
 
-async function openFeedback(task: any) {
-  feedbackTask.value = task
+async function openFeedback(task: any, projectId?: string) {
+  feedbackTask.value = { ...task, projectId: projectId || resolveProjectIdForTask(task) }
+  feedbackForm.value = {
+    progress_pct: task.progress_pct || 0,
+    note: '',
+    hours_spent: null,
+  }
   feedbackDialogVisible.value = true
   feedbackLoading.value = true
   try {
@@ -278,6 +285,42 @@ async function openFeedback(task: any) {
     feedbackHistory.value = res.data
   } catch { feedbackHistory.value = [] }
   finally { feedbackLoading.value = false }
+}
+
+async function submitFeedback() {
+  if (!feedbackTask.value) return
+  if (feedbackTask.value.is_deleted) {
+    ElMessage.warning('已删除任务不支持反馈进展')
+    return
+  }
+  if (!feedbackForm.value.note.trim()) {
+    ElMessage.warning('请填写进展说明')
+    return
+  }
+  feedbackSubmitting.value = true
+  try {
+    await tasksApi.logProgress(feedbackTask.value.id, {
+      progress_pct: feedbackForm.value.progress_pct,
+      note: feedbackForm.value.note,
+      hours_spent: feedbackForm.value.hours_spent ?? undefined,
+    })
+    feedbackTask.value.progress_pct = feedbackForm.value.progress_pct
+    feedbackTask.value.latest_note = feedbackForm.value.note
+    ElMessage.success('进展已提交')
+    feedbackForm.value.note = ''
+    feedbackForm.value.hours_spent = null
+    const res = await tasksApi.getProgress(feedbackTask.value.id)
+    feedbackHistory.value = res.data
+    const projectId = feedbackTask.value.projectId || resolveProjectIdForTask(feedbackTask.value)
+    if (projectId) {
+      await loadTaskTree(projectId, true)
+    }
+    await loadProjects()
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || '提交失败')
+  } finally {
+    feedbackSubmitting.value = false
+  }
 }
 
 function openProgressImport() {
@@ -680,7 +723,7 @@ onMounted(loadProjects)
               </div>
               <!-- Progress History Column -->
               <div class="col-fb" @click.stop>
-                <span class="fb-text" @click="openFeedback(task)" :title="task.latest_note || '查看进展记录'">
+                <span class="fb-text" @click="openFeedback(task, project.id)" :title="task.latest_note || '查看进展记录'">
                   {{ task.latest_note || '查看记录' }}
                 </span>
               </div>
@@ -1055,15 +1098,45 @@ onMounted(loadProjects)
           type="info"
           :closable="false"
           show-icon
-          title="进展更新是唯一入口，请使用顶部进展更新；这里仅展示历史记录。"
+          title="支持手动补充真实进展；顶部进展更新适合批量导入群消息。"
           style="margin-bottom: 16px"
         />
+        <div v-if="canManageProgress && !feedbackTask.is_deleted" class="fb-form">
+          <h4>手动提交</h4>
+          <el-form label-width="74px" size="small">
+            <el-form-item label="进度 (%)">
+              <el-slider v-model="feedbackForm.progress_pct" :min="0" :max="100" :step="5" show-input />
+            </el-form-item>
+            <el-form-item label="投入工时">
+              <el-input-number v-model="feedbackForm.hours_spent" :min="0" :max="999" :precision="1" style="width: 100%" />
+            </el-form-item>
+            <el-form-item label="进展说明">
+              <el-input
+                v-model="feedbackForm.note"
+                type="textarea"
+                :rows="3"
+                placeholder="填写当前真实进展、风险、阻塞或结果"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="feedbackSubmitting" @click="submitFeedback">提交进展</el-button>
+            </el-form-item>
+          </el-form>
+        </div>
         <el-alert
           v-if="feedbackTask.is_deleted"
           type="warning"
           :closable="false"
           show-icon
           title="任务已删除，当前只保留历史记录。"
+          style="margin-bottom: 16px"
+        />
+        <el-alert
+          v-else-if="!canManageProgress"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="当前账号没有手动提交进展的权限。"
           style="margin-bottom: 16px"
         />
         <!-- History -->

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.project import ProjectMember, ProjectRole
 from app.models.task import Task, TaskAssignee, TaskStatus
 from app.models.task_progress import TaskProgress
 from app.models.user import User
@@ -135,6 +136,35 @@ async def sync_task_assignees(
     await db.flush()
 
 
+async def ensure_project_members_for_assignees(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+    assignee_ids: list[uuid.UUID],
+) -> None:
+    normalized = normalize_assignee_ids(assignee_ids)
+    if not normalized:
+        return
+
+    existing_ids = set((
+        await db.execute(
+            select(ProjectMember.user_id).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id.in_(normalized),
+            )
+        )
+    ).scalars().all())
+
+    for user_id in normalized:
+        if user_id not in existing_ids:
+            db.add(ProjectMember(
+                project_id=project_id,
+                user_id=user_id,
+                role_in_project=ProjectRole.MEMBER,
+            ))
+
+    await db.flush()
+
+
 async def task_to_out(
     db: AsyncSession,
     task: Task,
@@ -240,6 +270,7 @@ async def create_task(
     db.add(task)
     await db.flush()
     await sync_task_assignees(db, task, assignee_ids)
+    await ensure_project_members_for_assignees(db, project_id, assignee_ids)
     return task
 
 
@@ -292,6 +323,7 @@ async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) ->
         setattr(task, field, value)
     if assignee_ids is not None:
         await sync_task_assignees(db, task, assignee_ids)
+        await ensure_project_members_for_assignees(db, task.project_id, assignee_ids)
     await db.flush()
     await db.refresh(task)
     return task
@@ -356,6 +388,7 @@ async def assign_task(
     if not task:
         return None
     await sync_task_assignees(db, task, normalize_assignee_ids(assignee_ids))
+    await ensure_project_members_for_assignees(db, task.project_id, assignee_ids)
     await db.refresh(task)
     return task
 
