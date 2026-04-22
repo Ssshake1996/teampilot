@@ -71,12 +71,6 @@ class TaskReorder(BaseModel):
     sort_order: int
 
 
-class TaskProgressCreate(BaseModel):
-    progress_pct: int
-    note: str | None = None
-    hours_spent: float | None = None
-
-
 class TaskProgressOut(BaseModel):
     id: uuid.UUID
     task_id: uuid.UUID

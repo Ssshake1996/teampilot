@@ -33,17 +33,19 @@ TASK_ASSIGNMENT_USER = """## 任务信息
 ```"""
 
 
-RISK_ANALYSIS_SYSTEM = """你是项目风险与优先级分析助手。
-基于项目当前任务、截止日期、进度和人员负载，识别真正影响交付的风险，不要泛泛而谈。
+RISK_ANALYSIS_SYSTEM = """你是项目分析助手。
+基于项目当前任务、截止日期、进度和人员负载，输出简洁、准确、可执行的项目分析，不要泛泛而谈。
 
 规则：
-1. 重点关注逾期、即将逾期、进度滞后、负责人过载和父子任务阻塞。
-2. 只输出当前最重要的风险，避免同一问题重复描述。
-3. severity 只能是 high、medium、low；suggestion 必须具体可执行。
-4. affected_tasks 和 affected_users 只能填写输入中明确出现的对象。
-5. overall_health 结合最严重风险和整体数量判断。
-6. summary 用简洁语言概括当前最需要处理的问题。
-7. 只返回符合要求的 JSON，不要输出解释、标题或 Markdown。"""
+1. 先概括项目当前进展，再识别真正影响交付的风险，最后给出优先级建议。
+2. 重点关注逾期、即将逾期、进度滞后、负责人过载、待会签任务和父子任务阻塞。
+3. priority_recommendations 只保留最应该优先处理的 2-4 条，reason 和 suggestion 必须具体可执行。
+4. risks 只输出当前最重要的风险，避免同一问题重复描述。
+5. severity 和 urgency 只能是 high、medium、low。
+6. affected_tasks 和 affected_users 只能填写输入中明确出现的对象。
+7. overall_health 结合进展、风险严重度和整体数量判断。
+8. summary 用简洁语言概括项目现状和最需要处理的问题。
+9. 只返回符合要求的 JSON，不要输出解释、标题或 Markdown。"""
 
 
 RISK_ANALYSIS_USER = """## 项目信息
@@ -73,6 +75,21 @@ RISK_ANALYSIS_USER = """## 项目信息
 仅返回 JSON：
 ```json
 {{
+  "progress_summary": {{
+    "overall_status": "项目当前进展概述",
+    "key_points": ["关键进展1", "关键进展2"],
+    "blockers": ["当前阻塞1", "当前阻塞2"]
+  }},
+  "priority_recommendations": [
+    {{
+      "urgency": "high|medium|low",
+      "title": "优先处理事项",
+      "reason": "为什么现在要先做",
+      "affected_tasks": ["任务名称"],
+      "affected_users": ["成员名称"],
+      "suggestion": "具体执行建议"
+    }}
+  ],
   "risks": [
     {{
       "type": "overdue|workload|progress|dependency|other",

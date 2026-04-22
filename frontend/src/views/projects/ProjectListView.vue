@@ -32,6 +32,8 @@ const canSignoffTask = computed(() => auth.can('task.signoff'))
 const canDeleteTask = computed(() => auth.can('task.delete'))
 const canUseAiEstimate = computed(() => auth.can('ai.estimate'))
 const canUseAiRisk = computed(() => auth.can('ai.risk'))
+const canManageProgress = computed(() => auth.can('progress.submit'))
+const canViewInspectionReport = computed(() => auth.isAuthenticated)
 
 // Create project
 const createDialogVisible = ref(false)
@@ -53,8 +55,6 @@ const feedbackDialogVisible = ref(false)
 const feedbackTask = ref<any>(null)
 const feedbackHistory = ref<TaskProgress[]>([])
 const feedbackLoading = ref(false)
-const feedbackForm = ref({ progress_pct: 0, note: '' })
-const feedbackSubmitting = ref(false)
 const projectDetailVisible = ref(false)
 const projectDetailLoading = ref(false)
 const projectDetailSaving = ref(false)
@@ -271,7 +271,6 @@ function openTaskDetail(task: any, projectId: string) {
 
 async function openFeedback(task: any) {
   feedbackTask.value = task
-  feedbackForm.value = { progress_pct: task.progress_pct || 0, note: '' }
   feedbackDialogVisible.value = true
   feedbackLoading.value = true
   try {
@@ -279,30 +278,6 @@ async function openFeedback(task: any) {
     feedbackHistory.value = res.data
   } catch { feedbackHistory.value = [] }
   finally { feedbackLoading.value = false }
-}
-
-async function submitFeedback() {
-  if (!feedbackTask.value) return
-  if (feedbackTask.value.is_deleted) {
-    ElMessage.warning('已删除任务不支持反馈进展')
-    return
-  }
-  if (!feedbackForm.value.note.trim()) { ElMessage.warning('请填写进展说明'); return }
-  feedbackSubmitting.value = true
-  try {
-    await tasksApi.logProgress(feedbackTask.value.id, {
-      progress_pct: feedbackForm.value.progress_pct,
-      note: feedbackForm.value.note,
-    })
-    feedbackTask.value.progress_pct = feedbackForm.value.progress_pct
-    feedbackTask.value.latest_note = feedbackForm.value.note
-    ElMessage.success('进展已提交')
-    feedbackForm.value.note = ''
-    // Reload history
-    const res = await tasksApi.getProgress(feedbackTask.value.id)
-    feedbackHistory.value = res.data
-  } catch { ElMessage.error('提交失败') }
-  finally { feedbackSubmitting.value = false }
 }
 
 function openProgressImport() {
@@ -362,6 +337,7 @@ async function commitProgressImport() {
     await Promise.all(Array.from(expandedProjects.value).map(pid => loadTaskTree(pid, true)))
     await loadProjects()
     progressImportDialogVisible.value = false
+    await openDailyBrief(true)
   } catch {
     ElMessage.error('同步进展失败')
   } finally {
@@ -424,17 +400,21 @@ async function commitProjectPlan() {
   }
 }
 
-async function openDailyBrief() {
+async function openDailyBrief(silent = false) {
   dailyBriefDialogVisible.value = true
   dailyBriefResult.value = null
-  dailyBriefStatus.value = '正在生成日报巡检...'
+  dailyBriefStatus.value = '正在生成每日巡检报告...'
   dailyBriefLoading.value = true
   try {
     dailyBriefResult.value = await aiApi.dailyBrief((msg: string) => { dailyBriefStatus.value = msg })
     dailyBriefStatus.value = ''
   } catch (err: any) {
     dailyBriefStatus.value = ''
-    ElMessage.error(err?.message || '日报巡检生成失败')
+    if (!silent) {
+      ElMessage.error(err?.message || '每日巡检报告生成失败')
+    } else {
+      ElMessage.warning(err?.message || '进展已同步，但巡检报告生成失败')
+    }
   } finally {
     dailyBriefLoading.value = false
   }
@@ -582,7 +562,13 @@ function formatDateTime(d: string | null) { return d ? d.replace('T', ' ').slice
 function goToBoard(pid: string) { router.push(`/projects/${pid}/board`) }
 function asList(value: any): any[] { return Array.isArray(value) ? value : [] }
 function dailySectionLabel(section: string): string {
-  return ({ completed: '已完成', in_progress: '进行中', risks: '风险', actions: '建议动作', signoff_candidates: '待会签候选' } as any)[section] || section
+  return ({
+    risky_projects: '今日风险项目',
+    overdue_blocked_tasks: '逾期 / 阻塞任务',
+    members_without_updates: '今日未更新成员',
+    priority_tasks: '优先推进任务',
+    signoff_pending: '待会签任务',
+  } as any)[section] || section
 }
 function retrospectiveSectionLabel(section: string): string {
   return ({ wins: '做得好的地方', issues: '主要问题', estimation_lessons: '估时经验', process_improvements: '流程改进', reusable_template: '可复用模板' } as any)[section] || section
@@ -622,12 +608,12 @@ onMounted(loadProjects)
         <div class="si"><span class="sv done">{{ summaryStats.doneTasks }}</span><span class="sl">已完成</span></div>
         <div class="si"><span class="sv" :class="{ warn: summaryStats.overallRate < 50 }">{{ summaryStats.overallRate }}%</span><span class="sl">完成率</span></div>
       </div>
-      <div v-if="canUseAiEstimate" class="summary-progress-action">
-        <el-button type="warning" @click="openProgressImport">进展更新</el-button>
+      <div v-if="canManageProgress" class="summary-progress-action">
+        <el-button type="primary" @click="openProgressImport">进展更新</el-button>
       </div>
       <div class="summary-actions">
         <el-switch v-model="showArchived" active-text="含归档" @change="onArchivedChange" />
-        <el-button v-if="canUseAiRisk" type="warning" plain @click="openDailyBrief">日报巡检</el-button>
+        <el-button v-if="canViewInspectionReport" type="info" plain @click="openDailyBrief()">每日巡检报告</el-button>
         <el-button v-if="canCreateProject" type="primary" @click="openCreateProjectDialog">新建项目</el-button>
       </div>
     </div>
@@ -671,7 +657,7 @@ onMounted(loadProjects)
             <div class="thead">
               <div class="col-exp"></div>
               <div class="col-name">任务名称</div>
-              <div class="col-fb">最新进展</div>
+              <div class="col-fb">进展记录</div>
               <div class="col-who">负责人</div>
               <div class="col-hrs center">工时(h)</div>
               <div class="col-prog">进度</div>
@@ -692,10 +678,10 @@ onMounted(loadProjects)
                 <el-tag v-if="task.priority === 'urgent'" type="danger" size="small" style="margin-left:4px">紧急</el-tag>
                 <el-tag v-else-if="task.priority === 'high'" type="danger" size="small" effect="plain" style="margin-left:4px">高</el-tag>
               </div>
-              <!-- Progress Feedback Column -->
+              <!-- Progress History Column -->
               <div class="col-fb" @click.stop>
-                <span class="fb-text" @click="openFeedback(task)" :title="task.latest_note || '点击反馈进展'">
-                  {{ task.latest_note || '反馈进展' }}
+                <span class="fb-text" @click="openFeedback(task)" :title="task.latest_note || '查看进展记录'">
+                  {{ task.latest_note || '查看记录' }}
                 </span>
               </div>
               <!-- Assignee -->
@@ -830,8 +816,8 @@ onMounted(loadProjects)
       </template>
     </el-dialog>
 
-    <!-- Daily Brief Dialog -->
-    <el-dialog v-model="dailyBriefDialogVisible" title="日报巡检" width="760px">
+    <!-- Daily Inspection Dialog -->
+    <el-dialog v-model="dailyBriefDialogVisible" title="每日巡检报告" width="760px">
       <div v-loading="dailyBriefLoading" class="ai-result">
         <span v-if="dailyBriefStatus" class="ai-st">{{ dailyBriefStatus }}</span>
         <template v-if="dailyBriefResult">
@@ -846,7 +832,7 @@ onMounted(loadProjects)
             </el-tag>
           </div>
           <p class="ai-result-summary">{{ dailyBriefResult.summary }}</p>
-          <div class="ai-section" v-for="section in ['completed','in_progress','risks','actions','signoff_candidates']" :key="section">
+          <div class="ai-section" v-for="section in ['risky_projects','overdue_blocked_tasks','members_without_updates','priority_tasks','signoff_pending']" :key="section">
             <h4>{{ dailySectionLabel(section) }}</h4>
             <ul>
               <li v-for="(item, idx) in asList(dailyBriefResult[section])" :key="idx">{{ typeof item === 'string' ? item : JSON.stringify(item) }}</li>
@@ -1062,30 +1048,22 @@ onMounted(loadProjects)
       </div>
     </el-drawer>
 
-    <!-- Progress Feedback Drawer -->
+    <!-- Progress History Drawer -->
     <el-drawer v-model="feedbackDialogVisible" :title="'任务进展 — ' + (feedbackTask?.title || '')" size="420px" direction="rtl">
       <div v-if="feedbackTask" class="fb-drawer">
-        <!-- Submit feedback -->
-        <div v-if="!feedbackTask.is_deleted" class="fb-form">
-          <h4>反馈进展</h4>
-          <el-form label-width="70px" size="small">
-            <el-form-item label="进度 (%)">
-              <el-slider v-model="feedbackForm.progress_pct" :min="0" :max="100" :step="5" show-input />
-            </el-form-item>
-            <el-form-item label="进展说明">
-              <el-input v-model="feedbackForm.note" type="textarea" :rows="3" placeholder="描述当前进展、遇到的问题..." />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="feedbackSubmitting" @click="submitFeedback">提交</el-button>
-            </el-form-item>
-          </el-form>
-        </div>
         <el-alert
-          v-else
+          type="info"
+          :closable="false"
+          show-icon
+          title="进展更新是唯一入口，请使用顶部进展更新；这里仅展示历史记录。"
+          style="margin-bottom: 16px"
+        />
+        <el-alert
+          v-if="feedbackTask.is_deleted"
           type="warning"
           :closable="false"
           show-icon
-          title="任务已删除，当前只保留历史记录，不支持继续反馈进展。"
+          title="任务已删除，当前只保留历史记录。"
           style="margin-bottom: 16px"
         />
         <!-- History -->

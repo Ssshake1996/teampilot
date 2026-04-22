@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session
-from app.dependencies import require_permission
+from app.dependencies import get_current_user, require_permission
 from app.models.capability_profile import AIConfig
 from app.models.user import User
 from app.services.ai.llm_client import LLMClient
@@ -247,11 +247,11 @@ async def risk_analysis(
             llm = await _get_llm_from_db()
 
             yield sse_status("正在采集项目进度和团队负载数据...")
-            yield sse_status("正在进行 AI 风险评估...")
+            yield sse_status("正在进行 AI 项目分析...")
             async with async_session() as db:
                 result = await analyze_project_risk(db, data.project_id, llm)
 
-            yield sse_status("风险分析完成")
+            yield sse_status("项目分析完成")
             yield sse_result(result)
         except Exception as e:
             traceback.print_exc()
@@ -296,7 +296,7 @@ async def task_decomposition(
 @router.post("/progress-import/preview")
 async def progress_import_preview(
     data: ProgressImportRequest,
-    current_user: User = Depends(require_permission("ai.estimate")),
+    current_user: User = Depends(require_permission("progress.submit")),
 ):
     async def generate() -> AsyncGenerator[str, None]:
         llm = None
@@ -388,7 +388,7 @@ async def project_plan_commit(
 
 @router.post("/daily-brief")
 async def daily_briefing(
-    current_user: User = Depends(require_permission("ai.risk")),
+    current_user: User = Depends(get_current_user),
 ):
     async def generate() -> AsyncGenerator[str, None]:
         llm = None
@@ -397,12 +397,12 @@ async def daily_briefing(
             try:
                 llm = await _get_llm_from_db()
                 yield sse_status("正在汇总项目、任务和进展数据...")
-                yield sse_status("正在调用 AI 生成日报巡检...")
+                yield sse_status("正在调用 AI 生成每日巡检报告...")
             except Exception:
-                yield sse_status("AI 配置不可用，正在使用系统规则巡检...")
+                yield sse_status("AI 配置不可用，正在使用系统规则生成每日巡检报告...")
             async with async_session() as db:
                 result = await daily_brief(db, llm)
-            yield sse_status("日报巡检完成")
+            yield sse_status("每日巡检报告已生成")
             yield sse_result(result)
         except Exception as e:
             traceback.print_exc()
@@ -535,7 +535,7 @@ PROMPT_FIELDS = ["prompt_task_assign", "prompt_capability", "prompt_risk", "prom
 PROMPT_LABELS = {
     "prompt_task_assign": "任务分配推荐",
     "prompt_capability": "能力分析",
-    "prompt_risk": "风险评估",
+    "prompt_risk": "项目分析",
     "prompt_estimate": "工时预估与人选推荐",
     "prompt_decompose": "任务拆解",
 }

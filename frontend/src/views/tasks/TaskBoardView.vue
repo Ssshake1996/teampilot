@@ -24,7 +24,6 @@ const project = ref<Project | null>(null)
 const users = ref<User[]>([])
 const canCreateTask = computed(() => auth.can('task.create'))
 const canSignoffTask = computed(() => auth.can('task.signoff'))
-const canSubmitProgress = computed(() => auth.can('progress.submit'))
 const canUseAiRisk = computed(() => auth.can('ai.risk'))
 const canUseAiEstimate = computed(() => auth.can('ai.estimate'))
 
@@ -162,12 +161,6 @@ const signoffAssistLoading = ref(false)
 const signoffAssistStatus = ref('')
 const signoffAssistResult = ref<any>(null)
 
-const progressForm = ref({
-  progress_pct: 0,
-  note: '',
-  hours_spent: null as number | null,
-})
-
 function getPriorityColor(priority: TaskPriority): string {
   return PriorityColor[priority] || '#909399'
 }
@@ -218,11 +211,6 @@ async function openTaskDrawer(task: Task) {
   selectedTask.value = task
   signoffAssistStatus.value = ''
   signoffAssistResult.value = null
-  progressForm.value = {
-    progress_pct: task.progress_pct || 0,
-    note: '',
-    hours_spent: null,
-  }
   drawerVisible.value = true
   await Promise.all([
     loadProgressHistory(task.id),
@@ -239,31 +227,6 @@ async function loadProgressHistory(taskId: string) {
     progressHistory.value = []
   } finally {
     loadingProgress.value = false
-  }
-}
-
-async function handleLogProgress() {
-  if (!selectedTask.value) return
-  if (selectedTask.value.is_deleted) {
-    ElMessage.warning('已删除任务不支持反馈进展')
-    return
-  }
-  try {
-    const data: { progress_pct: number; note?: string; hours_spent?: number } = {
-      progress_pct: progressForm.value.progress_pct,
-    }
-    if (progressForm.value.note) data.note = progressForm.value.note
-    if (progressForm.value.hours_spent !== null) data.hours_spent = progressForm.value.hours_spent
-    await tasksApi.logProgress(selectedTask.value.id, data)
-    ElMessage.success('进度已更新')
-    taskStore.updateTaskLocally(selectedTask.value.id, { progress_pct: progressForm.value.progress_pct })
-    selectedTask.value = { ...selectedTask.value, progress_pct: progressForm.value.progress_pct }
-    syncColumnsFromStore()
-    progressForm.value.note = ''
-    progressForm.value.hours_spent = null
-    await loadProgressHistory(selectedTask.value.id)
-  } catch {
-    ElMessage.error('更新进度失败')
   }
 }
 
@@ -418,7 +381,7 @@ async function handleAIDecompose() {
   decomposeResults.value = []
   try {
     const res = await aiApi.decomposeTask(selectedTask.value.id)
-    const items = (res.data as any)?.subtasks || (res.data as any) || []
+    const items = (res as any)?.subtasks || (res as any) || []
     decomposeResults.value = (Array.isArray(items) ? items : []).map((item: any) => ({
       title: item.title || '',
       description: item.description || '',
@@ -499,6 +462,19 @@ interface RiskAnalysis {
   overall_health: string
   summary: string
   risks: RiskItem[]
+  progress_summary?: {
+    overall_status?: string
+    key_points?: string[]
+    blockers?: string[]
+  }
+  priority_recommendations?: Array<{
+    urgency?: string
+    title: string
+    reason: string
+    affected_tasks?: string[]
+    affected_users?: string[]
+    suggestion?: string
+  }>
 }
 
 interface PriorityInsightItem {
@@ -514,6 +490,69 @@ interface PriorityInsightItem {
 const riskDrawerVisible = ref(false)
 const loadingRisk = ref(false)
 const riskAnalysis = ref<RiskAnalysis | null>(null)
+
+const projectOverview = computed(() => {
+  const tasks = taskStore.tasks.filter((task) => !task.is_deleted)
+  const total = tasks.length
+  const done = tasks.filter((task) => task.status === TaskStatus.DONE).length
+  const inProgress = tasks.filter((task) => task.status === TaskStatus.IN_PROGRESS).length
+  const notStarted = tasks.filter((task) => task.status === TaskStatus.NOT_STARTED).length
+  const overdue = tasks.filter((task) => task.status !== TaskStatus.DONE && !!task.deadline && new Date(task.deadline).getTime() < Date.now()).length
+  const signoffPending = tasks.filter((task) => needsSignoff(task)).length
+  const avgProgress = total
+    ? Math.round(tasks.reduce((sum, task) => sum + (task.progress_pct || 0), 0) / total)
+    : 0
+  const completionRate = total ? Math.round((done / total) * 100) : 0
+
+  return {
+    total,
+    done,
+    inProgress,
+    notStarted,
+    overdue,
+    signoffPending,
+    avgProgress,
+    completionRate,
+  }
+})
+
+const projectProgressNarrative = computed(() => {
+  const aiStatus = riskAnalysis.value?.progress_summary?.overall_status?.trim()
+  if (aiStatus) return aiStatus
+
+  const overview = projectOverview.value
+  if (!overview.total) return '当前项目还没有任务数据。'
+
+  return `当前共 ${overview.total} 项任务，已完成 ${overview.done} 项，进行中 ${overview.inProgress} 项，整体平均进度 ${overview.avgProgress}%，完成率 ${overview.completionRate}%。`
+})
+
+const progressHighlights = computed(() => {
+  const aiPoints = riskAnalysis.value?.progress_summary?.key_points?.filter(Boolean) || []
+  if (aiPoints.length) return aiPoints
+
+  const overview = projectOverview.value
+  const points: string[] = []
+  if (overview.inProgress) points.push(`${overview.inProgress} 项任务正在推进`)
+  if (overview.done) points.push(`${overview.done} 项任务已完成`)
+  if (overview.notStarted) points.push(`${overview.notStarted} 项任务尚未开始`)
+  if (overview.signoffPending) points.push(`${overview.signoffPending} 项任务待会签确认`)
+
+  return points.length ? points.slice(0, 4) : ['当前暂无可提炼的进展要点']
+})
+
+const progressBlockers = computed(() => {
+  const aiBlockers = riskAnalysis.value?.progress_summary?.blockers?.filter(Boolean) || []
+  if (aiBlockers.length) return aiBlockers
+
+  const overview = projectOverview.value
+  const blockers: string[] = []
+  if (overview.overdue) blockers.push(`${overview.overdue} 项任务已逾期，需要立即处理`)
+  if (overview.signoffPending) blockers.push(`${overview.signoffPending} 项任务达到 100% 但仍待会签`)
+
+  return blockers.length ? blockers.slice(0, 3) : ['当前没有明显阻塞项']
+})
+
+const aiPriorityRecommendations = computed(() => riskAnalysis.value?.priority_recommendations || [])
 
 function highestRiskLevel(levels: string[]): string {
   if (levels.includes('high')) return 'high'
@@ -669,20 +708,26 @@ function buildPriorityInsights(tasks: Task[], risks: RiskItem[]): { actionItems:
 
 const priorityInsights = computed(() => buildPriorityInsights(taskStore.tasks, riskAnalysis.value?.risks || []))
 
-async function openPriorityAnalysis() {
+async function openProjectAnalysis() {
   riskDrawerVisible.value = true
   loadingRisk.value = true
   riskAnalysis.value = null
   try {
-    const res = await aiApi.analyzePriority(projectId)
-    riskAnalysis.value = res.data as any
+    const res = await aiApi.analyzeProject(projectId)
+    riskAnalysis.value = res as any
   } catch {
     riskAnalysis.value = {
       overall_health: 'warning',
-      summary: 'AI 当前不可用，已根据任务优先级、截止时间、进度和关键节点给出本地优先级建议。',
+      summary: 'AI 当前不可用，已基于任务进展、风险线索和优先级规则生成本地项目分析。',
+      progress_summary: {
+        overall_status: projectProgressNarrative.value,
+        key_points: progressHighlights.value,
+        blockers: progressBlockers.value,
+      },
+      priority_recommendations: [],
       risks: [],
     }
-    ElMessage.warning('AI 当前不可用，已展示本地优先级建议')
+    ElMessage.warning('AI 当前不可用，已展示本地项目分析')
   } finally {
     loadingRisk.value = false
   }
@@ -840,10 +885,10 @@ onMounted(async () => {
       />
     </el-tooltip>
 
-    <!-- AI Priority Analysis Floating Button -->
+    <!-- AI Project Analysis Floating Button -->
     <el-tooltip
       v-if="canUseAiRisk"
-      content="AI 优先级分析：给出当前应先推进的任务、关键节点和风险"
+      content="项目分析：汇总项目进展、风险和优先级建议"
       placement="left"
     >
       <el-button
@@ -852,7 +897,7 @@ onMounted(async () => {
         :icon="Warning"
         circle
         size="large"
-        @click="openPriorityAnalysis"
+        @click="openProjectAnalysis"
       />
     </el-tooltip>
 
@@ -1166,36 +1211,16 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- Progress Log Form -->
-          <div v-if="canSubmitProgress && !selectedTask.is_deleted" class="detail-section">
-            <h4>更新进度</h4>
-            <el-form label-width="80px" size="small">
-              <el-form-item label="进度 (%)">
-                <el-slider v-model="progressForm.progress_pct" :min="0" :max="100" show-input />
-              </el-form-item>
-              <el-form-item label="备注">
-                <el-input
-                  v-model="progressForm.note"
-                  type="textarea"
-                  :rows="2"
-                  placeholder="说明进展情况"
-                />
-              </el-form-item>
-              <el-form-item label="工时 (h)">
-                <el-input-number
-                  v-model="progressForm.hours_spent"
-                  :min="0"
-                  :max="999"
-                  :precision="1"
-                />
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" size="default" @click="handleLogProgress">提交进度</el-button>
-              </el-form-item>
-            </el-form>
+          <div class="detail-section">
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              title="任务进展统一从项目管理页顶部的进展更新进入；这里仅展示历史记录。"
+            />
           </div>
 
-          <div v-else-if="selectedTask.is_deleted" class="detail-section">
+          <div v-if="selectedTask.is_deleted" class="detail-section">
             <el-alert
               type="warning"
               :closable="false"
@@ -1289,14 +1314,14 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-        <!-- AI Priority Analysis Drawer -->
+    <!-- AI Project Analysis Drawer -->
     <el-drawer
       v-model="riskDrawerVisible"
-      title="AI 优先级分析"
+      title="项目分析"
       size="520px"
       direction="rtl"
     >
-      <div v-loading="loadingRisk" element-loading-text="AI 正在分析当前优先级..." class="risk-drawer-content">
+      <div v-loading="loadingRisk" element-loading-text="AI 正在生成项目分析..." class="risk-drawer-content">
         <template v-if="!loadingRisk && riskAnalysis">
           <div class="risk-health-section">
             <div
@@ -1312,9 +1337,74 @@ onMounted(async () => {
             <p class="risk-summary-text">{{ riskAnalysis.summary }}</p>
           </div>
 
+          <div class="analysis-progress-section">
+            <h4>项目进展</h4>
+            <div class="analysis-metric-grid">
+              <div class="analysis-metric-card">
+                <span class="analysis-metric-label">任务总数</span>
+                <strong class="analysis-metric-value">{{ projectOverview.total }}</strong>
+              </div>
+              <div class="analysis-metric-card success">
+                <span class="analysis-metric-label">已完成</span>
+                <strong class="analysis-metric-value">{{ projectOverview.done }}</strong>
+              </div>
+              <div class="analysis-metric-card warning">
+                <span class="analysis-metric-label">进行中</span>
+                <strong class="analysis-metric-value">{{ projectOverview.inProgress }}</strong>
+              </div>
+              <div class="analysis-metric-card">
+                <span class="analysis-metric-label">未开始</span>
+                <strong class="analysis-metric-value">{{ projectOverview.notStarted }}</strong>
+              </div>
+              <div class="analysis-metric-card danger">
+                <span class="analysis-metric-label">已逾期</span>
+                <strong class="analysis-metric-value">{{ projectOverview.overdue }}</strong>
+              </div>
+              <div class="analysis-metric-card primary">
+                <span class="analysis-metric-label">整体进度</span>
+                <strong class="analysis-metric-value">{{ projectOverview.avgProgress }}%</strong>
+              </div>
+            </div>
+            <p class="risk-summary-text analysis-progress-text">{{ projectProgressNarrative }}</p>
+            <div class="analysis-notes-grid">
+              <div class="analysis-note-panel">
+                <span class="analysis-note-title">进展要点</span>
+                <ul class="analysis-note-list">
+                  <li v-for="item in progressHighlights" :key="item">{{ item }}</li>
+                </ul>
+              </div>
+              <div class="analysis-note-panel warning">
+                <span class="analysis-note-title">当前阻塞</span>
+                <ul class="analysis-note-list">
+                  <li v-for="item in progressBlockers" :key="item">{{ item }}</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
           <div class="priority-list-section">
-            <h4>建议优先推进</h4>
-            <div v-if="priorityInsights.actionItems.length" class="priority-cards">
+            <h4>优先级建议</h4>
+            <div v-if="aiPriorityRecommendations.length" class="priority-cards">
+              <div
+                v-for="item in aiPriorityRecommendations"
+                :key="`${item.title}-${item.reason}`"
+                class="priority-card"
+              >
+                <div class="priority-card-head">
+                  <el-tag :type="(severityTagType(item.urgency || 'medium') as any)" size="small" effect="dark">
+                    {{ urgencyLabel(item.urgency || 'medium') }}
+                  </el-tag>
+                  <span class="priority-card-title">{{ item.title }}</span>
+                </div>
+                <div v-if="item.affected_tasks?.length || item.affected_users?.length" class="priority-card-meta">
+                  <span v-if="item.affected_tasks?.length">任务：{{ item.affected_tasks.join('、') }}</span>
+                  <span v-if="item.affected_users?.length">成员：{{ item.affected_users.join('、') }}</span>
+                </div>
+                <p class="priority-card-reason">{{ item.reason }}</p>
+                <p v-if="item.suggestion" class="priority-card-suggestion">{{ item.suggestion }}</p>
+              </div>
+            </div>
+            <div v-else-if="priorityInsights.actionItems.length" class="priority-cards">
               <div v-for="item in priorityInsights.actionItems" :key="item.id" class="priority-card">
                 <div class="priority-card-head">
                   <el-tag :type="(severityTagType(item.urgency) as any)" size="small" effect="dark">
@@ -1403,7 +1493,7 @@ onMounted(async () => {
             <el-empty v-else description="暂无风险项" :image-size="60" />
           </div>
         </template>
-        <el-empty v-if="!loadingRisk && !riskAnalysis" description="暂无分析结果" :image-size="80" />
+        <el-empty v-if="!loadingRisk && !riskAnalysis" description="暂无项目分析结果" :image-size="80" />
       </div>
     </el-drawer>
   </div>
@@ -1866,6 +1956,101 @@ onMounted(async () => {
   padding: 10px 12px;
 }
 
+.analysis-progress-section {
+  margin-bottom: 20px;
+}
+
+.analysis-progress-section h4 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 12px 0;
+  color: #303133;
+}
+
+.analysis-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.analysis-metric-card {
+  padding: 12px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.analysis-metric-card.primary {
+  background: #ecf5ff;
+}
+
+.analysis-metric-card.success {
+  background: #f0f9eb;
+}
+
+.analysis-metric-card.warning {
+  background: #fdf6ec;
+}
+
+.analysis-metric-card.danger {
+  background: #fef0f0;
+}
+
+.analysis-metric-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.analysis-metric-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #303133;
+}
+
+.analysis-progress-text {
+  margin-bottom: 12px;
+}
+
+.analysis-notes-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.analysis-note-panel {
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #ebeef5;
+}
+
+.analysis-note-panel.warning {
+  background: #fff7ed;
+}
+
+.analysis-note-title {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #909399;
+}
+
+.analysis-note-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.6;
+}
+
+.analysis-note-list li + li {
+  margin-top: 4px;
+}
+
 .risk-list-section h4 {
   font-size: 15px;
   font-weight: 600;
@@ -1996,6 +2181,13 @@ onMounted(async () => {
   font-size: 13px;
   line-height: 1.6;
   color: #606266;
+}
+
+.priority-card-suggestion {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #409eff;
 }
 
 .project-summary-card {

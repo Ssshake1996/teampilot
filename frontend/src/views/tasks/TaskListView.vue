@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { View, Edit, Delete } from '@element-plus/icons-vue'
 import { projectsApi } from '@/api/projects'
 import { tasksApi } from '@/api/tasks'
 import { usersApi } from '@/api/users'
-import { TaskStatus, TaskPriority, TaskStatusLabel, TaskPriorityLabel, PriorityColor } from '@/types/enums'
+import { TaskStatus, TaskPriority, TaskStatusLabel, TaskPriorityLabel } from '@/types/enums'
 import type { Project, Task, User } from '@/types/models'
 
 const route = useRoute()
@@ -144,9 +144,6 @@ async function handleDeleteTask(task: Task) {
   try {
     await tasksApi.delete(task.id)
     ElMessage.success('任务已标记删除')
-    await fetchTasks()
-    return
-    ElMessage.success('任务已删除')
     await fetchTasks()
   } catch {
     ElMessage.error('删除任务失败')

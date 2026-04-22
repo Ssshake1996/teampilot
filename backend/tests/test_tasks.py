@@ -48,11 +48,12 @@ async def test_complete_task_sets_completed_at(client: AsyncClient, auth_headers
     assert blocked.status_code == 400
 
     progress = await client.post(
-        f"/api/v1/tasks/{tid}/progress",
-        json={"progress_pct": 100, "note": "Ready for signoff"},
+        "/api/v1/ai/progress-import/commit",
+        json={"updates": [{"task_id": tid, "progress_pct": 100, "note": "Ready for signoff"}]},
         headers=auth_headers,
     )
-    assert progress.status_code == 201
+    assert progress.status_code == 200
+    assert progress.json()["count"] == 1
 
     res = await client.post(f"/api/v1/tasks/{tid}/signoff", headers=auth_headers)
     assert res.status_code == 200
@@ -86,8 +87,8 @@ async def test_assign_task(client: AsyncClient, auth_headers, test_user):
 
 
 @pytest.mark.asyncio
-async def test_log_progress(client: AsyncClient, auth_headers):
-    """Test logging progress on a task."""
+async def test_manual_progress_updates_are_disabled(client: AsyncClient, auth_headers):
+    """Manual task progress updates should be blocked in favor of progress import."""
     proj = await client.post("/api/v1/projects", json={"name": "Progress Project"}, headers=auth_headers)
     pid = proj.json()["id"]
     task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Progress Task"}, headers=auth_headers)
@@ -98,10 +99,8 @@ async def test_log_progress(client: AsyncClient, auth_headers):
         "note": "Half done",
         "hours_spent": 4.0,
     }, headers=auth_headers)
-    assert res.status_code == 201
-    data = res.json()
-    assert data["progress_pct"] == 50
-    assert data["note"] == "Half done"
+    assert res.status_code == 403
+    assert res.json()["detail"] == "Progress updates must be submitted through progress import."
 
 
 @pytest.mark.asyncio
@@ -112,8 +111,18 @@ async def test_get_progress_history(client: AsyncClient, auth_headers):
     task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "History Task"}, headers=auth_headers)
     tid = task.json()["id"]
 
-    await client.post(f"/api/v1/tasks/{tid}/progress", json={"progress_pct": 30, "note": "Started"}, headers=auth_headers)
-    await client.post(f"/api/v1/tasks/{tid}/progress", json={"progress_pct": 80, "note": "Almost done"}, headers=auth_headers)
+    first = await client.post(
+        "/api/v1/ai/progress-import/commit",
+        json={"updates": [{"task_id": tid, "progress_pct": 30, "note": "Started"}]},
+        headers=auth_headers,
+    )
+    second = await client.post(
+        "/api/v1/ai/progress-import/commit",
+        json={"updates": [{"task_id": tid, "progress_pct": 80, "note": "Almost done"}]},
+        headers=auth_headers,
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
 
     res = await client.get(f"/api/v1/tasks/{tid}/progress", headers=auth_headers)
     assert res.status_code == 200
@@ -189,7 +198,7 @@ async def test_restore_subtask_blocked_when_parent_deleted(client: AsyncClient, 
 
 
 @pytest.mark.asyncio
-async def test_deleted_task_cannot_log_progress(client: AsyncClient, auth_headers):
+async def test_deleted_task_cannot_accept_progress_import_updates(client: AsyncClient, auth_headers):
     proj = await client.post("/api/v1/projects", json={"name": "Deleted Progress Project"}, headers=auth_headers)
     pid = proj.json()["id"]
     task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Deleted Task"}, headers=auth_headers)
@@ -199,8 +208,8 @@ async def test_deleted_task_cannot_log_progress(client: AsyncClient, auth_header
     assert delete_res.status_code == 200
 
     progress_res = await client.post(
-        f"/api/v1/tasks/{tid}/progress",
-        json={"progress_pct": 10, "note": "Should fail"},
+        "/api/v1/ai/progress-import/commit",
+        json={"updates": [{"task_id": tid, "progress_pct": 10, "note": "Should fail"}]},
         headers=auth_headers,
     )
     assert progress_res.status_code == 400

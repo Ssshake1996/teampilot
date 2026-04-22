@@ -241,75 +241,113 @@ def _task_line(project: dict, task: dict) -> str:
     return f"{project.get('name', '')} / {task.get('title', '')} ({assignee}, {progress}%)"
 
 
-def _rule_based_daily_brief(projects: list[dict], progress: list[dict], ai_error: str | None = None) -> dict:
+def _rule_based_inspection_report(
+    projects: list[dict],
+    progress: list[dict],
+    members: list[dict],
+    ai_error: str | None = None,
+) -> dict:
     today = date.today()
-    completed: list[str] = []
-    in_progress: list[str] = []
-    risks: list[str] = []
-    actions: list[str] = []
-    signoff_candidates: list[str] = []
+    blocked_keywords = ("阻塞", "卡住", "风险", "延期", "无法", "待确认", "依赖")
+    risky_projects: list[str] = []
+    overdue_blocked_tasks: list[str] = []
+    members_without_updates: list[str] = []
+    priority_tasks: list[str] = []
+    signoff_pending: list[str] = []
+    updated_today: set[str] = set()
+    risky_project_names: set[str] = set()
+
+    for item in progress:
+        created_at = item.get("created_at")
+        created_date = created_at.date() if isinstance(created_at, datetime) else _parse_date(created_at)
+        if created_date == today and item.get("user"):
+            updated_today.add(str(item["user"]))
+
+        note = str(item.get("note") or "")
+        if note and any(keyword in note for keyword in blocked_keywords):
+            overdue_blocked_tasks.append(f"{item.get('project')} / {item.get('task')}: {note}")
+            project_name = str(item.get("project") or "未命名项目")
+            if project_name not in risky_project_names:
+                risky_projects.append(f"{project_name}：存在阻塞或待确认进展")
+                risky_project_names.add(project_name)
 
     for project in projects:
+        project_name = project.get("name") or "未命名项目"
+        project_overdue = 0
+        project_signoff = 0
+
         for task in project.get("tasks") or []:
             status = task.get("status")
             progress_pct = task.get("progress_pct") or 0
             line = _task_line(project, task)
 
-            if status == TaskStatus.DONE.value:
-                completed.append(line)
-                continue
-            if status == TaskStatus.IN_PROGRESS.value:
-                in_progress.append(line)
-
             if progress_pct >= 100 and not task.get("signed_off_at"):
-                signoff_candidates.append(line)
-                risks.append(f"{line} reached 100% but is still waiting for signoff")
+                project_signoff += 1
+                signoff_pending.append(f"{line} 已达 100% 但仍待会签")
 
             deadline = _parse_date(task.get("deadline"))
             if deadline and deadline < today and status != TaskStatus.DONE.value:
-                risks.append(f"{line} is overdue since {deadline.isoformat()}")
+                project_overdue += 1
+                overdue_blocked_tasks.append(f"{line} 已逾期，截止日期 {deadline.isoformat()}")
 
-    blocked = [
-        item for item in progress
-        if any(word in str(item.get("note") or "") for word in ["阻塞", "卡住", "风险", "延期", "无法", "待确认"])
+            if deadline and status != TaskStatus.DONE.value:
+                days_left = (deadline - today).days
+                if days_left <= 2 and progress_pct < 70:
+                    priority_tasks.append(f"{line} 临近截止且当前进度 {progress_pct}%")
+                elif status == TaskStatus.NOT_STARTED.value and days_left <= 3:
+                    priority_tasks.append(f"{line} 尚未开始且距离截止仅剩 {days_left} 天")
+
+        if project_overdue or project_signoff:
+            summary_bits: list[str] = []
+            if project_overdue:
+                summary_bits.append(f"{project_overdue} 项任务逾期")
+            if project_signoff:
+                summary_bits.append(f"{project_signoff} 项任务待会签")
+            risky_projects.append(f"{project_name}：{'，'.join(summary_bits)}")
+            risky_project_names.add(project_name)
+
+    members_without_updates = [
+        member.get("name") or "未知成员"
+        for member in members
+        if (member.get("name") or "") not in updated_today
     ]
-    for item in blocked[:10]:
-        risks.append(f"{item.get('project')} / {item.get('task')} risk note: {item.get('note')}")
 
-    if signoff_candidates:
-        actions.append("Review signoff candidates first so 100% tasks can be closed automatically.")
-    overdue_count = sum(1 for risk in risks if "overdue" in risk)
-    if overdue_count:
-        actions.append(f"Check owner, deadline, and blockers for {overdue_count} overdue tasks.")
-    if blocked:
-        actions.append("Follow up the progress logs that mention blockers, delays, or pending confirmation.")
-    if not actions:
-        actions.append("No obvious exception today. Keep collecting updates and maintain current pace.")
+    if not risky_projects:
+        risky_projects.append("今天没有发现明显的项目级风险。")
+    if not overdue_blocked_tasks:
+        overdue_blocked_tasks.append("今天没有逾期或明显阻塞的任务。")
+    if not members_without_updates:
+        members_without_updates.append("今天所有活跃成员都有进展记录。")
+    if not priority_tasks:
+        priority_tasks.append("今天没有需要额外优先处理的任务。")
+    if not signoff_pending:
+        signoff_pending.append("今天没有达到 100% 但待会签的任务。")
 
     summary = (
-        f"Active projects: {len(projects)}. "
-        f"Completed tasks: {len(completed)}. "
-        f"In progress: {len(in_progress)}. "
-        f"Pending signoff: {len(signoff_candidates)}. "
-        f"Risks: {len(risks)}."
+        f"今日覆盖 {len(projects)} 个活跃项目，"
+        f"识别出 {sum(1 for item in risky_projects if '没有发现' not in item)} 个风险项目，"
+        f"{sum(1 for item in overdue_blocked_tasks if '没有逾期' not in item)} 条逾期或阻塞任务，"
+        f"{sum(1 for item in signoff_pending if '没有达到' not in item)} 条待会签任务，"
+        f"{sum(1 for item in members_without_updates if '所有活跃成员' not in item)} 名成员今日未更新。"
     )
     if ai_error:
-        summary += " AI generation failed, so this brief was produced by system rules."
+        summary += " AI 生成失败，当前结果由系统规则生成。"
 
     return {
         "source": "rules",
-        "source_label": "System rules",
+        "source_label": "系统规则巡检",
         "summary": summary,
-        "completed": completed[:20],
-        "in_progress": in_progress[:20],
-        "risks": risks[:20],
-        "actions": actions[:10],
-        "signoff_candidates": signoff_candidates[:20],
+        "risky_projects": risky_projects[:20],
+        "overdue_blocked_tasks": overdue_blocked_tasks[:20],
+        "members_without_updates": members_without_updates[:20],
+        "priority_tasks": priority_tasks[:20],
+        "signoff_pending": signoff_pending[:20],
     }
 
 
 async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
     projects = await _project_snapshot(db, include_tasks=True)
+    active_users = await _active_users(db)
     recent_rows = (
         await db.execute(
             select(TaskProgress, Task.title, Project.name, User.full_name)
@@ -318,7 +356,7 @@ async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
             .join(User, TaskProgress.user_id == User.id)
             .where(Project.status != ProjectStatus.ARCHIVED)
             .order_by(TaskProgress.created_at.desc())
-            .limit(80)
+            .limit(120)
         )
     ).all()
     progress = [
@@ -333,22 +371,24 @@ async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
         for log, task_title, project_name, user_name in recent_rows
     ]
     if not llm:
-        return _rule_based_daily_brief(projects, progress)
+        return _rule_based_inspection_report(projects, progress, active_users)
 
     messages = [
         {
             "role": "system",
             "content": (
-                "You are a PMO assistant. Return JSON only with keys: "
-                "summary, completed, in_progress, risks, actions, signoff_candidates. "
-                "Call out overdue work, stale progress, 100% tasks still waiting for signoff, "
-                "abnormal workload, and blockers mentioned in progress logs."
+                "你是项目管理办公室的每日巡检助手。"
+                "只返回 JSON，且仅包含这些键：summary, risky_projects, overdue_blocked_tasks, "
+                "members_without_updates, priority_tasks, signoff_pending。"
+                "不要修改任何任务数据。"
+                "请基于输入给出简洁、准确、完整的中文结论。"
             ),
         },
         {
             "role": "user",
             "content": json.dumps({
                 "projects": projects,
+                "team_members": active_users,
                 "recent_progress": progress,
                 "today": date.today().isoformat(),
             }, ensure_ascii=False, default=_json_default),
@@ -357,16 +397,16 @@ async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
     try:
         result = await llm.chat_json(messages, temperature=0.2, max_tokens=4096)
         result.setdefault("summary", "")
-        result.setdefault("completed", [])
-        result.setdefault("in_progress", [])
-        result.setdefault("risks", [])
-        result.setdefault("actions", [])
-        result.setdefault("signoff_candidates", [])
+        result.setdefault("risky_projects", [])
+        result.setdefault("overdue_blocked_tasks", [])
+        result.setdefault("members_without_updates", [])
+        result.setdefault("priority_tasks", [])
+        result.setdefault("signoff_pending", [])
         result["source"] = "ai"
-        result["source_label"] = "AI generated"
+        result["source_label"] = "AI 生成"
         return result
     except Exception as exc:
-        return _rule_based_daily_brief(projects, progress, f"{type(exc).__name__}: {exc}")
+        return _rule_based_inspection_report(projects, progress, active_users, f"{type(exc).__name__}: {exc}")
 
 
 async def signoff_assistant(db: AsyncSession, task_id: uuid.UUID, llm: LLMClient) -> dict:
