@@ -323,6 +323,7 @@ async def seed() -> None:
             owner = users_by_name[item["owner"]]
             project = Project(
                 name=item["name"],
+                goal=item.get("goal") or item["description"],
                 description=item["description"],
                 status=item["status"],
                 owner_id=owner.id,

@@ -15,6 +15,7 @@ export interface User {
 export interface Project {
   id: string
   name: string
+  goal: string | null
   description: string | null
   status: ProjectStatus
   owner_id: string
@@ -50,6 +51,8 @@ export interface Task {
   created_at: string
   updated_at: string
   progress_pct: number
+  is_deleted: boolean
+  deleted_at: string | null
 }
 
 export interface TaskProgress {

@@ -3,15 +3,17 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { View, Edit, Delete } from '@element-plus/icons-vue'
+import { projectsApi } from '@/api/projects'
 import { tasksApi } from '@/api/tasks'
 import { usersApi } from '@/api/users'
 import { TaskStatus, TaskPriority, TaskStatusLabel, TaskPriorityLabel, PriorityColor } from '@/types/enums'
-import type { Task, User } from '@/types/models'
+import type { Project, Task, User } from '@/types/models'
 
 const route = useRoute()
 const router = useRouter()
 const projectId = route.params.id as string
 
+const project = ref<Project | null>(null)
 const tasks = ref<Task[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -46,6 +48,14 @@ function statusTagType(status: TaskStatus): string {
     [TaskStatus.DONE]: 'success',
   }
   return map[status] || 'info'
+}
+
+function displayStatusType(task: Task): string {
+  return task.is_deleted ? 'info' : statusTagType(task.status)
+}
+
+function displayStatusLabel(task: Task): string {
+  return task.is_deleted ? '已删除' : (TaskStatusLabel[task.status as TaskStatus] || task.status)
 }
 
 function priorityTagType(priority: TaskPriority): string {
@@ -101,6 +111,15 @@ async function fetchUsers() {
   }
 }
 
+async function fetchProject() {
+  try {
+    const res = await projectsApi.get(projectId)
+    project.value = res.data
+  } catch {
+    project.value = null
+  }
+}
+
 function handleFilter() {
   currentPage.value = 1
   fetchTasks()
@@ -124,6 +143,9 @@ function goToBoard() {
 async function handleDeleteTask(task: Task) {
   try {
     await tasksApi.delete(task.id)
+    ElMessage.success('任务已标记删除')
+    await fetchTasks()
+    return
     ElMessage.success('任务已删除')
     await fetchTasks()
   } catch {
@@ -131,13 +153,38 @@ async function handleDeleteTask(task: Task) {
   }
 }
 
+async function handleRestoreTask(task: Task) {
+  try {
+    await tasksApi.restore(task.id)
+    ElMessage.success('任务已恢复')
+    await fetchTasks()
+  } catch {
+    ElMessage.error('恢复任务失败')
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([fetchTasks(), fetchUsers()])
+  await Promise.all([fetchTasks(), fetchUsers(), fetchProject()])
 })
 </script>
 
 <template>
   <div class="task-list-view">
+    <div v-if="project" class="project-summary-card">
+      <div class="project-summary-head">
+        <h2>{{ project.name }}</h2>
+      </div>
+      <div class="project-summary-grid">
+        <div class="project-summary-section">
+          <span class="project-summary-label">项目目标</span>
+          <p>{{ project.goal || '暂无项目目标' }}</p>
+        </div>
+        <div class="project-summary-section">
+          <span class="project-summary-label">项目描述</span>
+          <p>{{ project.description || '暂无项目描述' }}</p>
+        </div>
+      </div>
+    </div>
     <div class="page-header">
       <h2>任务列表</h2>
       <el-button @click="goToBoard">看板视图</el-button>
@@ -203,14 +250,17 @@ onMounted(async () => {
     >
       <el-table-column prop="title" label="任务标题" min-width="200" sortable>
         <template #default="{ row }">
-          <span class="task-title-cell">{{ row.title }}</span>
+          <div class="task-main-cell">
+            <span class="task-title-cell" :class="{ deleted: row.is_deleted }">{{ row.title }}</span>
+            <span v-if="row.description" class="task-desc-cell">{{ row.description }}</span>
+          </div>
         </template>
       </el-table-column>
 
       <el-table-column prop="status" label="状态" width="110" sortable>
         <template #default="{ row }">
-          <el-tag :type="(statusTagType(row.status) as any)" size="small">
-            {{ TaskStatusLabel[row.status as TaskStatus] || row.status }}
+          <el-tag :type="(displayStatusType(row) as any)" size="small">
+            {{ displayStatusLabel(row) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -260,6 +310,7 @@ onMounted(async () => {
           </el-button>
           <el-popconfirm
             title="确定要删除此任务吗？"
+            v-if="!row.is_deleted"
             @confirm="handleDeleteTask(row)"
           >
             <template #reference>
@@ -273,6 +324,16 @@ onMounted(async () => {
               </el-button>
             </template>
           </el-popconfirm>
+          <el-button
+            v-else
+            type="success"
+            :icon="Edit"
+            size="small"
+            link
+            @click="handleRestoreTask(row)"
+          >
+            恢复
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -298,6 +359,48 @@ onMounted(async () => {
   padding: 20px;
 }
 
+.project-summary-card {
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.project-summary-head h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.project-summary-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.project-summary-section {
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.project-summary-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #909399;
+}
+
+.project-summary-section p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #606266;
+  white-space: pre-wrap;
+}
+
 .page-header {
   display: flex;
   justify-content: space-between;
@@ -320,6 +423,24 @@ onMounted(async () => {
 
 .task-title-cell {
   font-weight: 500;
+}
+
+.task-main-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-title-cell.deleted {
+  color: #909399;
+  text-decoration: line-through;
+}
+
+.task-desc-cell {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #909399;
+  white-space: pre-wrap;
 }
 
 .overdue {

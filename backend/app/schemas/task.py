@@ -55,6 +55,8 @@ class TaskOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     progress_pct: int = 0
+    is_deleted: bool = False
+    deleted_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

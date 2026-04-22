@@ -5,7 +5,7 @@ export const projectsApi = {
   list(page = 1, pageSize = 20, includeArchived = false) {
     return http.get<PaginatedResponse<Project>>('/projects', { params: { page, page_size: pageSize, include_archived: includeArchived } })
   },
-  create(data: { name: string; description?: string; start_date?: string; end_date?: string }) {
+  create(data: { name: string; goal?: string; description?: string; start_date?: string; end_date?: string }) {
     return http.post<Project>('/projects', data)
   },
   get(id: string) {

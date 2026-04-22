@@ -86,6 +86,9 @@ export const aiApi = {
   analyzeRisk(projectId: string, onStatus?: (msg: string) => void) {
     return sseCallAsync('/ai/analyze-risk', { project_id: projectId }, onStatus)
   },
+  analyzePriority(projectId: string, onStatus?: (msg: string) => void) {
+    return sseCallAsync('/ai/analyze-risk', { project_id: projectId }, onStatus)
+  },
   decomposeTask(taskId: string, onStatus?: (msg: string) => void) {
     return sseCallAsync('/ai/decompose-task', { task_id: taskId }, onStatus)
   },

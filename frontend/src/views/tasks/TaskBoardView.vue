@@ -4,13 +4,14 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Warning } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
+import { projectsApi } from '@/api/projects'
 import { tasksApi } from '@/api/tasks'
 import { aiApi } from '@/api/ai'
 import { usersApi } from '@/api/users'
 import { useTaskStore } from '@/stores/task'
 import { useAuthStore } from '@/stores/auth'
 import { TaskStatus, TaskPriority, TaskStatusLabel, TaskPriorityLabel, PriorityColor } from '@/types/enums'
-import type { Task, TaskProgress, User } from '@/types/models'
+import type { Project, Task, TaskProgress, User } from '@/types/models'
 import type { FormInstance } from 'element-plus'
 
 const route = useRoute()
@@ -19,6 +20,7 @@ const taskStore = useTaskStore()
 const auth = useAuthStore()
 
 const loading = ref(false)
+const project = ref<Project | null>(null)
 const users = ref<User[]>([])
 const canCreateTask = computed(() => auth.can('task.create'))
 const canSignoffTask = computed(() => auth.can('task.signoff'))
@@ -242,6 +244,10 @@ async function loadProgressHistory(taskId: string) {
 
 async function handleLogProgress() {
   if (!selectedTask.value) return
+  if (selectedTask.value.is_deleted) {
+    ElMessage.warning('已删除任务不支持反馈进展')
+    return
+  }
   try {
     const data: { progress_pct: number; note?: string; hours_spent?: number } = {
       progress_pct: progressForm.value.progress_pct,
@@ -310,6 +316,15 @@ async function fetchUsers() {
     users.value = res.data.items
   } catch {
     // silent
+  }
+}
+
+async function fetchProject() {
+  try {
+    const res = await projectsApi.get(projectId)
+    project.value = res.data
+  } catch {
+    project.value = null
   }
 }
 
@@ -486,19 +501,188 @@ interface RiskAnalysis {
   risks: RiskItem[]
 }
 
+interface PriorityInsightItem {
+  id: string
+  title: string
+  reason: string
+  urgency: string
+  assigneeText: string
+  deadline: string | null
+  progressPct: number
+}
+
 const riskDrawerVisible = ref(false)
 const loadingRisk = ref(false)
 const riskAnalysis = ref<RiskAnalysis | null>(null)
 
-async function openRiskAnalysis() {
+function highestRiskLevel(levels: string[]): string {
+  if (levels.includes('high')) return 'high'
+  if (levels.includes('medium')) return 'medium'
+  return levels.includes('low') ? 'low' : 'low'
+}
+
+function urgencyLabel(level: string): string {
+  const map: Record<string, string> = {
+    high: '高优先',
+    medium: '中优先',
+    low: '常规关注',
+  }
+  return map[level] || level
+}
+
+function taskAssigneeText(task: Task): string {
+  return task.assignee_names?.join('、') || task.assignee_name || '未分配'
+}
+
+function buildPriorityInsights(tasks: Task[], risks: RiskItem[]): { actionItems: PriorityInsightItem[]; keyNodes: PriorityInsightItem[] } {
+  const activeTasks = tasks.filter((task) => !task.is_deleted && task.status !== TaskStatus.DONE)
+  const childMap = new Map<string, Task[]>()
+  const riskMap = new Map<string, string[]>()
+  const now = Date.now()
+
+  for (const risk of risks || []) {
+    for (const taskTitle of risk.affected_tasks || []) {
+      const current = riskMap.get(taskTitle) || []
+      current.push(risk.severity)
+      riskMap.set(taskTitle, current)
+    }
+  }
+
+  for (const task of activeTasks) {
+    if (!task.parent_task_id) continue
+    const children = childMap.get(task.parent_task_id) || []
+    children.push(task)
+    childMap.set(task.parent_task_id, children)
+  }
+
+  const scoreTask = (task: Task, asNode: boolean) => {
+    const parts: string[] = []
+    let score = 0
+    const deadlineMs = task.deadline ? new Date(task.deadline).getTime() : null
+    const daysLeft = deadlineMs ? Math.ceil((deadlineMs - now) / 86400000) : null
+    const riskLevel = highestRiskLevel(riskMap.get(task.title) || [])
+
+    if (deadlineMs !== null && deadlineMs < now) {
+      score += 80
+      parts.push('已逾期')
+    } else if (daysLeft !== null && daysLeft <= 2) {
+      score += 45
+      parts.push('临近截止')
+    } else if (daysLeft !== null && daysLeft <= 5) {
+      score += 20
+      parts.push('截止时间较近')
+    }
+
+    if (task.priority === TaskPriority.URGENT) {
+      score += 35
+      parts.push('任务紧急')
+    } else if (task.priority === TaskPriority.HIGH) {
+      score += 25
+      parts.push('优先级高')
+    } else if (task.priority === TaskPriority.MEDIUM) {
+      score += 10
+    }
+
+    if (task.status === TaskStatus.IN_PROGRESS) {
+      score += 20
+      if ((task.progress_pct || 0) < 50) parts.push('进行中但进度偏慢')
+    } else {
+      score += 8
+      parts.push('尚未启动')
+    }
+
+    if (!task.assignee_ids?.length && !task.assignee_name) {
+      score += 20
+      parts.push('尚未明确负责人')
+    }
+
+    if (riskLevel === 'high') {
+      score += 40
+      parts.push('存在高风险')
+    } else if (riskLevel === 'medium') {
+      score += 20
+      parts.push('存在中风险')
+    } else if (riskLevel === 'low') {
+      score += 8
+    }
+
+    if (asNode) {
+      const children = childMap.get(task.id) || []
+      const overdueChildren = children.filter((child) => child.deadline && new Date(child.deadline).getTime() < now).length
+      if (children.length > 0) {
+        score += children.length * 8
+        parts.push(`${children.length} 个子任务待收口`)
+      }
+      if (overdueChildren > 0) {
+        score += overdueChildren * 12
+        parts.push(`${overdueChildren} 个子任务已逾期`)
+      }
+    }
+
+    return {
+      score,
+      urgency: score >= 120 ? 'high' : score >= 70 ? 'medium' : 'low',
+      reason: parts.filter(Boolean).slice(0, 3).join('，') || '建议关注当前推进情况',
+    }
+  }
+
+  const actionItems = activeTasks
+    .filter((task) => !childMap.has(task.id))
+    .map((task) => {
+      const insight = scoreTask(task, false)
+      return {
+        id: task.id,
+        title: task.title,
+        reason: insight.reason,
+        urgency: insight.urgency,
+        assigneeText: taskAssigneeText(task),
+        deadline: task.deadline,
+        progressPct: task.progress_pct || 0,
+        _score: insight.score,
+      }
+    })
+    .sort((a, b) => b._score - a._score)
+    .slice(0, 5)
+    .map(({ _score, ...item }) => item)
+
+  const keyNodes = activeTasks
+    .filter((task) => childMap.has(task.id))
+    .map((task) => {
+      const insight = scoreTask(task, true)
+      return {
+        id: task.id,
+        title: task.title,
+        reason: insight.reason,
+        urgency: insight.urgency,
+        assigneeText: taskAssigneeText(task),
+        deadline: task.deadline,
+        progressPct: task.progress_pct || 0,
+        _score: insight.score,
+      }
+    })
+    .sort((a, b) => b._score - a._score)
+    .slice(0, 4)
+    .map(({ _score, ...item }) => item)
+
+  return { actionItems, keyNodes }
+}
+
+const priorityInsights = computed(() => buildPriorityInsights(taskStore.tasks, riskAnalysis.value?.risks || []))
+
+async function openPriorityAnalysis() {
   riskDrawerVisible.value = true
   loadingRisk.value = true
   riskAnalysis.value = null
   try {
-    const res = await aiApi.analyzeRisk(projectId)
+    const res = await aiApi.analyzePriority(projectId)
     riskAnalysis.value = res.data as any
   } catch {
-    ElMessage.error('AI 风险分析失败，请稍后重试')
+    riskAnalysis.value = {
+      overall_health: 'warning',
+      summary: 'AI 当前不可用，已根据任务优先级、截止时间、进度和关键节点给出本地优先级建议。',
+      risks: [],
+    }
+    ElMessage.warning('AI 当前不可用，已展示本地优先级建议')
   } finally {
     loadingRisk.value = false
   }
@@ -549,12 +733,27 @@ function hasSubtasks(task: Task): boolean {
 // ========== Init ==========
 
 onMounted(async () => {
-  await Promise.all([loadTasks(), fetchUsers()])
+  await Promise.all([loadTasks(), fetchUsers(), fetchProject()])
 })
 </script>
 
 <template>
   <div v-loading="loading" class="task-board-view">
+    <div v-if="project" class="project-summary-card">
+      <div class="project-summary-head">
+        <h2>{{ project.name }}</h2>
+      </div>
+      <div class="project-summary-grid">
+        <div class="project-summary-section">
+          <span class="project-summary-label">项目目标</span>
+          <p>{{ project.goal || '暂无项目目标' }}</p>
+        </div>
+        <div class="project-summary-section">
+          <span class="project-summary-label">项目描述</span>
+          <p>{{ project.description || '暂无项目描述' }}</p>
+        </div>
+      </div>
+    </div>
     <div class="board-container">
       <div v-for="col in columns" :key="col.status" class="board-column">
         <div class="column-header" :style="{ borderTopColor: columnHeaderColors[col.status] }">
@@ -630,26 +829,32 @@ onMounted(async () => {
     </div>
 
     <!-- Floating Create Button -->
-    <el-button
-      v-if="canCreateTask"
-      class="fab-button"
-      type="primary"
-      :icon="Plus"
-      circle
-      size="large"
-      @click="openCreateDialog"
-    />
+    <el-tooltip v-if="canCreateTask" content="新建任务" placement="left">
+      <el-button
+        class="fab-button"
+        type="primary"
+        :icon="Plus"
+        circle
+        size="large"
+        @click="openCreateDialog"
+      />
+    </el-tooltip>
 
-    <!-- AI Risk Analysis Floating Button -->
-    <el-button
+    <!-- AI Priority Analysis Floating Button -->
+    <el-tooltip
       v-if="canUseAiRisk"
-      class="fab-button-risk"
-      type="warning"
-      :icon="Warning"
-      circle
-      size="large"
-      @click="openRiskAnalysis"
-    />
+      content="AI 优先级分析：给出当前应先推进的任务、关键节点和风险"
+      placement="left"
+    >
+      <el-button
+        class="fab-button-risk"
+        type="warning"
+        :icon="Warning"
+        circle
+        size="large"
+        @click="openPriorityAnalysis"
+      />
+    </el-tooltip>
 
     <!-- Create Task Dialog -->
     <el-dialog
@@ -962,7 +1167,7 @@ onMounted(async () => {
           </div>
 
           <!-- Progress Log Form -->
-          <div v-if="canSubmitProgress" class="detail-section">
+          <div v-if="canSubmitProgress && !selectedTask.is_deleted" class="detail-section">
             <h4>更新进度</h4>
             <el-form label-width="80px" size="small">
               <el-form-item label="进度 (%)">
@@ -988,6 +1193,15 @@ onMounted(async () => {
                 <el-button type="primary" size="default" @click="handleLogProgress">提交进度</el-button>
               </el-form-item>
             </el-form>
+          </div>
+
+          <div v-else-if="selectedTask.is_deleted" class="detail-section">
+            <el-alert
+              type="warning"
+              :closable="false"
+              show-icon
+              title="任务已删除，当前仅保留详情和历史记录，不支持继续反馈进展。"
+            />
           </div>
 
           <!-- Progress History -->
@@ -1075,16 +1289,15 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <!-- AI Risk Analysis Drawer (Feature 2) -->
+        <!-- AI Priority Analysis Drawer -->
     <el-drawer
       v-model="riskDrawerVisible"
-      title="AI 风险分析"
+      title="AI 优先级分析"
       size="520px"
       direction="rtl"
     >
-      <div v-loading="loadingRisk" element-loading-text="AI 正在分析项目风险..." class="risk-drawer-content">
+      <div v-loading="loadingRisk" element-loading-text="AI 正在分析当前优先级..." class="risk-drawer-content">
         <template v-if="!loadingRisk && riskAnalysis">
-          <!-- Overall Health Badge -->
           <div class="risk-health-section">
             <div
               class="health-badge"
@@ -1094,15 +1307,55 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- Summary -->
           <div class="risk-summary-section">
-            <h4>概况</h4>
+            <h4>AI 综合判断</h4>
             <p class="risk-summary-text">{{ riskAnalysis.summary }}</p>
           </div>
 
-          <!-- Risk Items -->
+          <div class="priority-list-section">
+            <h4>建议优先推进</h4>
+            <div v-if="priorityInsights.actionItems.length" class="priority-cards">
+              <div v-for="item in priorityInsights.actionItems" :key="item.id" class="priority-card">
+                <div class="priority-card-head">
+                  <el-tag :type="(severityTagType(item.urgency) as any)" size="small" effect="dark">
+                    {{ urgencyLabel(item.urgency) }}
+                  </el-tag>
+                  <span class="priority-card-title">{{ item.title }}</span>
+                </div>
+                <div class="priority-card-meta">
+                  <span>{{ item.assigneeText }}</span>
+                  <span>{{ formatDate(item.deadline) }}</span>
+                  <span>{{ item.progressPct }}%</span>
+                </div>
+                <p class="priority-card-reason">{{ item.reason }}</p>
+              </div>
+            </div>
+            <el-empty v-else description="暂无需要优先推进的任务" :image-size="60" />
+          </div>
+
+          <div class="priority-list-section">
+            <h4>关键节点</h4>
+            <div v-if="priorityInsights.keyNodes.length" class="priority-cards">
+              <div v-for="item in priorityInsights.keyNodes" :key="item.id" class="priority-card node-card">
+                <div class="priority-card-head">
+                  <el-tag :type="(severityTagType(item.urgency) as any)" size="small" effect="plain">
+                    {{ urgencyLabel(item.urgency) }}
+                  </el-tag>
+                  <span class="priority-card-title">{{ item.title }}</span>
+                </div>
+                <div class="priority-card-meta">
+                  <span>{{ item.assigneeText }}</span>
+                  <span>{{ formatDate(item.deadline) }}</span>
+                  <span>{{ item.progressPct }}%</span>
+                </div>
+                <p class="priority-card-reason">{{ item.reason }}</p>
+              </div>
+            </div>
+            <el-empty v-else description="暂无需要特别关注的关键节点" :image-size="60" />
+          </div>
+
           <div class="risk-list-section">
-            <h4>风险列表 ({{ riskAnalysis.risks?.length || 0 }})</h4>
+            <h4>风险明细 ({{ riskAnalysis.risks?.length || 0 }})</h4>
             <div v-if="riskAnalysis.risks && riskAnalysis.risks.length > 0" class="risk-cards">
               <el-card
                 v-for="(risk, idx) in riskAnalysis.risks"
@@ -1119,7 +1372,7 @@ onMounted(async () => {
                 </div>
                 <p class="risk-card-desc">{{ risk.description }}</p>
                 <div v-if="risk.affected_tasks && risk.affected_tasks.length > 0" class="risk-card-tags">
-                  <span class="risk-tag-label">受影响任务:</span>
+                  <span class="risk-tag-label">受影响任务</span>
                   <el-tag
                     v-for="t in risk.affected_tasks"
                     :key="t"
@@ -1131,7 +1384,7 @@ onMounted(async () => {
                   </el-tag>
                 </div>
                 <div v-if="risk.affected_users && risk.affected_users.length > 0" class="risk-card-tags">
-                  <span class="risk-tag-label">受影响人员:</span>
+                  <span class="risk-tag-label">受影响人员</span>
                   <el-tag
                     v-for="u in risk.affected_users"
                     :key="u"
@@ -1685,5 +1938,105 @@ onMounted(async () => {
 
 .risk-suggestion strong {
   color: #303133;
+}
+
+.priority-list-section {
+  margin: 16px 0;
+}
+
+.priority-list-section h4 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  color: #303133;
+}
+
+.priority-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.priority-card {
+  padding: 12px 14px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.node-card {
+  background: #f8fafc;
+}
+
+.priority-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.priority-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.priority-card-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.priority-card-reason {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #606266;
+}
+
+.project-summary-card {
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.project-summary-head h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.project-summary-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.project-summary-section {
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.project-summary-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #909399;
+}
+
+.project-summary-section p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #606266;
+  white-space: pre-wrap;
 }
 </style>

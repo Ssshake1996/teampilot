@@ -134,3 +134,74 @@ async def test_delete_task(client: AsyncClient, auth_headers):
     # Verify deleted
     get_res = await client.get(f"/api/v1/tasks/{tid}", headers=auth_headers)
     assert get_res.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_parent_task_cascades_to_subtasks_and_restore(client: AsyncClient, auth_headers):
+    proj = await client.post("/api/v1/projects", json={"name": "Cascade Delete Project"}, headers=auth_headers)
+    pid = proj.json()["id"]
+    parent = await client.post(
+        f"/api/v1/projects/{pid}/tasks",
+        json={"title": "Parent Task", "description": "Parent description"},
+        headers=auth_headers,
+    )
+    parent_id = parent.json()["id"]
+    child = await client.post(
+        f"/api/v1/tasks/{parent_id}/subtasks",
+        json={"title": "Child Task", "description": "Child description"},
+        headers=auth_headers,
+    )
+    child_id = child.json()["id"]
+
+    delete_res = await client.delete(f"/api/v1/tasks/{parent_id}", headers=auth_headers)
+    assert delete_res.status_code == 200
+
+    list_res = await client.get(f"/api/v1/projects/{pid}/tasks", headers=auth_headers)
+    items = {item["id"]: item for item in list_res.json()["items"]}
+    assert items[parent_id]["is_deleted"] is True
+    assert items[child_id]["is_deleted"] is True
+
+    restore_res = await client.post(f"/api/v1/tasks/{parent_id}/restore", headers=auth_headers)
+    assert restore_res.status_code == 200
+    assert restore_res.json()["is_deleted"] is False
+
+    list_res = await client.get(f"/api/v1/projects/{pid}/tasks", headers=auth_headers)
+    items = {item["id"]: item for item in list_res.json()["items"]}
+    assert items[parent_id]["is_deleted"] is False
+    assert items[child_id]["is_deleted"] is False
+
+
+@pytest.mark.asyncio
+async def test_restore_subtask_blocked_when_parent_deleted(client: AsyncClient, auth_headers):
+    proj = await client.post("/api/v1/projects", json={"name": "Restore Rule Project"}, headers=auth_headers)
+    pid = proj.json()["id"]
+    parent = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Parent"}, headers=auth_headers)
+    parent_id = parent.json()["id"]
+    child = await client.post(f"/api/v1/tasks/{parent_id}/subtasks", json={"title": "Child"}, headers=auth_headers)
+    child_id = child.json()["id"]
+
+    delete_res = await client.delete(f"/api/v1/tasks/{parent_id}", headers=auth_headers)
+    assert delete_res.status_code == 200
+
+    restore_res = await client.post(f"/api/v1/tasks/{child_id}/restore", headers=auth_headers)
+    assert restore_res.status_code == 400
+    assert "Restore the parent task first" in restore_res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_deleted_task_cannot_log_progress(client: AsyncClient, auth_headers):
+    proj = await client.post("/api/v1/projects", json={"name": "Deleted Progress Project"}, headers=auth_headers)
+    pid = proj.json()["id"]
+    task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Deleted Task"}, headers=auth_headers)
+    tid = task.json()["id"]
+
+    delete_res = await client.delete(f"/api/v1/tasks/{tid}", headers=auth_headers)
+    assert delete_res.status_code == 200
+
+    progress_res = await client.post(
+        f"/api/v1/tasks/{tid}/progress",
+        json={"progress_pct": 10, "note": "Should fail"},
+        headers=auth_headers,
+    )
+    assert progress_res.status_code == 400
+    assert progress_res.json()["detail"] == "Deleted tasks cannot accept progress updates."

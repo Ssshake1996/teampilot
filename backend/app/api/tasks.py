@@ -105,7 +105,24 @@ async def delete_task(
     ok = await task_service.delete_task(db, task_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Task not found")
+    await emit_task_event("task.deleted", {"task_id": str(task_id)})
     return {"message": "Task deleted"}
+
+
+@router.post("/tasks/{task_id}/restore", response_model=TaskOut)
+async def restore_task(
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("task.delete")),
+):
+    try:
+        task = await task_service.restore_task(db, task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    await emit_task_event("task.restored", {"task_id": str(task_id)})
+    return await task_service.task_to_out(db, task)
 
 
 @router.post("/tasks/{task_id}/signoff", response_model=TaskOut)

@@ -33,10 +33,7 @@ async def create_project(
     current_user: User = Depends(require_permission("project.create")),
 ):
     project = await project_service.create_project(db, data, current_user.id)
-    return {
-        **{c.name: getattr(project, c.name) for c in project.__table__.columns},
-        "task_count": 0, "completed_count": 0, "member_count": 1,
-    }
+    return await project_service.project_to_out(db, project)
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
@@ -48,10 +45,7 @@ async def get_project(
     project = await project_service.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    return {
-        **{c.name: getattr(project, c.name) for c in project.__table__.columns},
-        "task_count": 0, "completed_count": 0, "member_count": 0,
-    }
+    return await project_service.project_to_out(db, project)
 
 
 @router.patch("/{project_id}", response_model=ProjectOut)
@@ -64,10 +58,7 @@ async def update_project(
     project = await project_service.update_project(db, project_id, data)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    return {
-        **{c.name: getattr(project, c.name) for c in project.__table__.columns},
-        "task_count": 0, "completed_count": 0, "member_count": 0,
-    }
+    return await project_service.project_to_out(db, project)
 
 
 @router.delete("/{project_id}")

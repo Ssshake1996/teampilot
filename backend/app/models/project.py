@@ -25,6 +25,7 @@ class Project(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "projects"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    goal: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[ProjectStatus] = mapped_column(Enum(ProjectStatus), default=ProjectStatus.PLANNING)
     owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)

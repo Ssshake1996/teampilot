@@ -108,6 +108,7 @@ async def _project_snapshot(db: AsyncSession, include_tasks: bool = True) -> lis
         item = {
             "id": str(project.id),
             "name": project.name,
+            "goal": project.goal or "",
             "status": project.status.value,
             "start_date": project.start_date,
             "end_date": project.end_date,
@@ -151,7 +152,7 @@ async def preview_project_plan(db: AsyncSession, prompt: str, llm: LLMClient) ->
             "role": "system",
             "content": (
                 "You are a senior project manager. Return JSON only. "
-                "{\"project\":{\"name\":\"\",\"description\":\"\",\"start_date\":\"YYYY-MM-DD\","
+                "{\"project\":{\"name\":\"\",\"goal\":\"\",\"description\":\"\",\"start_date\":\"YYYY-MM-DD\","
                 "\"end_date\":\"YYYY-MM-DD\"},"
                 "\"tasks\":[{\"title\":\"\",\"description\":\"\",\"priority\":\"medium\","
                 "\"estimated_hours\":8,\"start_date\":\"YYYY-MM-DD\",\"deadline\":\"YYYY-MM-DD\","
@@ -170,6 +171,7 @@ async def preview_project_plan(db: AsyncSession, prompt: str, llm: LLMClient) ->
     ]
     result = await llm.chat_json(messages, temperature=0.2, max_tokens=4096)
     result.setdefault("project", {})
+    result["project"].setdefault("goal", prompt)
     result.setdefault("tasks", [])
     return result
 
@@ -180,6 +182,7 @@ async def commit_project_plan(db: AsyncSession, plan: dict, owner_id: uuid.UUID)
         db,
         ProjectCreate(
             name=project_data.get("name") or "AI generated project",
+            goal=project_data.get("goal") or project_data.get("description") or "",
             description=project_data.get("description") or "",
             start_date=_parse_date(project_data.get("start_date")),
             end_date=_parse_date(project_data.get("end_date")),
@@ -429,6 +432,7 @@ async def project_retrospective(db: AsyncSession, project_id: uuid.UUID, llm: LL
             "content": json.dumps({
                 "project": {
                     "name": project.name,
+                    "goal": project.goal,
                     "description": project.description,
                     "status": project.status.value,
                     "start_date": project.start_date,

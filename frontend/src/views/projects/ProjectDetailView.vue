@@ -152,7 +152,16 @@ onMounted(async () => {
           <el-button @click="router.push('/projects')">返回列表</el-button>
         </div>
       </div>
-      <p class="project-description">{{ project.description || '暂无项目描述' }}</p>
+      <div class="project-overview">
+        <div class="project-section">
+          <h3>项目目标</h3>
+          <p class="project-text">{{ project.goal || '暂无项目目标' }}</p>
+        </div>
+        <div class="project-section">
+          <h3>项目描述</h3>
+          <p class="project-text">{{ project.description || '暂无项目描述' }}</p>
+        </div>
+      </div>
 
       <!-- Tabs -->
       <el-tabs v-model="activeTab" @tab-click="handleTabClick">
@@ -275,10 +284,32 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.project-description {
+.project-overview {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 24px 0;
+}
+
+.project-section {
+  padding: 16px 18px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.project-section h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.project-text {
   color: #606266;
   font-size: 14px;
-  margin: 0 0 24px 0;
+  line-height: 1.7;
+  margin: 0;
+  white-space: pre-wrap;
 }
 
 .tab-placeholder {

@@ -8,6 +8,7 @@ from app.models.project import ProjectStatus, ProjectRole
 
 class ProjectCreate(BaseModel):
     name: str
+    goal: str | None = None
     description: str | None = None
     status: ProjectStatus = ProjectStatus.PLANNING
     start_date: date | None = None
@@ -16,6 +17,7 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     name: str | None = None
+    goal: str | None = None
     description: str | None = None
     status: ProjectStatus | None = None
     start_date: date | None = None
@@ -25,6 +27,7 @@ class ProjectUpdate(BaseModel):
 class ProjectOut(BaseModel):
     id: uuid.UUID
     name: str
+    goal: str | None = None
     description: str | None = None
     status: ProjectStatus
     owner_id: uuid.UUID

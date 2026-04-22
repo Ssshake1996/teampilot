@@ -11,7 +11,7 @@ export const useTaskStore = defineStore('task', () => {
 
   const tasksByStatus = (status: TaskStatus) =>
     tasks.value
-      .filter((t) => t.status === status)
+      .filter((t) => t.status === status && !t.is_deleted)
       .sort((a, b) => a.sort_order - b.sort_order)
 
   async function fetchTasks(projectId: string, params?: Record<string, any>) {

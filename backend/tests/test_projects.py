@@ -8,11 +8,13 @@ async def test_create_project(client: AsyncClient, auth_headers):
     """Test creating a new project."""
     res = await client.post("/api/v1/projects", json={
         "name": "Test Project",
+        "goal": "Ship the milestone on time",
         "description": "A test project",
     }, headers=auth_headers)
     assert res.status_code == 201
     data = res.json()
     assert data["name"] == "Test Project"
+    assert data["goal"] == "Ship the milestone on time"
     assert data["status"] == "planning"
     assert data["member_count"] == 1  # owner auto-added
 
@@ -35,12 +37,16 @@ async def test_get_project(client: AsyncClient, auth_headers):
     """Test getting a single project."""
     create_res = await client.post("/api/v1/projects", json={
         "name": "Detail Project",
+        "goal": "Keep the scope tight",
+        "description": "Project detail description",
     }, headers=auth_headers)
     pid = create_res.json()["id"]
 
     res = await client.get(f"/api/v1/projects/{pid}", headers=auth_headers)
     assert res.status_code == 200
     assert res.json()["name"] == "Detail Project"
+    assert res.json()["goal"] == "Keep the scope tight"
+    assert res.json()["description"] == "Project detail description"
 
 
 @pytest.mark.asyncio
@@ -53,10 +59,12 @@ async def test_update_project(client: AsyncClient, auth_headers):
 
     res = await client.patch(f"/api/v1/projects/{pid}", json={
         "name": "Updated Name",
+        "goal": "Updated goal",
         "status": "active",
     }, headers=auth_headers)
     assert res.status_code == 200
     assert res.json()["name"] == "Updated Name"
+    assert res.json()["goal"] == "Updated goal"
     assert res.json()["status"] == "active"
 
 

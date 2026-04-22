@@ -18,6 +18,9 @@ export const tasksApi = {
   delete(taskId: string) {
     return http.delete(`/tasks/${taskId}`)
   },
+  restore(taskId: string) {
+    return http.post<Task>(`/tasks/${taskId}/restore`)
+  },
   signoff(taskId: string) {
     return http.post<Task>(`/tasks/${taskId}/signoff`)
   },

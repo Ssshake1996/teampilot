@@ -135,6 +135,7 @@ async def seed() -> None:
             owner = users_by_name.get(item["owner"], random.choice(users))
             project = Project(
                 name=item["name"],
+                goal=item.get("goal") or item["description"],
                 description=item["description"],
                 status=item["status"],
                 owner_id=owner.id,

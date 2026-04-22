@@ -243,9 +243,38 @@ async def create_task(
     return task
 
 
-async def get_task(db: AsyncSession, task_id: uuid.UUID) -> Task | None:
-    result = await db.execute(select(Task).where(Task.id == task_id, Task.is_deleted == False))
+async def get_task(
+    db: AsyncSession,
+    task_id: uuid.UUID,
+    include_deleted: bool = False,
+) -> Task | None:
+    query = select(Task).where(Task.id == task_id)
+    if not include_deleted:
+        query = query.where(Task.is_deleted == False)
+    result = await db.execute(query)
     return result.scalar_one_or_none()
+
+
+async def get_task_descendants(db: AsyncSession, task: Task) -> list[Task]:
+    tasks = (
+        await db.execute(
+            select(Task)
+            .where(Task.project_id == task.project_id)
+            .order_by(Task.created_at)
+        )
+    ).scalars().all()
+
+    children_by_parent: dict[uuid.UUID | None, list[Task]] = {}
+    for item in tasks:
+        children_by_parent.setdefault(item.parent_task_id, []).append(item)
+
+    descendants: list[Task] = []
+    stack = list(children_by_parent.get(task.id, []))
+    while stack:
+        current = stack.pop()
+        descendants.append(current)
+        stack.extend(children_by_parent.get(current.id, []))
+    return descendants
 
 
 async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) -> Task | None:
@@ -269,14 +298,34 @@ async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) ->
 
 
 async def delete_task(db: AsyncSession, task_id: uuid.UUID) -> bool:
-    task = await get_task(db, task_id)
+    task = await get_task(db, task_id, include_deleted=True)
     if not task:
         return False
-    task.is_deleted = True
-    task.deleted_at = _now()
+    deleted_at = _now()
+    for item in [task, *await get_task_descendants(db, task)]:
+        item.is_deleted = True
+        item.deleted_at = deleted_at
     await db.flush()
     await db.refresh(task)
     return True
+
+
+async def restore_task(db: AsyncSession, task_id: uuid.UUID) -> Task | None:
+    task = await get_task(db, task_id, include_deleted=True)
+    if not task:
+        return None
+
+    if task.parent_task_id:
+        parent = await get_task(db, task.parent_task_id, include_deleted=True)
+        if parent and parent.is_deleted:
+            raise ValueError("Parent task is deleted. Restore the parent task first.")
+
+    for item in [task, *await get_task_descendants(db, task)]:
+        item.is_deleted = False
+        item.deleted_at = None
+    await db.flush()
+    await db.refresh(task)
+    return task
 
 
 async def signoff_task(db: AsyncSession, task_id: uuid.UUID, user_id: uuid.UUID) -> Task | None:
@@ -321,6 +370,12 @@ async def log_progress(
 ) -> TaskProgress:
     if progress_pct < 0 or progress_pct > 100:
         raise ValueError("Progress must be between 0 and 100.")
+
+    task = await get_task(db, task_id, include_deleted=True)
+    if not task:
+        raise ValueError("Task not found.")
+    if task.is_deleted:
+        raise ValueError("Deleted tasks cannot accept progress updates.")
 
     entry = TaskProgress(
         task_id=task_id,

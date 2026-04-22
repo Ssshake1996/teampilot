@@ -11,6 +11,45 @@ from app.schemas.project import ProjectCreate, ProjectUpdate
 from app.services.task_service import effective_task_status, get_task_assignee_map
 
 
+async def project_to_out(db: AsyncSession, project: Project) -> dict:
+    task_count = (
+        await db.execute(
+            select(func.count(Task.id)).where(
+                Task.project_id == project.id,
+                Task.is_deleted == False,
+            )
+        )
+    ).scalar() or 0
+    done_count = (
+        await db.execute(
+            select(func.count(Task.id)).where(
+                Task.project_id == project.id,
+                Task.status == TaskStatus.DONE,
+                Task.is_deleted == False,
+            )
+        )
+    ).scalar() or 0
+    member_count = (
+        await db.execute(
+            select(func.count(ProjectMember.user_id)).where(ProjectMember.project_id == project.id)
+        )
+    ).scalar() or 0
+    return {
+        "id": project.id,
+        "name": project.name,
+        "goal": project.goal,
+        "description": project.description,
+        "status": project.status,
+        "owner_id": project.owner_id,
+        "start_date": project.start_date,
+        "end_date": project.end_date,
+        "created_at": project.created_at,
+        "task_count": task_count,
+        "completed_count": done_count,
+        "member_count": member_count,
+    }
+
+
 async def list_projects(
     db: AsyncSession,
     page: int = 1,
@@ -32,42 +71,7 @@ async def list_projects(
 
     items = []
     for project in projects:
-        task_count = (
-            await db.execute(
-                select(func.count(Task.id)).where(
-                    Task.project_id == project.id,
-                    Task.is_deleted == False,
-                )
-            )
-        ).scalar()
-        done_count = (
-            await db.execute(
-                select(func.count(Task.id)).where(
-                    Task.project_id == project.id,
-                    Task.status == TaskStatus.DONE,
-                    Task.is_deleted == False,
-                )
-            )
-        ).scalar()
-        member_count = (
-            await db.execute(
-                select(func.count(ProjectMember.user_id)).where(ProjectMember.project_id == project.id)
-            )
-        ).scalar()
-
-        items.append({
-            "id": project.id,
-            "name": project.name,
-            "description": project.description,
-            "status": project.status,
-            "owner_id": project.owner_id,
-            "start_date": project.start_date,
-            "end_date": project.end_date,
-            "created_at": project.created_at,
-            "task_count": task_count,
-            "completed_count": done_count,
-            "member_count": member_count,
-        })
+        items.append(await project_to_out(db, project))
     return items, total
 
 
@@ -160,6 +164,7 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
         task_dict = {
             "id": str(task.id),
             "title": task.title,
+            "description": task.description,
             "status": status,
             "priority": task.priority.value,
             "assignee_name": "、".join(assignee_names) if assignee_names else None,
@@ -175,6 +180,7 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "parent_task_id": str(task.parent_task_id) if task.parent_task_id else None,
             "is_deleted": bool(task.is_deleted),
+            "deleted_at": task.deleted_at.isoformat() if task.deleted_at else None,
             "is_overdue": bool(
                 not task.is_deleted
                 and task.deadline
