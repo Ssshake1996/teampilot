@@ -1,11 +1,8 @@
 """Role-based permission configuration."""
-from sqlalchemy import String, Boolean, JSON
-from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models import Base
+ROLE_PERMISSIONS_KEY = "role_permissions"
+BUILTIN_ROLES = {"admin", "manager", "member"}
 
-
-# All available permissions grouped by category
 PERMISSION_CATALOG = {
     "project": {
         "label": "项目管理",
@@ -20,7 +17,7 @@ PERMISSION_CATALOG = {
         "label": "任务管理",
         "items": [
             ("task.create", "创建任务/子任务"),
-            ("task.edit", "编辑任务(标题/描述/优先级)"),
+            ("task.edit", "编辑任务"),
             ("task.assign", "分配负责人"),
             ("task.signoff", "任务完成会签"),
             ("task.delete", "删除任务"),
@@ -49,7 +46,7 @@ PERMISSION_CATALOG = {
         "label": "AI 功能",
         "items": [
             ("ai.estimate", "AI 推荐/预估"),
-            ("ai.risk", "AI 风险分析"),
+            ("ai.risk", "AI 项目分析"),
             ("ai.capability", "AI 能力分析"),
             ("ai.config", "AI 配置管理"),
             ("ai.prompt", "AI Prompt 配置"),
@@ -64,9 +61,8 @@ PERMISSION_CATALOG = {
     },
 }
 
-# Default permissions per role
 DEFAULT_PERMISSIONS = {
-    "admin": [p for cat in PERMISSION_CATALOG.values() for p, _ in cat["items"]],
+    "admin": [permission for category in PERMISSION_CATALOG.values() for permission, _ in category["items"]],
     "manager": [
         "project.create", "project.edit", "project.member.manage",
         "task.create", "task.edit", "task.assign", "task.signoff", "task.delete",
@@ -81,10 +77,3 @@ DEFAULT_PERMISSIONS = {
         "ai.estimate",
     ],
 }
-
-
-class RolePermission(Base):
-    __tablename__ = "role_permissions"
-
-    role: Mapped[str] = mapped_column(String(50), primary_key=True)
-    permissions: Mapped[list] = mapped_column(JSON, default=list)

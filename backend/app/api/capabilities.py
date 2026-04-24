@@ -27,11 +27,4 @@ async def get_profile(
             "on_time_rate": None,
             "last_analyzed_at": None,
         }
-    return {
-        "user_id": str(profile.user_id),
-        "summary": profile.summary,
-        "ai_analysis": profile.ai_analysis,
-        "performance_score": float(profile.performance_score) if profile.performance_score else None,
-        "on_time_rate": float(profile.on_time_rate) if profile.on_time_rate else None,
-        "last_analyzed_at": profile.last_analyzed_at,
-    }
+    return profile

@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base, TimestampMixin, UUIDMixin
@@ -51,43 +51,13 @@ class Task(Base, UUIDMixin, TimestampMixin):
     signed_off_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    required_skills_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
     # Relationships
     project = relationship("Project", back_populates="tasks")
-    assignee_links = relationship("TaskAssignee", back_populates="task", cascade="all, delete-orphan")
+    assignments = relationship("Assignment", back_populates="task", cascade="all, delete-orphan")
     creator = relationship("User", back_populates="created_tasks", foreign_keys=[creator_id])
     signed_off_by = relationship("User", foreign_keys=[signed_off_by_id])
     parent_task = relationship("Task", remote_side="Task.id", backref="subtasks")
-    progress_logs = relationship("TaskProgress", back_populates="task", cascade="all, delete-orphan")
-    required_skills = relationship("TaskRequiredSkill", back_populates="task", cascade="all, delete-orphan")
-
-
-class TaskAssignee(Base):
-    __tablename__ = "task_assignees"
-
-    task_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("tasks.id"), primary_key=True
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("users.id"), primary_key=True
-    )
-
-    task = relationship("Task", back_populates="assignee_links")
-    user = relationship("User", back_populates="task_assignments")
-
-
-class TaskRequiredSkill(Base):
-    __tablename__ = "task_required_skills"
-
-    task_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("tasks.id"), primary_key=True
-    )
-    skill_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("skills.id"), primary_key=True
-    )
-    min_proficiency: Mapped[int] = mapped_column(Integer, default=1)
-
-    # Relationships
-    task = relationship("Task", back_populates="required_skills")
-    skill = relationship("Skill")
+    events = relationship("TaskEvent", back_populates="task", cascade="all, delete-orphan")

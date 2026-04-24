@@ -2,7 +2,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.capability_profile import AIConfig
+from app.models.system_setting import SystemSetting
 from app.services.ai import prompts as defaults
 
 FIELD_MAP = {
@@ -20,6 +20,7 @@ async def get_system_prompt(db: AsyncSession, prompt_key: str) -> str:
     if not field_name:
         return default_value
 
-    result = await db.execute(select(getattr(AIConfig, field_name)).where(AIConfig.id == 1))
-    custom = result.scalar_one_or_none()
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "ai_config"))
+    setting = result.scalar_one_or_none()
+    custom = (setting.value_json or {}).get(field_name) if setting else None
     return custom or default_value

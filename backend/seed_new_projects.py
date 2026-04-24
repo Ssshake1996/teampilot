@@ -14,9 +14,10 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.database import async_session
-from app.models.project import Project, ProjectMember, ProjectRole, ProjectStatus
-from app.models.task import Task, TaskAssignee, TaskPriority, TaskStatus
-from app.models.task_progress import TaskProgress
+from app.models.assignment import Assignment, AssignmentKind
+from app.models.project import Project, ProjectRole, ProjectStatus
+from app.models.task import Task, TaskPriority, TaskStatus
+from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
 
 
@@ -108,13 +109,20 @@ async def add_task(
 
     assignees = [users_by_name[name] for name in assignee_names if name in users_by_name]
     for user in assignees:
-        db.add(TaskAssignee(task_id=task.id, user_id=user.id))
+        db.add(Assignment(
+            project_id=project.id,
+            task_id=task.id,
+            user_id=user.id,
+            kind=AssignmentKind.TASK_ASSIGNEE,
+            role="assignee",
+        ))
 
     if progress_pct is not None and assignees:
         db.add(
-            TaskProgress(
+            TaskEvent(
                 task_id=task.id,
-                user_id=assignees[0].id,
+                actor_id=assignees[0].id,
+                event_type=TaskEventType.PROGRESS,
                 progress_pct=progress_pct,
                 note="种子数据初始化进展",
                 hours_spent=Decimal(str(max(1, round(float(estimated_hours) * progress_pct / 100, 1)))),
@@ -150,10 +158,11 @@ async def seed() -> None:
                 if not user:
                     continue
                 db.add(
-                    ProjectMember(
+                    Assignment(
                         project_id=project.id,
                         user_id=user.id,
-                        role_in_project=ProjectRole.LEAD if user.id == owner.id else ProjectRole.MEMBER,
+                        kind=AssignmentKind.PROJECT_MEMBER,
+                        role=(ProjectRole.LEAD.value if user.id == owner.id else ProjectRole.MEMBER.value),
                     )
                 )
 

@@ -7,8 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.permission import DEFAULT_PERMISSIONS, RolePermission
+from app.models.system_setting import SystemSetting
 from app.models.user import User
+from app.permissions import DEFAULT_PERMISSIONS, ROLE_PERMISSIONS_KEY
 from app.utils.security import decode_token
 
 security = HTTPBearer()
@@ -50,10 +51,11 @@ async def get_role_permissions(db: AsyncSession, role: str) -> list[str]:
     if role == "admin":
         return list(DEFAULT_PERMISSIONS["admin"])
 
-    result = await db.execute(select(RolePermission).where(RolePermission.role == role))
-    role_permission = result.scalar_one_or_none()
-    if role_permission:
-        return list(role_permission.permissions or [])
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == ROLE_PERMISSIONS_KEY))
+    setting = result.scalar_one_or_none()
+    permissions_by_role = setting.value_json if setting and isinstance(setting.value_json, dict) else {}
+    if role in permissions_by_role:
+        return list(permissions_by_role.get(role) or [])
 
     return list(DEFAULT_PERMISSIONS.get(role, []))
 

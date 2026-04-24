@@ -2,13 +2,12 @@ import uuid
 
 from sqlalchemy import case, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
+from app.models.assignment import Assignment, AssignmentKind
 from app.models.user import User
-from app.models.task import Task, TaskAssignee, TaskStatus
+from app.models.task import Task, TaskStatus
 from app.models.project import Project
 from app.models.skill import UserSkill, Skill
-from app.models.capability_profile import CapabilityProfile
 from app.schemas.user import UserUpdate
 from app.services.task_service import effective_task_status
 
@@ -91,21 +90,32 @@ async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
 
     total_q = await db.execute(
         select(func.count(func.distinct(Task.id)))
-        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
-        .where(TaskAssignee.user_id == user_id, Task.status != TaskStatus.DONE, Task.is_deleted == False)
+        .join(Assignment, Assignment.task_id == Task.id)
+        .where(
+            Assignment.user_id == user_id,
+            Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+            Task.status != TaskStatus.DONE,
+            Task.is_deleted == False,
+        )
     )
     total = total_q.scalar()
 
     in_progress_q = await db.execute(
         select(func.count(func.distinct(Task.id)))
-        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
-        .where(TaskAssignee.user_id == user_id, Task.status == TaskStatus.IN_PROGRESS, Task.is_deleted == False)
+        .join(Assignment, Assignment.task_id == Task.id)
+        .where(
+            Assignment.user_id == user_id,
+            Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+            Task.status == TaskStatus.IN_PROGRESS,
+            Task.is_deleted == False,
+        )
     )
     in_progress = in_progress_q.scalar()
 
     overdue_q = await db.execute(
-        select(func.count(func.distinct(Task.id))).join(TaskAssignee, TaskAssignee.task_id == Task.id).where(
-            TaskAssignee.user_id == user_id,
+        select(func.count(func.distinct(Task.id))).join(Assignment, Assignment.task_id == Task.id).where(
+            Assignment.user_id == user_id,
+            Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
             Task.status != TaskStatus.DONE,
             Task.is_deleted == False,
             Task.deadline < now,
@@ -115,24 +125,36 @@ async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
 
     est_q = await db.execute(
         select(func.coalesce(func.sum(Task.estimated_hours), 0))
-        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .join(Assignment, Assignment.task_id == Task.id)
         .where(
-            TaskAssignee.user_id == user_id, Task.status != TaskStatus.DONE, Task.is_deleted == False
+            Assignment.user_id == user_id,
+            Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+            Task.status != TaskStatus.DONE,
+            Task.is_deleted == False,
         )
     )
     est_hours = float(est_q.scalar())
 
     act_q = await db.execute(
         select(func.coalesce(func.sum(Task.actual_hours), 0))
-        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
-        .where(TaskAssignee.user_id == user_id, Task.is_deleted == False)
+        .join(Assignment, Assignment.task_id == Task.id)
+        .where(
+            Assignment.user_id == user_id,
+            Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+            Task.is_deleted == False,
+        )
     )
     act_hours = float(act_q.scalar())
 
     completed_q = await db.execute(
         select(func.count(func.distinct(Task.id)))
-        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
-        .where(TaskAssignee.user_id == user_id, Task.status == TaskStatus.DONE, Task.is_deleted == False)
+        .join(Assignment, Assignment.task_id == Task.id)
+        .where(
+            Assignment.user_id == user_id,
+            Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+            Task.status == TaskStatus.DONE,
+            Task.is_deleted == False,
+        )
     )
     completed = completed_q.scalar()
 
@@ -172,9 +194,13 @@ async def get_user_tasks(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
     """Get all tasks assigned to a user with project name."""
     result = await db.execute(
         select(Task, Project.name)
-        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
+        .join(Assignment, Assignment.task_id == Task.id)
         .join(Project, Task.project_id == Project.id)
-        .where(TaskAssignee.user_id == user_id, Task.is_deleted == False)
+        .where(
+            Assignment.user_id == user_id,
+            Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+            Task.is_deleted == False,
+        )
         .order_by(Task.status, Task.deadline)
     )
     return [
@@ -192,16 +218,23 @@ async def get_user_tasks(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
     ]
 
 
-def _capability_to_dict(profile: CapabilityProfile | None) -> dict | None:
-    if not profile:
+def _capability_to_dict(user: User) -> dict | None:
+    has_capability = any([
+        user.capability_summary,
+        user.capability_ai_analysis,
+        user.performance_score is not None,
+        user.on_time_rate is not None,
+        user.last_analyzed_at is not None,
+    ])
+    if not has_capability:
         return None
     return {
-        "user_id": profile.user_id,
-        "summary": profile.summary,
-        "ai_analysis": profile.ai_analysis,
-        "performance_score": float(profile.performance_score) if profile.performance_score is not None else None,
-        "on_time_rate": float(profile.on_time_rate) if profile.on_time_rate is not None else None,
-        "last_analyzed_at": profile.last_analyzed_at,
+        "user_id": user.id,
+        "summary": user.capability_summary,
+        "ai_analysis": user.capability_ai_analysis,
+        "performance_score": float(user.performance_score) if user.performance_score is not None else None,
+        "on_time_rate": float(user.on_time_rate) if user.on_time_rate is not None else None,
+        "last_analyzed_at": user.last_analyzed_at,
     }
 
 
@@ -234,13 +267,18 @@ async def get_users_overview(
 
     count_rows = (await db.execute(
         select(
-            TaskAssignee.user_id,
+            Assignment.user_id,
             func.count(func.distinct(Task.id)).label("assigned"),
             func.sum(case((Task.status == TaskStatus.IN_PROGRESS, 1), else_=0)).label("in_progress"),
         )
-        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
-        .where(TaskAssignee.user_id.in_(user_ids), Task.is_deleted == False, Task.status != TaskStatus.DONE)
-        .group_by(TaskAssignee.user_id)
+        .join(Assignment, Assignment.task_id == Task.id)
+        .where(
+            Assignment.user_id.in_(user_ids),
+            Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+            Task.is_deleted == False,
+            Task.status != TaskStatus.DONE,
+        )
+        .group_by(Assignment.user_id)
     )).all()
     workload_map = {
         uid: {"assigned_tasks": int(assigned or 0), "in_progress_tasks": int(in_progress or 0)}
@@ -262,15 +300,12 @@ async def get_user_detail_bundle(db: AsyncSession, user_id: uuid.UUID) -> dict |
     user = await get_user(db, user_id)
     if not user:
         return None
-    capability = (await db.execute(
-        select(CapabilityProfile).where(CapabilityProfile.user_id == user_id)
-    )).scalar_one_or_none()
     return {
         "user": user,
         "skills": await get_user_skills(db, user_id),
         "workload": await get_user_workload(db, user_id),
         "tasks": await get_user_tasks(db, user_id),
-        "capability": _capability_to_dict(capability),
+        "capability": _capability_to_dict(user),
     }
 
 

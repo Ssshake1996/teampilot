@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.project import ProjectMember, ProjectRole
-from app.models.task import Task, TaskAssignee, TaskStatus
-from app.models.task_progress import TaskProgress
+from app.models.assignment import Assignment, AssignmentKind
+from app.models.task import Task, TaskStatus
+from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
 from app.schemas.task import TaskCreate, TaskUpdate
 
@@ -77,9 +77,13 @@ async def get_task_progress_pct(db: AsyncSession, task: Task) -> int:
 
     progress = (
         await db.execute(
-            select(TaskProgress.progress_pct)
-            .where(TaskProgress.task_id == task.id)
-            .order_by(TaskProgress.created_at.desc())
+            select(TaskEvent.progress_pct)
+            .where(
+                TaskEvent.task_id == task.id,
+                TaskEvent.event_type == TaskEventType.PROGRESS,
+                TaskEvent.progress_pct.isnot(None),
+            )
+            .order_by(TaskEvent.created_at.desc())
             .limit(1)
         )
     ).scalar()
@@ -96,9 +100,12 @@ async def get_task_assignee_map(
 
     rows = (
         await db.execute(
-            select(TaskAssignee.task_id, TaskAssignee.user_id, User.full_name)
-            .join(User, TaskAssignee.user_id == User.id)
-            .where(TaskAssignee.task_id.in_(task_ids))
+            select(Assignment.task_id, Assignment.user_id, User.full_name)
+            .join(User, Assignment.user_id == User.id)
+            .where(
+                Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+                Assignment.task_id.in_(task_ids),
+            )
         )
     ).all()
     mapping: dict[uuid.UUID, list[dict]] = {task_id: [] for task_id in task_ids}
@@ -120,7 +127,12 @@ async def sync_task_assignees(
 ) -> None:
     normalized = normalize_assignee_ids(assignee_ids)
     existing_rows = (
-        await db.execute(select(TaskAssignee).where(TaskAssignee.task_id == task.id))
+        await db.execute(
+            select(Assignment).where(
+                Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+                Assignment.task_id == task.id,
+            )
+        )
     ).scalars().all()
     existing_ids = {row.user_id for row in existing_rows}
     desired_ids = set(normalized)
@@ -131,35 +143,12 @@ async def sync_task_assignees(
 
     for user_id in normalized:
         if user_id not in existing_ids:
-            db.add(TaskAssignee(task_id=task.id, user_id=user_id))
-
-    await db.flush()
-
-
-async def ensure_project_members_for_assignees(
-    db: AsyncSession,
-    project_id: uuid.UUID,
-    assignee_ids: list[uuid.UUID],
-) -> None:
-    normalized = normalize_assignee_ids(assignee_ids)
-    if not normalized:
-        return
-
-    existing_ids = set((
-        await db.execute(
-            select(ProjectMember.user_id).where(
-                ProjectMember.project_id == project_id,
-                ProjectMember.user_id.in_(normalized),
-            )
-        )
-    ).scalars().all())
-
-    for user_id in normalized:
-        if user_id not in existing_ids:
-            db.add(ProjectMember(
-                project_id=project_id,
+            db.add(Assignment(
+                project_id=task.project_id,
+                task_id=task.id,
                 user_id=user_id,
-                role_in_project=ProjectRole.MEMBER,
+                kind=AssignmentKind.TASK_ASSIGNEE,
+                role="assignee",
             ))
 
     await db.flush()
@@ -177,7 +166,7 @@ async def task_to_out(
     assignee_ids = [item["user_id"] for item in assignees]
     assignee_names = [item["full_name"] for item in assignees if item["full_name"]]
     if assignee_name is None and assignee_names:
-        assignee_name = "、".join(assignee_names)
+        assignee_name = ", ".join(assignee_names)
 
     signed_off_by_name = None
     if task.signed_off_by_id:
@@ -224,7 +213,10 @@ async def list_tasks(
         )
 
     if user_id:
-        assigned_task_ids = select(TaskAssignee.task_id).where(TaskAssignee.user_id == user_id)
+        assigned_task_ids = select(Assignment.task_id).where(
+            Assignment.user_id == user_id,
+            Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+        )
         q = q.where(Task.id.in_(assigned_task_ids))
         count_q = count_q.where(Task.id.in_(assigned_task_ids))
 
@@ -270,7 +262,6 @@ async def create_task(
     db.add(task)
     await db.flush()
     await sync_task_assignees(db, task, assignee_ids)
-    await ensure_project_members_for_assignees(db, project_id, assignee_ids)
     return task
 
 
@@ -323,13 +314,12 @@ async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) ->
         setattr(task, field, value)
     if assignee_ids is not None:
         await sync_task_assignees(db, task, assignee_ids)
-        await ensure_project_members_for_assignees(db, task.project_id, assignee_ids)
     await db.flush()
     await db.refresh(task)
     return task
 
 
-async def delete_task(db: AsyncSession, task_id: uuid.UUID) -> bool:
+async def delete_task(db: AsyncSession, task_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> bool:
     task = await get_task(db, task_id, include_deleted=True)
     if not task:
         return False
@@ -337,12 +327,19 @@ async def delete_task(db: AsyncSession, task_id: uuid.UUID) -> bool:
     for item in [task, *await get_task_descendants(db, task)]:
         item.is_deleted = True
         item.deleted_at = deleted_at
+        if actor_id:
+            db.add(TaskEvent(
+                task_id=item.id,
+                actor_id=actor_id,
+                event_type=TaskEventType.DELETE,
+                note="Task deleted",
+            ))
     await db.flush()
     await db.refresh(task)
     return True
 
 
-async def restore_task(db: AsyncSession, task_id: uuid.UUID) -> Task | None:
+async def restore_task(db: AsyncSession, task_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> Task | None:
     task = await get_task(db, task_id, include_deleted=True)
     if not task:
         return None
@@ -355,6 +352,13 @@ async def restore_task(db: AsyncSession, task_id: uuid.UUID) -> Task | None:
     for item in [task, *await get_task_descendants(db, task)]:
         item.is_deleted = False
         item.deleted_at = None
+        if actor_id:
+            db.add(TaskEvent(
+                task_id=item.id,
+                actor_id=actor_id,
+                event_type=TaskEventType.RESTORE,
+                note="Task restored",
+            ))
     await db.flush()
     await db.refresh(task)
     return task
@@ -374,6 +378,13 @@ async def signoff_task(db: AsyncSession, task_id: uuid.UUID, user_id: uuid.UUID)
     task.completed_at = signed_at
     task.signed_off_by_id = user_id
     task.signed_off_at = signed_at
+    db.add(TaskEvent(
+        task_id=task.id,
+        actor_id=user_id,
+        event_type=TaskEventType.SIGNOFF,
+        progress_pct=100,
+        note="Task signed off",
+    ))
     await db.flush()
     await db.refresh(task)
     return task
@@ -388,7 +399,6 @@ async def assign_task(
     if not task:
         return None
     await sync_task_assignees(db, task, normalize_assignee_ids(assignee_ids))
-    await ensure_project_members_for_assignees(db, task.project_id, assignee_ids)
     await db.refresh(task)
     return task
 
@@ -400,7 +410,7 @@ async def log_progress(
     progress_pct: int,
     note: str | None,
     hours_spent: float | None,
-) -> TaskProgress:
+) -> TaskEvent:
     if progress_pct < 0 or progress_pct > 100:
         raise ValueError("Progress must be between 0 and 100.")
 
@@ -410,9 +420,10 @@ async def log_progress(
     if task.is_deleted:
         raise ValueError("Deleted tasks cannot accept progress updates.")
 
-    entry = TaskProgress(
+    entry = TaskEvent(
         task_id=task_id,
-        user_id=user_id,
+        actor_id=user_id,
+        event_type=TaskEventType.PROGRESS,
         progress_pct=progress_pct,
         note=note,
         hours_spent=hours_spent,
@@ -425,17 +436,20 @@ async def log_progress(
 async def get_progress_history(db: AsyncSession, task_id: uuid.UUID) -> list[dict]:
     rows = (
         await db.execute(
-            select(TaskProgress, User.full_name)
-            .join(User, TaskProgress.user_id == User.id)
-            .where(TaskProgress.task_id == task_id)
-            .order_by(TaskProgress.created_at.desc())
+            select(TaskEvent, User.full_name)
+            .join(User, TaskEvent.actor_id == User.id)
+            .where(
+                TaskEvent.task_id == task_id,
+                TaskEvent.event_type == TaskEventType.PROGRESS,
+            )
+            .order_by(TaskEvent.created_at.desc())
         )
     ).all()
     return [
         {
             "id": tp.id,
             "task_id": tp.task_id,
-            "user_id": tp.user_id,
+            "user_id": tp.actor_id,
             "user_name": name,
             "progress_pct": tp.progress_pct,
             "note": tp.note,

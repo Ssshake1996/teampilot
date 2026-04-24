@@ -25,9 +25,9 @@ class UUIDMixin:
 
 
 from app.models.user import User  # noqa: E402, F401
-from app.models.project import Project, ProjectMember  # noqa: E402, F401
-from app.models.task import Task, TaskAssignee, TaskRequiredSkill  # noqa: E402, F401
+from app.models.project import Project  # noqa: E402, F401
+from app.models.task import Task  # noqa: E402, F401
+from app.models.assignment import Assignment  # noqa: E402, F401
+from app.models.task_event import TaskEvent  # noqa: E402, F401
+from app.models.system_setting import SystemSetting  # noqa: E402, F401
 from app.models.skill import Skill, UserSkill  # noqa: E402, F401
-from app.models.task_progress import TaskProgress  # noqa: E402, F401
-from app.models.capability_profile import CapabilityProfile, AIConfig  # noqa: E402, F401
-from app.models.permission import RolePermission  # noqa: E402, F401

@@ -102,7 +102,7 @@ async def delete_task(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("task.delete")),
 ):
-    ok = await task_service.delete_task(db, task_id)
+    ok = await task_service.delete_task(db, task_id, current_user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="Task not found")
     await emit_task_event("task.deleted", {"task_id": str(task_id)})
@@ -116,7 +116,7 @@ async def restore_task(
     current_user: User = Depends(require_permission("task.delete")),
 ):
     try:
-        task = await task_service.restore_task(db, task_id)
+        task = await task_service.restore_task(db, task_id, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not task:
@@ -173,7 +173,7 @@ async def log_progress(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await emit_progress_event({"task_id": str(task_id), "progress_pct": data.progress_pct})
     return {
-        "id": entry.id, "task_id": entry.task_id, "user_id": entry.user_id,
+        "id": entry.id, "task_id": entry.task_id, "user_id": entry.actor_id,
         "user_name": current_user.full_name, "progress_pct": entry.progress_pct,
         "note": entry.note, "hours_spent": float(entry.hours_spent) if entry.hours_spent else None,
         "created_at": entry.created_at,

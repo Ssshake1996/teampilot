@@ -1,7 +1,6 @@
 import json
 import uuid
 import traceback
-from decimal import Decimal
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session
 from app.dependencies import get_current_user, require_permission
-from app.models.capability_profile import AIConfig
+from app.models.system_setting import SystemSetting
 from app.models.user import User
 from app.services.ai.llm_client import LLMClient
 from app.services.ai.task_assignment import recommend_assignee
@@ -32,6 +31,20 @@ from app.services import task_service
 from app.websocket.events import emit_progress_event
 
 router = APIRouter(prefix="/ai", tags=["AI"])
+
+AI_CONFIG_KEY = "ai_config"
+AI_CONFIG_DEFAULT = {
+    "api_base_url": "",
+    "api_key_encrypted": "",
+    "model_name": "",
+    "max_tokens": 2048,
+    "temperature": 0.7,
+    "prompt_task_assign": None,
+    "prompt_capability": None,
+    "prompt_risk": None,
+    "prompt_estimate": None,
+    "prompt_decompose": None,
+}
 
 
 # ── Request Models ──
@@ -118,33 +131,51 @@ def sse_error(message: str) -> str:
     return sse_event("error", {"message": message})
 
 
+async def _get_config_dict(db: AsyncSession) -> dict:
+    setting = (
+        await db.execute(select(SystemSetting).where(SystemSetting.key == AI_CONFIG_KEY))
+    ).scalar_one_or_none()
+    if not setting:
+        return AI_CONFIG_DEFAULT.copy()
+    return {**AI_CONFIG_DEFAULT, **(setting.value_json or {})}
+
+
+async def _save_config_dict(db: AsyncSession, payload: dict) -> None:
+    setting = (
+        await db.execute(select(SystemSetting).where(SystemSetting.key == AI_CONFIG_KEY))
+    ).scalar_one_or_none()
+    if setting:
+        setting.value_json = payload
+    else:
+        db.add(SystemSetting(key=AI_CONFIG_KEY, value_json=payload))
+    await db.flush()
+
+
 async def _get_llm_from_db() -> LLMClient:
     """Get LLM client using a fresh db session (for use inside generators)."""
     async with async_session() as db:
-        result = await db.execute(select(AIConfig).where(AIConfig.id == 1))
-        config = result.scalar_one_or_none()
-        if not config or not config.api_key_encrypted:
+        config = await _get_config_dict(db)
+        if not config.get("api_key_encrypted"):
             raise ValueError("AI service not configured")
         return LLMClient(
-            base_url=config.api_base_url,
-            api_key=config.api_key_encrypted,
-            model=config.model_name,
-            max_tokens=config.max_tokens,
-            temperature=float(config.temperature),
+            base_url=config.get("api_base_url") or "",
+            api_key=config["api_key_encrypted"],
+            model=config.get("model_name") or "",
+            max_tokens=int(config.get("max_tokens") or 2048),
+            temperature=float(config.get("temperature") or 0.7),
         )
 
 
 async def _get_llm(db: AsyncSession) -> LLMClient:
-    result = await db.execute(select(AIConfig).where(AIConfig.id == 1))
-    config = result.scalar_one_or_none()
-    if not config or not config.api_key_encrypted:
+    config = await _get_config_dict(db)
+    if not config.get("api_key_encrypted"):
         raise HTTPException(status_code=503, detail="AI service not configured")
     return LLMClient(
-        base_url=config.api_base_url,
-        api_key=config.api_key_encrypted,
-        model=config.model_name,
-        max_tokens=config.max_tokens,
-        temperature=float(config.temperature),
+        base_url=config.get("api_base_url") or "",
+        api_key=config["api_key_encrypted"],
+        model=config.get("model_name") or "",
+        max_tokens=int(config.get("max_tokens") or 2048),
+        temperature=float(config.get("temperature") or 0.7),
     )
 
 
@@ -474,18 +505,17 @@ async def get_config(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("ai.config")),
 ):
-    result = await db.execute(select(AIConfig).where(AIConfig.id == 1))
-    config = result.scalar_one_or_none()
-    if not config:
+    config = await _get_config_dict(db)
+    if not config.get("api_base_url") and not config.get("model_name") and not config.get("api_key_encrypted"):
         return {"api_base_url": "", "api_key_masked": "", "model_name": "", "max_tokens": 2048, "temperature": 0.7}
-    key = config.api_key_encrypted
+    key = config.get("api_key_encrypted") or ""
     masked = key[:8] + "****" + key[-4:] if len(key) > 12 else "****"
     return {
-        "api_base_url": config.api_base_url,
+        "api_base_url": config.get("api_base_url") or "",
         "api_key_masked": masked,
-        "model_name": config.model_name,
-        "max_tokens": config.max_tokens,
-        "temperature": float(config.temperature),
+        "model_name": config.get("model_name") or "",
+        "max_tokens": int(config.get("max_tokens") or 2048),
+        "temperature": float(config.get("temperature") or 0.7),
     }
 
 
@@ -495,25 +525,18 @@ async def update_config(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("ai.config")),
 ):
-    result = await db.execute(select(AIConfig).where(AIConfig.id == 1))
-    config = result.scalar_one_or_none()
-    if config:
-        config.api_base_url = data.api_base_url
-        if data.api_key:
-            config.api_key_encrypted = data.api_key
-        config.model_name = data.model_name
-        config.max_tokens = data.max_tokens
-        config.temperature = Decimal(str(data.temperature))
-    else:
-        if not data.api_key:
-            raise HTTPException(status_code=400, detail="API Key is required for initial setup")
-        config = AIConfig(
-            id=1, api_base_url=data.api_base_url, api_key_encrypted=data.api_key,
-            model_name=data.model_name, max_tokens=data.max_tokens,
-            temperature=Decimal(str(data.temperature)),
-        )
-        db.add(config)
-    await db.flush()
+    config = await _get_config_dict(db)
+    if data.api_key:
+        config["api_key_encrypted"] = data.api_key
+    elif not config.get("api_key_encrypted"):
+        raise HTTPException(status_code=400, detail="API Key is required for initial setup")
+    config.update({
+        "api_base_url": data.api_base_url,
+        "model_name": data.model_name,
+        "max_tokens": data.max_tokens,
+        "temperature": data.temperature,
+    })
+    await _save_config_dict(db, config)
     return {"message": "AI config updated"}
 
 
@@ -549,8 +572,7 @@ async def get_prompts(
     """Get all custom system prompts. Returns defaults from prompts.py if not customized."""
     from app.services.ai import prompts as default_prompts
 
-    result = await db.execute(select(AIConfig).where(AIConfig.id == 1))
-    config = result.scalar_one_or_none()
+    config = await _get_config_dict(db)
 
     defaults = {
         "prompt_task_assign": default_prompts.TASK_ASSIGNMENT_SYSTEM,
@@ -562,7 +584,7 @@ async def get_prompts(
 
     items = []
     for field in PROMPT_FIELDS:
-        custom = getattr(config, field, None) if config else None
+        custom = config.get(field)
         items.append({
             "key": field,
             "label": PROMPT_LABELS[field],
@@ -587,12 +609,7 @@ async def update_prompt(
     if data.key not in PROMPT_FIELDS:
         raise HTTPException(status_code=400, detail=f"Invalid prompt key: {data.key}")
 
-    result = await db.execute(select(AIConfig).where(AIConfig.id == 1))
-    config = result.scalar_one_or_none()
-    if not config:
-        raise HTTPException(status_code=400, detail="AI config not initialized")
-
-    # Empty value = reset to default
-    setattr(config, data.key, data.value.strip() or None)
-    await db.flush()
+    config = await _get_config_dict(db)
+    config[data.key] = data.value.strip() or None
+    await _save_config_dict(db, config)
     return {"message": f"Prompt '{PROMPT_LABELS[data.key]}' updated"}

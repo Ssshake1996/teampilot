@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.assignment import Assignment, AssignmentKind
 from app.models.project import Project
-from app.models.task import Task, TaskAssignee, TaskStatus
+from app.models.task import Task, TaskStatus
 from app.models.user import User
 from app.services.ai.llm_client import LLMClient
 from app.services.ai.prompts import RISK_ANALYSIS_USER
@@ -55,16 +56,22 @@ async def analyze_project_risk(db: AsyncSession, project_id: uuid.UUID, llm: LLM
     overdue_assignees = await get_task_assignee_map(db, overdue_task_rows)
     overdue_text = "\n".join(
         f"- {task.title} | deadline: {task.deadline} | status: {task.status.value} | assignees: "
-        f"{'、'.join(item['full_name'] for item in overdue_assignees.get(task.id, []) if item['full_name']) or 'unassigned'}"
+        f"{', '.join(item['full_name'] for item in overdue_assignees.get(task.id, []) if item['full_name']) or 'unassigned'}"
         for task in overdue_task_rows
     ) or "none"
 
     members = (
         await db.execute(
             select(User.id, User.full_name, func.count(Task.id))
-            .join(TaskAssignee, TaskAssignee.user_id == User.id)
-            .join(Task, Task.id == TaskAssignee.task_id)
-            .where(Task.project_id == project_id, Task.status != TaskStatus.DONE, User.is_active == True)
+            .join(Assignment, Assignment.user_id == User.id)
+            .join(Task, Task.id == Assignment.task_id)
+            .where(
+                Task.project_id == project_id,
+                Task.status != TaskStatus.DONE,
+                Task.is_deleted == False,
+                Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+                User.is_active == True,
+            )
             .group_by(User.id, User.full_name)
             .having(func.count(Task.id) > 0)
         )
@@ -82,7 +89,7 @@ async def analyze_project_risk(db: AsyncSession, project_id: uuid.UUID, llm: LLM
     lagging_assignees = await get_task_assignee_map(db, lagging_rows)
     lagging_text = "\n".join(
         f"- {task.title} | deadline: {task.deadline} | assignees: "
-        f"{'、'.join(item['full_name'] for item in lagging_assignees.get(task.id, []) if item['full_name']) or 'unassigned'}"
+        f"{', '.join(item['full_name'] for item in lagging_assignees.get(task.id, []) if item['full_name']) or 'unassigned'}"
         for task in lagging_rows
     ) or "none"
 

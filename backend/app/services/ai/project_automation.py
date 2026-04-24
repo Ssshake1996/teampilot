@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project, ProjectStatus
 from app.models.task import Task, TaskPriority, TaskStatus
-from app.models.task_progress import TaskProgress
+from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
 from app.schemas.project import ProjectCreate
 from app.schemas.task import TaskCreate
@@ -132,7 +132,7 @@ async def _project_snapshot(db: AsyncSession, include_tasks: bool = True) -> lis
                     "title": task.title,
                     "status": task_service.effective_task_status(task).value,
                     "progress_pct": await task_service.get_task_progress_pct(db, task),
-                    "assignee": "、".join(
+                    "assignee": ", ".join(
                         entry["full_name"] for entry in assignee_map.get(task.id, []) if entry["full_name"]
                     ),
                     "deadline": task.deadline,
@@ -350,12 +350,15 @@ async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
     active_users = await _active_users(db)
     recent_rows = (
         await db.execute(
-            select(TaskProgress, Task.title, Project.name, User.full_name)
-            .join(Task, TaskProgress.task_id == Task.id)
+            select(TaskEvent, Task.title, Project.name, User.full_name)
+            .join(Task, TaskEvent.task_id == Task.id)
             .join(Project, Task.project_id == Project.id)
-            .join(User, TaskProgress.user_id == User.id)
-            .where(Project.status != ProjectStatus.ARCHIVED)
-            .order_by(TaskProgress.created_at.desc())
+            .join(User, TaskEvent.actor_id == User.id)
+            .where(
+                Project.status != ProjectStatus.ARCHIVED,
+                TaskEvent.event_type == TaskEventType.PROGRESS,
+            )
+            .order_by(TaskEvent.created_at.desc())
             .limit(120)
         )
     ).all()
@@ -441,11 +444,14 @@ async def project_retrospective(db: AsyncSession, project_id: uuid.UUID, llm: LL
     tasks = await project_service.get_project_task_tree(db, project_id)
     progress_rows = (
         await db.execute(
-            select(TaskProgress, Task.title, User.full_name)
-            .join(Task, TaskProgress.task_id == Task.id)
-            .join(User, TaskProgress.user_id == User.id)
-            .where(Task.project_id == project_id)
-            .order_by(TaskProgress.created_at.desc())
+            select(TaskEvent, Task.title, User.full_name)
+            .join(Task, TaskEvent.task_id == Task.id)
+            .join(User, TaskEvent.actor_id == User.id)
+            .where(
+                Task.project_id == project_id,
+                TaskEvent.event_type == TaskEventType.PROGRESS,
+            )
+            .order_by(TaskEvent.created_at.desc())
             .limit(120)
         )
     ).all()

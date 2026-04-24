@@ -1,15 +1,14 @@
 import uuid
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.task import Task, TaskAssignee, TaskStatus
-from app.models.user import User
-from app.models.project import ProjectMember
-from app.models.skill import UserSkill, Skill
+from app.models.skill import Skill, UserSkill
+from app.models.task import Task
 from app.services.ai.llm_client import LLMClient
-from app.services.ai.prompts import TASK_DECOMPOSE_USER
 from app.services.ai.prompt_loader import get_system_prompt
+from app.services.ai.prompts import TASK_DECOMPOSE_USER
+from app.services.ai.task_assignment import _active_task_count, _project_candidate_users
 
 
 async def decompose_task(db: AsyncSession, task_id: uuid.UUID, llm: LLMClient) -> dict:
@@ -17,46 +16,30 @@ async def decompose_task(db: AsyncSession, task_id: uuid.UUID, llm: LLMClient) -
     if not task:
         raise ValueError("Task not found")
 
-    # Get project members with skills
-    members = (await db.execute(
-        select(ProjectMember, User)
-        .join(User, ProjectMember.user_id == User.id)
-        .where(ProjectMember.project_id == task.project_id, User.is_active == True)
-    )).all()
-
     members_text_parts = []
-    for pm, user in members:
-        # User skills
+    for user in await _project_candidate_users(db, task.project_id):
         user_skills = (await db.execute(
             select(Skill.name, UserSkill.proficiency)
             .join(Skill, UserSkill.skill_id == Skill.id)
             .where(UserSkill.user_id == user.id)
         )).all()
-        skills_str = ", ".join(f"{name}({prof}级)" for name, prof in user_skills) or "无记录"
-
-        # Current task count
-        task_count = (await db.execute(
-            select(func.count(Task.id))
-            .join(TaskAssignee, TaskAssignee.task_id == Task.id)
-            .where(TaskAssignee.user_id == user.id, Task.status != TaskStatus.DONE)
-        )).scalar()
-
+        skills_str = ", ".join(f"{name}({prof})" for name, prof in user_skills) or "none"
         members_text_parts.append(
-            f"- ID: {user.id} | 姓名: {user.full_name} | 技能: {skills_str} | 当前任务数: {task_count}"
+            f"- ID: {user.id} | name: {user.full_name} | skills: {skills_str} | "
+            f"active_tasks: {await _active_task_count(db, user.id)}"
         )
 
     prompt = TASK_DECOMPOSE_USER.format(
         task_title=task.title,
-        task_description=task.description or "无详细描述",
+        task_description=task.description or "none",
         task_priority=task.priority.value,
-        estimated_hours=task.estimated_hours or "未估算",
-        deadline=task.deadline or "未设置",
-        team_members="\n".join(members_text_parts) or "无成员数据",
+        estimated_hours=task.estimated_hours or "not estimated",
+        deadline=task.deadline or "not set",
+        team_members="\n".join(members_text_parts) or "none",
     )
 
     sys_prompt = await get_system_prompt(db, "decompose")
-    result = await llm.chat_json([
+    return await llm.chat_json([
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": prompt},
     ])
-    return result

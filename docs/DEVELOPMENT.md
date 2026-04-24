@@ -141,7 +141,7 @@ npm run build
 
 - 登录与注册只使用 `username`
 - 不再维护邮箱字段
-- 任务负责人使用多负责人模型：`task_assignees`
+- 任务负责人使用统一分配表：`assignments(kind='task_assignee')`
 - 任务状态只保留三态：`NOT_STARTED / IN_PROGRESS / DONE`
 - 当前仓库不再维护“启动时兼容旧数据结构”的自动迁移逻辑
 - 如果字段结构发生破坏性变化，默认做法是备份后重建，不做旧数据兼容

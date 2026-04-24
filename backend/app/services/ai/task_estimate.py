@@ -1,58 +1,42 @@
 import uuid
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.task import Task, TaskAssignee, TaskStatus
-from app.models.user import User
-from app.models.project import ProjectMember
-from app.models.skill import UserSkill, Skill
+from app.models.project import Project
+from app.models.skill import Skill, UserSkill
 from app.services.ai.llm_client import LLMClient
-from app.services.ai.prompts import TASK_ESTIMATE_USER
 from app.services.ai.prompt_loader import get_system_prompt
+from app.services.ai.prompts import TASK_ESTIMATE_USER
+from app.services.ai.task_assignment import _active_task_count, _project_candidate_users
 
 
 async def estimate_task(
     db: AsyncSession, project_id: uuid.UUID, title: str, description: str, llm: LLMClient
 ) -> dict:
-    from app.models.project import Project
-
     project = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
     if not project:
         raise ValueError("Project not found")
 
-    # Get project members with skills and workload
-    members = (await db.execute(
-        select(ProjectMember, User)
-        .join(User, ProjectMember.user_id == User.id)
-        .where(ProjectMember.project_id == project_id, User.is_active == True)
-    )).all()
-
     members_text_parts = []
-    for pm, user in members:
+    for user in await _project_candidate_users(db, project_id):
         user_skills = (await db.execute(
             select(Skill.name, UserSkill.proficiency)
             .join(Skill, UserSkill.skill_id == Skill.id)
             .where(UserSkill.user_id == user.id)
         )).all()
-        skills_str = ", ".join(f"{name}({prof})" for name, prof in user_skills) or "无"
-
-        task_count = (await db.execute(
-            select(func.count(Task.id))
-            .join(TaskAssignee, TaskAssignee.task_id == Task.id)
-            .where(TaskAssignee.user_id == user.id, Task.status != TaskStatus.DONE)
-        )).scalar()
-
+        skills_str = ", ".join(f"{name}({prof})" for name, prof in user_skills) or "none"
         members_text_parts.append(
-            f"- ID: {user.id} | {user.full_name} | 技能: {skills_str} | "
-            f"当前任务: {task_count}个 | 个人介绍: {user.bio or '未填写'}"
+            f"- ID: {user.id} | {user.full_name} | skills: {skills_str} | "
+            f"active_tasks: {await _active_task_count(db, user.id)} | "
+            f"bio: {user.bio or 'not provided'}"
         )
 
     prompt = TASK_ESTIMATE_USER.format(
         task_title=title,
-        task_description=description or "无详细描述",
+        task_description=description or "none",
         project_name=project.name,
-        team_members="\n".join(members_text_parts) or "无成员",
+        team_members="\n".join(members_text_parts) or "none",
     )
 
     sys_prompt = await get_system_prompt(db, "estimate")

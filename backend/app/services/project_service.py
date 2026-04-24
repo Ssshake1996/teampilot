@@ -1,11 +1,13 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import case, delete, func, select, union
+from sqlalchemy import delete, func, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.project import Project, ProjectMember, ProjectStatus
-from app.models.task import Task, TaskAssignee, TaskStatus
+from app.models.assignment import Assignment, AssignmentKind
+from app.models.project import Project, ProjectRole, ProjectStatus
+from app.models.task import Task, TaskStatus
+from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectUpdate
 from app.services.task_service import effective_task_status, get_task_assignee_map
@@ -13,10 +15,17 @@ from app.services.task_service import effective_task_status, get_task_assignee_m
 
 async def get_project_member_count(db: AsyncSession, project_id: uuid.UUID) -> int:
     member_union = union(
-        select(ProjectMember.user_id.label("user_id")).where(ProjectMember.project_id == project_id),
-        select(TaskAssignee.user_id.label("user_id"))
-        .join(Task, TaskAssignee.task_id == Task.id)
-        .where(Task.project_id == project_id, Task.is_deleted == False),
+        select(Assignment.user_id.label("user_id")).where(
+            Assignment.project_id == project_id,
+            Assignment.kind == AssignmentKind.PROJECT_MEMBER,
+        ),
+        select(Assignment.user_id.label("user_id"))
+        .join(Task, Assignment.task_id == Task.id)
+        .where(
+            Assignment.project_id == project_id,
+            Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+            Task.is_deleted == False,
+        ),
     ).subquery()
     return (
         await db.execute(select(func.count()).select_from(member_union))
@@ -87,7 +96,12 @@ async def create_project(db: AsyncSession, data: ProjectCreate, owner_id: uuid.U
     project = Project(**data.model_dump(), owner_id=owner_id)
     db.add(project)
     await db.flush()
-    db.add(ProjectMember(project_id=project.id, user_id=owner_id, role_in_project="lead"))
+    db.add(Assignment(
+        project_id=project.id,
+        user_id=owner_id,
+        kind=AssignmentKind.PROJECT_MEMBER,
+        role=ProjectRole.LEAD.value,
+    ))
     await db.flush()
     return project
 
@@ -119,17 +133,50 @@ async def delete_project(db: AsyncSession, project_id: uuid.UUID) -> bool:
 
 
 async def get_project_members(db: AsyncSession, project_id: uuid.UUID) -> list[dict]:
-    rows = (
+    explicit_rows = (
         await db.execute(
-            select(ProjectMember, User)
-            .join(User, ProjectMember.user_id == User.id)
-            .where(ProjectMember.project_id == project_id)
+            select(Assignment, User)
+            .join(User, Assignment.user_id == User.id)
+            .where(
+                Assignment.project_id == project_id,
+                Assignment.kind == AssignmentKind.PROJECT_MEMBER,
+            )
         )
     ).all()
-    return [
-        {"user_id": pm.user_id, "full_name": user.full_name, "role_in_project": pm.role_in_project}
-        for pm, user in rows
-    ]
+
+    member_by_user: dict[uuid.UUID, dict] = {}
+    valid_roles = {role.value for role in ProjectRole}
+    for assignment, user in explicit_rows:
+        role = assignment.role if assignment.role in valid_roles else ProjectRole.MEMBER.value
+        member_by_user[assignment.user_id] = {
+            "user_id": assignment.user_id,
+            "full_name": user.full_name,
+            "role_in_project": role,
+        }
+
+    assignee_rows = (
+        await db.execute(
+            select(Assignment, User)
+            .join(User, Assignment.user_id == User.id)
+            .join(Task, Assignment.task_id == Task.id)
+            .where(
+                Assignment.project_id == project_id,
+                Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+                Task.is_deleted == False,
+            )
+        )
+    ).all()
+    for assignment, user in assignee_rows:
+        member_by_user.setdefault(assignment.user_id, {
+            "user_id": assignment.user_id,
+            "full_name": user.full_name,
+            "role_in_project": ProjectRole.MEMBER.value,
+        })
+
+    return sorted(
+        member_by_user.values(),
+        key=lambda item: ((item["full_name"] or ""), str(item["user_id"])),
+    )
 
 
 async def add_project_member(
@@ -138,15 +185,33 @@ async def add_project_member(
     user_id: uuid.UUID,
     role: str,
 ) -> None:
-    db.add(ProjectMember(project_id=project_id, user_id=user_id, role_in_project=role))
+    existing = (
+        await db.execute(
+            select(Assignment).where(
+                Assignment.project_id == project_id,
+                Assignment.user_id == user_id,
+                Assignment.kind == AssignmentKind.PROJECT_MEMBER,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        existing.role = role
+    else:
+        db.add(Assignment(
+            project_id=project_id,
+            user_id=user_id,
+            kind=AssignmentKind.PROJECT_MEMBER,
+            role=role,
+        ))
     await db.flush()
 
 
 async def remove_project_member(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) -> None:
     await db.execute(
-        delete(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == user_id,
+        delete(Assignment).where(
+            Assignment.project_id == project_id,
+            Assignment.user_id == user_id,
+            Assignment.kind == AssignmentKind.PROJECT_MEMBER,
         )
     )
     await db.flush()
@@ -175,7 +240,7 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
             "description": task.description,
             "status": status,
             "priority": task.priority.value,
-            "assignee_name": "、".join(assignee_names) if assignee_names else None,
+            "assignee_name": ", ".join(assignee_names) if assignee_names else None,
             "assignee_ids": [str(item["user_id"]) for item in assignees],
             "assignee_names": assignee_names,
             "estimated_hours": float(task.estimated_hours) if task.estimated_hours else None,
@@ -201,16 +266,18 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
         if task.parent_task_id:
             children_map.setdefault(str(task.parent_task_id), []).append(task_dict)
 
-    from app.models.task_progress import TaskProgress
-
     progress_map: dict[str, int] = {}
     note_map: dict[str, str] = {}
     progress_rows = (
         await db.execute(
-            select(TaskProgress.task_id, TaskProgress.progress_pct, TaskProgress.note)
-            .join(Task, TaskProgress.task_id == Task.id)
+            select(TaskEvent.task_id, TaskEvent.progress_pct, TaskEvent.note)
+            .join(Task, TaskEvent.task_id == Task.id)
             .where(Task.project_id == project_id)
-            .order_by(TaskProgress.created_at.desc())
+            .where(
+                TaskEvent.event_type == TaskEventType.PROGRESS,
+                TaskEvent.progress_pct.isnot(None),
+            )
+            .order_by(TaskEvent.created_at.desc())
         )
     ).all()
     for task_id, progress_pct, note in progress_rows:

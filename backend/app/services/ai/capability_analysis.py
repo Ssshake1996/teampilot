@@ -1,16 +1,31 @@
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.task import Task, TaskAssignee, TaskStatus
-from app.models.skill import UserSkill, Skill
+from app.models.assignment import Assignment, AssignmentKind
+from app.models.skill import Skill, UserSkill
+from app.models.task import Task, TaskStatus
 from app.models.user import User
-from app.models.capability_profile import CapabilityProfile
 from app.services.ai.llm_client import LLMClient
-from app.services.ai.prompts import CAPABILITY_ANALYSIS_USER
 from app.services.ai.prompt_loader import get_system_prompt
+from app.services.ai.prompts import CAPABILITY_ANALYSIS_USER
+
+
+def _rating(value) -> Decimal | None:
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None
+
+
+def _assigned_task_ids(user_id: uuid.UUID):
+    return select(Assignment.task_id).where(
+        Assignment.user_id == user_id,
+        Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+    )
 
 
 async def analyze_capability(db: AsyncSession, user_id: uuid.UUID, llm: LLMClient) -> dict:
@@ -18,72 +33,77 @@ async def analyze_capability(db: AsyncSession, user_id: uuid.UUID, llm: LLMClien
     if not user:
         raise ValueError("User not found")
 
-    # Get skills
     user_skills = (await db.execute(
         select(UserSkill, Skill.name, Skill.category)
         .join(Skill, UserSkill.skill_id == Skill.id)
         .where(UserSkill.user_id == user_id)
     )).all()
     skills_text = "\n".join(
-        f"- {name} ({cat or '未分类'}): {us.proficiency}/5" for us, name, cat in user_skills
-    ) or "暂无技能记录"
+        f"- {name} ({cat or 'uncategorized'}): {us.proficiency}/5"
+        for us, name, cat in user_skills
+    ) or "none"
 
-    # Task stats
+    task_ids = _assigned_task_ids(user_id)
     done = (await db.execute(
-        select(func.count(Task.id))
-        .join(TaskAssignee, TaskAssignee.task_id == Task.id)
-        .where(TaskAssignee.user_id == user_id, Task.status == TaskStatus.DONE)
-    )).scalar()
+        select(func.count(Task.id)).where(
+            Task.id.in_(task_ids),
+            Task.status == TaskStatus.DONE,
+            Task.is_deleted == False,
+        )
+    )).scalar() or 0
 
     on_time = (await db.execute(
         select(func.count(Task.id)).where(
-            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user_id)),
+            Task.id.in_(_assigned_task_ids(user_id)),
             Task.status == TaskStatus.DONE,
+            Task.is_deleted == False,
+            Task.deadline.isnot(None),
             Task.completed_at <= Task.deadline,
         )
-    )).scalar()
+    )).scalar() or 0
     on_time_rate = round(on_time / done * 100, 1) if done > 0 else 0
 
-    # Hours deviation
     est_sum = (await db.execute(
         select(func.sum(Task.estimated_hours)).where(
-            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user_id)),
+            Task.id.in_(_assigned_task_ids(user_id)),
             Task.status == TaskStatus.DONE,
+            Task.is_deleted == False,
             Task.estimated_hours.isnot(None),
         )
     )).scalar() or 0
     act_sum = (await db.execute(
         select(func.sum(Task.actual_hours)).where(
-            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user_id)),
+            Task.id.in_(_assigned_task_ids(user_id)),
             Task.status == TaskStatus.DONE,
+            Task.is_deleted == False,
             Task.actual_hours.isnot(None),
         )
     )).scalar() or 0
     deviation = round((float(act_sum) - float(est_sum)) / float(est_sum) * 100, 1) if est_sum > 0 else 0
 
-    # Recent tasks
     recent = (await db.execute(
         select(Task.title, Task.status, Task.priority, Task.completed_at)
         .where(
-            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user_id)),
+            Task.id.in_(_assigned_task_ids(user_id)),
             Task.status == TaskStatus.DONE,
+            Task.is_deleted == False,
         )
         .order_by(Task.completed_at.desc())
         .limit(10)
     )).all()
     recent_text = "\n".join(
-        f"- {title} (优先级: {pri}, 完成时间: {comp})"
-        for title, status, pri, comp in recent
-    ) or "暂无记录"
+        f"- {title} (priority: {priority.value}, completed_at: {completed_at})"
+        for title, _status, priority, completed_at in recent
+    ) or "none"
 
     prompt = CAPABILITY_ANALYSIS_USER.format(
         full_name=user.full_name,
-        role=f"{user.role}；个人介绍：{user.bio or '未填写'}",
+        role=f"{user.role}; bio: {user.bio or 'not provided'}",
         skills=skills_text,
         completed_tasks=done,
         on_time_rate=on_time_rate,
         hours_deviation=deviation,
-        task_categories="综合类型",
+        task_categories="mixed",
         recent_tasks=recent_text,
     )
 
@@ -93,27 +113,11 @@ async def analyze_capability(db: AsyncSession, user_id: uuid.UUID, llm: LLMClien
         {"role": "user", "content": prompt},
     ])
 
-    # Save to capability profile
-    profile = (await db.execute(
-        select(CapabilityProfile).where(CapabilityProfile.user_id == user_id)
-    )).scalar_one_or_none()
-
-    if profile:
-        profile.ai_analysis = result
-        profile.performance_score = result.get("overall_rating", 0)
-        profile.on_time_rate = on_time_rate
-        profile.summary = result.get("summary", "")
-        profile.last_analyzed_at = datetime.now(timezone.utc)
-    else:
-        profile = CapabilityProfile(
-            user_id=user_id,
-            ai_analysis=result,
-            performance_score=result.get("overall_rating", 0),
-            on_time_rate=on_time_rate,
-            summary=result.get("summary", ""),
-            last_analyzed_at=datetime.now(timezone.utc),
-        )
-        db.add(profile)
+    user.capability_ai_analysis = result
+    user.performance_score = _rating(result.get("overall_rating"))
+    user.on_time_rate = Decimal(str(on_time_rate))
+    user.capability_summary = result.get("summary", "")
+    user.last_analyzed_at = datetime.now(timezone.utc)
     await db.flush()
 
     return result

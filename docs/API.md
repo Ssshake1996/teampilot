@@ -120,7 +120,7 @@ curl -X POST http://localhost:8000/api/v1/ai/progress-import/commit \
   -d '{"updates":[{"task_id":"xxx","progress_pct":80,"note":"任务A完成到80%","person_name":"张三","reported_at":"2026-04-16 18:00"}]}'
 ```
 
-确认后会写入 `task_progress` 历史记录，并触发前端刷新。进度达到 100% 的任务仍需会签后才会标记为已完成。
+确认后会写入 `task_events` 的进度事件，并触发前端刷新。进度达到 100% 的任务仍需会签后才会标记为已完成。
 
 ### AI 项目搭建与管理助手
 

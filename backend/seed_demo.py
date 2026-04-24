@@ -11,19 +11,32 @@ import random
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+from sqlalchemy import text
+
 from app.database import async_session, engine
 from app.models import Base
-from app.models.capability_profile import AIConfig
-from app.models.project import Project, ProjectMember, ProjectRole, ProjectStatus
+from app.models.assignment import Assignment, AssignmentKind
+from app.models.project import Project, ProjectRole, ProjectStatus
 from app.models.skill import Skill, UserSkill
-from app.models.task import Task, TaskAssignee, TaskPriority, TaskStatus
-from app.models.task_progress import TaskProgress
+from app.models.system_setting import SystemSetting
+from app.models.task import Task, TaskPriority, TaskStatus
+from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User, UserRole
 from app.utils.security import hash_password
 
 
 NOW = datetime.now(timezone.utc)
 DEFAULT_PASSWORD = "123456"
+
+LEGACY_TABLES = [
+    "task_required_skills",
+    "task_progress",
+    "task_assignees",
+    "project_members",
+    "capability_profiles",
+    "ai_config",
+    "role_permissions",
+]
 
 
 TEAM = [
@@ -244,13 +257,20 @@ async def add_task(
     await db.flush()
 
     for user in assignee_users:
-        db.add(TaskAssignee(task_id=task.id, user_id=user.id))
+        db.add(Assignment(
+            project_id=project.id,
+            task_id=task.id,
+            user_id=user.id,
+            kind=AssignmentKind.TASK_ASSIGNEE,
+            role="assignee",
+        ))
 
     if progress_pct is not None and assignee_users:
         db.add(
-            TaskProgress(
+            TaskEvent(
                 task_id=task.id,
-                user_id=assignee_users[0].id,
+                actor_id=assignee_users[0].id,
+                event_type=TaskEventType.PROGRESS,
                 progress_pct=progress_pct,
                 note=note or "进展已同步",
                 hours_spent=Decimal(str(max(1, round(float(estimated_hours) * progress_pct / 100, 1)))),
@@ -262,6 +282,9 @@ async def add_task(
 
 async def seed() -> None:
     async with engine.begin() as conn:
+        cascade = " CASCADE" if conn.dialect.name == "postgresql" else ""
+        for table_name in LEGACY_TABLES:
+            await conn.execute(text(f"DROP TABLE IF EXISTS {table_name}{cascade}"))
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
@@ -335,10 +358,11 @@ async def seed() -> None:
 
             for member_name in item["members"]:
                 db.add(
-                    ProjectMember(
+                    Assignment(
                         project_id=project.id,
                         user_id=users_by_name[member_name].id,
-                        role_in_project=ProjectRole.LEAD if member_name == item["owner"] else ProjectRole.MEMBER,
+                        kind=AssignmentKind.PROJECT_MEMBER,
+                        role=(ProjectRole.LEAD.value if member_name == item["owner"] else ProjectRole.MEMBER.value),
                     )
                 )
 
@@ -381,13 +405,15 @@ async def seed() -> None:
                     )
 
         db.add(
-            AIConfig(
-                id=1,
-                api_base_url="https://coding.dashscope.aliyuncs.com/v1",
-                api_key_encrypted="",
-                model_name="qwen3.5-plus",
-                max_tokens=4096,
-                temperature=Decimal("0.7"),
+            SystemSetting(
+                key="ai_config",
+                value_json={
+                    "api_base_url": "https://coding.dashscope.aliyuncs.com/v1",
+                    "api_key_encrypted": "",
+                    "model_name": "qwen3.5-plus",
+                    "max_tokens": 4096,
+                    "temperature": 0.7,
+                },
             )
         )
 

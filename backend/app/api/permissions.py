@@ -1,16 +1,35 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user, get_role_permissions as get_effective_role_permissions, require_permission
+from app.models.system_setting import SystemSetting
 from app.models.user import User
-from app.models.permission import RolePermission, PERMISSION_CATALOG, DEFAULT_PERMISSIONS
+from app.permissions import BUILTIN_ROLES, DEFAULT_PERMISSIONS, PERMISSION_CATALOG, ROLE_PERMISSIONS_KEY
 
 router = APIRouter(prefix="/permissions", tags=["权限管理"])
 
-BUILTIN_ROLES = {"admin", "manager", "member"}
+
+async def _get_role_map(db: AsyncSession) -> dict[str, list[str]]:
+    setting = (
+        await db.execute(select(SystemSetting).where(SystemSetting.key == ROLE_PERMISSIONS_KEY))
+    ).scalar_one_or_none()
+    if not setting or not isinstance(setting.value_json, dict):
+        return {}
+    return {str(role): list(permissions or []) for role, permissions in setting.value_json.items()}
+
+
+async def _save_role_map(db: AsyncSession, role_map: dict[str, list[str]]) -> None:
+    setting = (
+        await db.execute(select(SystemSetting).where(SystemSetting.key == ROLE_PERMISSIONS_KEY))
+    ).scalar_one_or_none()
+    if setting:
+        setting.value_json = role_map
+    else:
+        db.add(SystemSetting(key=ROLE_PERMISSIONS_KEY, value_json=role_map))
+    await db.flush()
 
 
 @router.get("/me")
@@ -26,7 +45,6 @@ async def get_my_permissions(
 
 @router.get("/catalog")
 async def get_catalog(current_user: User = Depends(require_permission("system.role_manage"))):
-    """Get all available permissions grouped by category."""
     return PERMISSION_CATALOG
 
 
@@ -35,21 +53,18 @@ async def get_role_permissions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("system.role_manage")),
 ):
-    """Get permissions for all roles (built-in + custom)."""
-    result = await db.execute(select(RolePermission).order_by(RolePermission.role))
-    db_roles = {rp.role: rp.permissions for rp in result.scalars().all()}
-
+    saved_roles = await _get_role_map(db)
     roles = {}
-    # Built-in roles first (with defaults if not customized)
+
     for role in ["admin", "manager", "member"]:
         roles[role] = {
-            "permissions": db_roles.get(role, DEFAULT_PERMISSIONS.get(role, [])),
+            "permissions": saved_roles.get(role, DEFAULT_PERMISSIONS.get(role, [])),
             "builtin": True,
         }
-    # Custom roles
-    for role, perms in db_roles.items():
+
+    for role, permissions in saved_roles.items():
         if role not in BUILTIN_ROLES:
-            roles[role] = {"permissions": perms, "builtin": False}
+            roles[role] = {"permissions": permissions, "builtin": False}
     return roles
 
 
@@ -64,20 +79,16 @@ async def update_role_permissions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("system.role_manage")),
 ):
-    """Create or update permissions for a role."""
-    if data.role == "admin":
+    role = data.role.strip()
+    if role == "admin":
         raise HTTPException(status_code=400, detail="Admin permissions cannot be modified")
-    if not data.role.strip():
+    if not role:
         raise HTTPException(status_code=400, detail="Role name cannot be empty")
 
-    result = await db.execute(select(RolePermission).where(RolePermission.role == data.role))
-    rp = result.scalar_one_or_none()
-    if rp:
-        rp.permissions = data.permissions
-    else:
-        db.add(RolePermission(role=data.role, permissions=data.permissions))
-    await db.flush()
-    return {"message": f"Role '{data.role}' saved"}
+    role_map = await _get_role_map(db)
+    role_map[role] = data.permissions
+    await _save_role_map(db, role_map)
+    return {"message": f"Role '{role}' saved"}
 
 
 class RoleCreate(BaseModel):
@@ -91,28 +102,27 @@ async def create_role(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("system.role_manage")),
 ):
-    """Create a new custom role."""
     name = data.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Role name cannot be empty")
+    if name in BUILTIN_ROLES:
+        raise HTTPException(status_code=400, detail="Built-in role already exists")
 
-    existing = await db.execute(select(RolePermission).where(RolePermission.role == name))
-    if existing.scalar_one_or_none():
+    role_map = await _get_role_map(db)
+    if name in role_map:
         raise HTTPException(status_code=400, detail="Role already exists")
 
-    # Copy permissions from another role if specified
-    perms = []
-    if data.copy_from:
-        src = await db.execute(select(RolePermission).where(RolePermission.role == data.copy_from))
-        src_rp = src.scalar_one_or_none()
-        if src_rp:
-            perms = list(src_rp.permissions)
-        elif data.copy_from in DEFAULT_PERMISSIONS:
-            perms = list(DEFAULT_PERMISSIONS[data.copy_from])
+    permissions = []
+    source = data.copy_from.strip()
+    if source:
+        if source in role_map:
+            permissions = list(role_map[source])
+        elif source in DEFAULT_PERMISSIONS:
+            permissions = list(DEFAULT_PERMISSIONS[source])
 
-    db.add(RolePermission(role=name, permissions=perms))
-    await db.flush()
-    return {"message": f"Role '{name}' created", "permissions": perms}
+    role_map[name] = permissions
+    await _save_role_map(db, role_map)
+    return {"message": f"Role '{name}' created", "permissions": permissions}
 
 
 @router.delete("/roles/{role_name}")
@@ -121,14 +131,13 @@ async def delete_role(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("system.role_manage")),
 ):
-    """Delete a custom role (built-in roles cannot be deleted)."""
     if role_name in BUILTIN_ROLES:
         raise HTTPException(status_code=400, detail="Cannot delete built-in role")
 
-    result = await db.execute(select(RolePermission).where(RolePermission.role == role_name))
-    if not result.scalar_one_or_none():
+    role_map = await _get_role_map(db)
+    if role_name not in role_map:
         raise HTTPException(status_code=404, detail="Role not found")
 
-    await db.execute(delete(RolePermission).where(RolePermission.role == role_name))
-    await db.flush()
+    del role_map[role_name]
+    await _save_role_map(db, role_map)
     return {"message": f"Role '{role_name}' deleted"}

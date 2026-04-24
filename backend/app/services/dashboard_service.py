@@ -1,11 +1,12 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.assignment import Assignment, AssignmentKind
 from app.models.project import Project, ProjectStatus
-from app.models.task import Task, TaskAssignee, TaskStatus
-from app.models.task_progress import TaskProgress
+from app.models.task import Task, TaskStatus
+from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
 
 
@@ -42,7 +43,10 @@ async def get_team_workload(db: AsyncSession) -> list[dict]:
     result = []
     for u in users:
         base_q = select(func.count(Task.id)).join(Project, Task.project_id == Project.id).where(
-            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == u.id)),
+            Task.id.in_(select(Assignment.task_id).where(
+                Assignment.user_id == u.id,
+                Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
+            )),
             Project.status != ProjectStatus.ARCHIVED,
             Task.is_deleted == False,
         )
@@ -60,12 +64,15 @@ async def get_team_workload(db: AsyncSession) -> list[dict]:
 
 async def get_recent_activity(db: AsyncSession, limit: int = 20) -> list[dict]:
     result = await db.execute(
-        select(TaskProgress, User.full_name, Task.title, Project.name)
-        .join(User, TaskProgress.user_id == User.id)
-        .join(Task, TaskProgress.task_id == Task.id)
+        select(TaskEvent, User.full_name, Task.title, Project.name)
+        .join(User, TaskEvent.actor_id == User.id)
+        .join(Task, TaskEvent.task_id == Task.id)
         .join(Project, Task.project_id == Project.id)
-        .where(Project.status != ProjectStatus.ARCHIVED)
-        .order_by(TaskProgress.created_at.desc())
+        .where(
+            Project.status != ProjectStatus.ARCHIVED,
+            TaskEvent.event_type == TaskEventType.PROGRESS,
+        )
+        .order_by(TaskEvent.created_at.desc())
         .limit(limit)
     )
     rows = result.all()
@@ -95,8 +102,11 @@ async def get_my_tasks_quadrant(db: AsyncSession, user_id) -> dict:
         select(Task, Project.name)
         .join(Project, Task.project_id == Project.id)
         .where(
-            Task.id.in_(select(TaskAssignee.task_id).where(
-                TaskAssignee.user_id == (user_id if isinstance(user_id, uuid_mod.UUID) else uuid_mod.UUID(str(user_id)))
+            Task.id.in_(select(Assignment.task_id).where(
+                Assignment.user_id == (
+                    user_id if isinstance(user_id, uuid_mod.UUID) else uuid_mod.UUID(str(user_id))
+                ),
+                Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
             )),
             Task.status != TaskStatus.DONE,
             Task.is_deleted == False,
