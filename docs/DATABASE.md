@@ -75,6 +75,52 @@
 
 保存技能库和成员技能熟练度。
 
+### data_connectors
+
+保存公司内部平台 API 的白名单连接器。任务数据 Skill 只能调用这里配置的平台，不允许 AI 自由访问任意地址。
+
+关键字段：
+- `name`, `key`, `description`
+- `base_url`
+- `auth_type`: `none`, `bearer`, `api_key`, `basic`, `dynamic_token`
+- `auth_config_json`, `headers_json`
+- `timeout_seconds`, `verify_tls`, `is_enabled`
+
+说明：
+- `verify_tls` 默认关闭，适配公司内网自签证书场景。
+- 连接器配置由系统设置中的“数据连接器”维护。
+- `dynamic_token` 会在执行任务数据 Skill 前调用认证接口获取 token，并在进程内按 `cache_seconds` 或认证响应中的过期时间缓存；服务重启后会重新获取。
+
+### task_data_skills
+
+保存任务绑定的数据采集 Skill。用户用白话描述数据来源，AI 或规则解析为可执行 `skill_json`，确认后可重复执行。
+
+关键字段：
+- `task_id`, `connector_id`
+- `natural_language`
+- `skill_json`
+- `status`: `draft`, `confirmed`
+- `created_by_id`, `confirmed_by_id`, `confirmed_at`
+
+说明：
+- 人员技能库仍使用 `skills / user_skills`；任务数据 Skill 使用独立表，避免概念耦合。
+- 首次生成后可以先测试执行，再确认 Skill。
+
+### skill_runs
+
+保存每次任务数据 Skill 的执行快照。
+
+关键字段：
+- `task_data_skill_id`, `task_id`, `actor_id`
+- `status`: `success`, `failed`
+- `request_json`, `response_json`
+- `metrics_json`, `ai_analysis_json`
+- `suggested_progress_pct`, `suggested_note`, `error_message`, `created_at`
+
+说明：
+- 采纳执行结果时才会写入 `task_events` 的 `progress` 事件。
+- 外部平台原始数据只作为 JSON 快照保存，不为测试平台、缺陷平台、流水线平台分别建业务表。
+
 ### system_settings
 
 保存系统级 JSON 配置。

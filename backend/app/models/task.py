@@ -61,3 +61,5 @@ class Task(Base, UUIDMixin, TimestampMixin):
     signed_off_by = relationship("User", foreign_keys=[signed_off_by_id])
     parent_task = relationship("Task", remote_side="Task.id", backref="subtasks")
     events = relationship("TaskEvent", back_populates="task", cascade="all, delete-orphan")
+    data_skills = relationship("TaskDataSkill", back_populates="task", cascade="all, delete-orphan")
+    skill_runs = relationship("SkillRun", back_populates="task", cascade="all, delete-orphan")

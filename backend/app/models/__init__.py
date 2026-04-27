@@ -31,3 +31,4 @@ from app.models.assignment import Assignment  # noqa: E402, F401
 from app.models.task_event import TaskEvent  # noqa: E402, F401
 from app.models.system_setting import SystemSetting  # noqa: E402, F401
 from app.models.skill import Skill, UserSkill  # noqa: E402, F401
+from app.models.data_skill import DataConnector, TaskDataSkill, SkillRun  # noqa: E402, F401

@@ -53,6 +53,7 @@ id, username, full_name, role, department, bio, avatar_url, is_active, created_a
 | 能力 | `/api/v1/capabilities` | 能力档案 |
 | 仪表盘 | `/api/v1/dashboard` | 统计、四象限、项目进度 |
 | AI | `/api/v1/ai` | 推荐、分析、风险、配置 |
+| 数据 Skill | `/api/v1/data-connectors`, `/api/v1/tasks/{task_id}/data-skills` | 内部平台 API 连接器、任务数据采集 Skill、执行快照和采纳进展 |
 | 权限 | `/api/v1/permissions` | 角色权限管理 |
 | WebSocket | `/ws/{token}` | 实时事件推送 |
 
@@ -77,6 +78,82 @@ curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/signoff \
 ```
 
 会签需要 `task.signoff` 权限，且任务当前进度必须为 100%。进度由 `POST /api/v1/tasks/{task_id}/progress` 或群消息导入写入。
+
+## 任务数据 Skill
+
+任务数据 Skill 用于从公司内部平台 API 采集任务完成证据。用户在任务详情里用白话描述数据来源，系统生成 Skill 草稿，测试执行后确认，后续可重复执行。执行结果只有在“采纳进展”后才会写入 `task_events`。
+
+### 数据连接器
+
+连接器由系统设置中的“数据连接器”维护，需要 `ai.config` 权限。
+
+```bash
+curl -X POST http://localhost:8000/api/v1/data-connectors \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name":"测试平台",
+    "key":"test_platform",
+    "base_url":"https://test-platform.internal",
+    "auth_type":"bearer",
+    "auth_config_json":{"token":"xxx"},
+    "headers_json":{},
+    "verify_tls":false,
+    "is_enabled":true
+  }'
+```
+
+动态认证平台使用 `dynamic_token`。系统会先调用 `token_url` 获取 token，再把 token 写入业务接口的 Header 或 Query，并按过期时间缓存复用：
+
+```json
+{
+  "auth_type": "dynamic_token",
+  "auth_config_json": {
+    "token_url": "/api/auth/login",
+    "method": "POST",
+    "headers": {"Content-Type": "application/json"},
+    "body": {"app_id": "xxx", "app_secret": "xxx"},
+    "token_path": "$.data.access_token",
+    "expires_in_path": "$.data.expires_in",
+    "token_prefix": "Bearer",
+    "target": "header",
+    "target_name": "Authorization",
+    "cache_seconds": 3600
+  }
+}
+```
+
+说明：
+- `token_url` 可以是相对路径，也可以是完整 URL；相对路径会拼接连接器的 `base_url`。
+- `token_path` 和 `expires_in_path` 使用简单 JSON 路径，例如 `$.data.access_token`。
+- `target` 支持 `header` 或 `query`。
+- token 缓存在后端进程内，服务重启后会重新获取。
+
+### 任务 Skill 主流程
+
+```bash
+# 1. 根据白话说明生成 Skill 草稿
+curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/data-skills/generate \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"natural_language":"这个任务的数据从测试平台获取。接口是 GET /api/test/feature/{feature_id}/summary。"}'
+
+# 2. 确认 Skill
+curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/data-skills/$SKILL_ID/confirm \
+  -H "Authorization: Bearer $TOKEN"
+
+# 3. 执行采集。参数可为空，系统会先从任务标题和描述提取 feature_id。
+curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/data-skills/$SKILL_ID/run \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"params":{},"use_ai":true}'
+
+# 4. 采纳执行结果为任务进展
+curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/data-skills/runs/$RUN_ID/adopt \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
 
 ## AI 接口 (SSE 流式)
 

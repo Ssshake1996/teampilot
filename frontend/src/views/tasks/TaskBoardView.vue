@@ -8,6 +8,7 @@ import { projectsApi } from '@/api/projects'
 import { tasksApi } from '@/api/tasks'
 import { aiApi } from '@/api/ai'
 import { usersApi } from '@/api/users'
+import TaskDataSkillPanel from '@/components/tasks/TaskDataSkillPanel.vue'
 import { useTaskStore } from '@/stores/task'
 import { useAuthStore } from '@/stores/auth'
 import { TaskStatus, TaskPriority, TaskStatusLabel, TaskPriorityLabel, PriorityColor } from '@/types/enums'
@@ -268,6 +269,14 @@ async function handleLogProgress() {
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.detail || '更新进度失败')
   }
+}
+
+async function handleDataSkillProgressAdopted(entry: TaskProgress) {
+  if (!selectedTask.value) return
+  taskStore.updateTaskLocally(selectedTask.value.id, { progress_pct: entry.progress_pct })
+  selectedTask.value = { ...selectedTask.value, progress_pct: entry.progress_pct }
+  syncColumnsFromStore()
+  await loadProgressHistory(selectedTask.value.id)
 }
 
 async function handleSignoffTask(task: Task) {
@@ -1066,7 +1075,7 @@ onMounted(async () => {
     <el-drawer
       v-model="drawerVisible"
       :title="selectedTask?.title || '任务详情'"
-      size="480px"
+      size="560px"
       direction="rtl"
     >
       <template v-if="selectedTask">
@@ -1152,6 +1161,15 @@ onMounted(async () => {
             <p class="task-description">{{ selectedTask.description || '暂无描述' }}</p>
           </div>
 
+          <div class="detail-section">
+            <h4>数据 Skill</h4>
+            <TaskDataSkillPanel
+              :task="selectedTask"
+              :can-manage-progress="canSubmitProgress"
+              @progress-adopted="handleDataSkillProgressAdopted"
+            />
+          </div>
+
           <!-- Subtasks Section (Feature 1) -->
           <div class="detail-section">
             <div class="section-header-row">
@@ -1175,8 +1193,7 @@ onMounted(async () => {
                     clearable
                     filterable
                     multiple
-                    collapse-tags
-                    collapse-tags-tooltip
+                    class="full-assignee-select"
                     style="width: 100%"
                   >
                     <el-option
@@ -1908,6 +1925,26 @@ onMounted(async () => {
   border-radius: 6px;
   padding: 12px;
   margin-bottom: 12px;
+}
+
+.full-assignee-select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  align-items: flex-start;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.full-assignee-select :deep(.el-select__selection) {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.full-assignee-select :deep(.el-tag) {
+  height: auto;
+  min-height: 24px;
+  margin: 2px 0;
+  white-space: normal;
 }
 
 /* AI Decompose Dialog */

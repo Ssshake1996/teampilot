@@ -73,6 +73,53 @@ export interface Skill {
   description: string | null
 }
 
+export interface DataConnector {
+  id: string
+  name: string
+  key: string
+  description: string | null
+  base_url: string
+  auth_type: 'none' | 'bearer' | 'api_key' | 'basic' | 'dynamic_token'
+  auth_config_json: Record<string, any>
+  headers_json: Record<string, any>
+  timeout_seconds: number
+  verify_tls: boolean
+  is_enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface TaskDataSkill {
+  id: string
+  task_id: string
+  connector_id: string | null
+  connector_name: string | null
+  created_by_id: string
+  confirmed_by_id: string | null
+  confirmed_at: string | null
+  natural_language: string
+  skill_json: Record<string, any>
+  status: 'draft' | 'confirmed'
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillRun {
+  id: string
+  task_data_skill_id: string
+  task_id: string
+  actor_id: string
+  status: 'success' | 'failed'
+  request_json: Record<string, any>
+  response_json: Record<string, any>
+  metrics_json: Record<string, any>
+  ai_analysis_json: Record<string, any>
+  suggested_progress_pct: number | null
+  suggested_note: string | null
+  error_message: string | null
+  created_at: string
+}
+
 export interface UserSkill {
   skill_id: string
   skill_name: string

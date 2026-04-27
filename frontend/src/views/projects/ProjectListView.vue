@@ -7,6 +7,7 @@ import { tasksApi } from '@/api/tasks'
 import { usersApi } from '@/api/users'
 import { aiApi } from '@/api/ai'
 import { useAuthStore } from '@/stores/auth'
+import TaskDataSkillPanel from '@/components/tasks/TaskDataSkillPanel.vue'
 import type { Project, User, TaskProgress } from '@/types/models'
 
 const router = useRouter()
@@ -269,6 +270,14 @@ async function saveProjectDetail() {
 function openTaskDetail(task: any, projectId: string) {
   taskDetail.value = { ...task, projectId }
   taskDetailVisible.value = true
+}
+
+async function handleTaskDetailDataSkillAdopted(entry: TaskProgress) {
+  if (!taskDetail.value) return
+  taskDetail.value = { ...taskDetail.value, progress_pct: entry.progress_pct }
+  const projectId = taskDetail.value.projectId || resolveProjectIdForTask(taskDetail.value)
+  if (projectId) await loadTaskTree(projectId, true)
+  await loadProjects()
 }
 
 async function openFeedback(task: any, projectId?: string) {
@@ -912,7 +921,7 @@ onMounted(loadProjects)
             </div>
           </div>
         </div>
-        <el-form-item label="负责人"><el-select v-model="subtaskForm.assignee_ids" placeholder="选择负责人" clearable filterable multiple collapse-tags collapse-tags-tooltip style="width:100%"><el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" /></el-select></el-form-item>
+        <el-form-item label="负责人"><el-select v-model="subtaskForm.assignee_ids" placeholder="选择负责人" clearable filterable multiple class="full-assignee-select" style="width:100%"><el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" /></el-select></el-form-item>
         <el-form-item label="预估工时"><el-input-number v-model="subtaskForm.estimated_hours" :min="0" :max="999" :precision="1" style="width:100%" /></el-form-item>
         <el-form-item label="截止日期"><el-date-picker v-model="subtaskForm.deadline" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
       </el-form>
@@ -1000,7 +1009,7 @@ onMounted(loadProjects)
       </div>
     </el-dialog>
 
-    <el-drawer v-model="taskDetailVisible" :title="'任务详情 — ' + (taskDetail?.title || '')" size="460px" direction="rtl">
+    <el-drawer v-model="taskDetailVisible" :title="'任务详情 — ' + (taskDetail?.title || '')" size="560px" direction="rtl">
       <div v-if="taskDetail" class="task-detail-drawer">
         <el-alert
           v-if="taskDetail.is_deleted"
@@ -1043,6 +1052,14 @@ onMounted(loadProjects)
               {{ formatDateTime(taskDetail.updated_at || taskDetail.created_at) }}
             </el-descriptions-item>
           </el-descriptions>
+        </div>
+        <div class="detail-section">
+          <h4>数据 Skill</h4>
+          <TaskDataSkillPanel
+            :task="taskDetail"
+            :can-manage-progress="canManageProgress"
+            @progress-adopted="handleTaskDetailDataSkillAdopted"
+          />
         </div>
       </div>
     </el-drawer>
@@ -1269,6 +1286,26 @@ onMounted(loadProjects)
 .ai-section { margin-top: 14px; }
 .ai-section h4 { margin: 0 0 6px; font-size: 13px; color: #303133; }
 .ai-section ul { margin: 0; padding-left: 18px; color: #606266; font-size: 13px; line-height: 1.6; }
+
+.full-assignee-select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  align-items: flex-start;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.full-assignee-select :deep(.el-select__selection) {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.full-assignee-select :deep(.el-tag) {
+  height: auto;
+  min-height: 24px;
+  margin: 2px 0;
+  white-space: normal;
+}
 
 .project-detail-drawer,
 .task-detail-drawer { padding: 0 4px; }
