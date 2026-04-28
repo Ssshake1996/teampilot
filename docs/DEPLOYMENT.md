@@ -26,6 +26,7 @@
    - `FRONTEND_PORT`
    - `BACKEND_PORT`
    - `SEED_DEMO_USERS=false` for production
+   - `SMTP_*` and `REPORT_DEFAULT_RECIPIENTS` if daily/weekly report emails are required
 4. Run:
 
 ```bash
@@ -46,6 +47,7 @@ What `deploy.sh` does:
 - Replace `CORS_ORIGINS` with your real public domain
 - Put HTTPS in front of the frontend container
 - Keep `SEED_DEMO_USERS=false` unless you explicitly need demo accounts
+- Configure SMTP before enabling daily/weekly report email sending
 - Back up PostgreSQL before every upgrade
 
 ## Upgrade policy

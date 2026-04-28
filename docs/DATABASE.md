@@ -142,6 +142,19 @@
 - `manager`、`member` 默认使用代码内置权限；如果 `role_permissions` 中存在同名角色，则使用配置覆盖。
 - 自定义角色只保存在 `role_permissions` JSON 中，不再单独建表。
 
+## 报告邮件配置
+
+日报和周报发送不新增业务表，使用运行环境变量配置 SMTP：
+
+- `SMTP_HOST`, `SMTP_PORT`
+- `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`
+- `SMTP_USE_TLS`, `SMTP_USE_SSL`
+- `REPORT_DEFAULT_RECIPIENTS`
+
+报告内容来源：
+- 日报：项目管理页调用 AI 巡检结果，发送时把当前报告内容提交给后端。
+- 周报：后端按最近 7 天的任务进展、会签、逾期和优先级生成。
+
 ## AI 上下文
 
 以下信息会进入 AI 分析上下文：

@@ -58,6 +58,8 @@ uvicorn app.main:app --reload --port 8000
 DATABASE_URL=sqlite+aiosqlite:///./teampilot.db
 ```
 
+如果要本地测试日报/周报邮件发送，还需要在 `backend/.env` 中补充 `SMTP_HOST`、`SMTP_USERNAME`、`SMTP_PASSWORD`、`SMTP_FROM_EMAIL` 和 `REPORT_DEFAULT_RECIPIENTS`。
+
 ### 4. 启动前端
 
 ```bash

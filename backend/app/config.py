@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: str = "admin123"
     ADMIN_FULL_NAME: str = "System Administrator"
     SEED_DEMO_USERS: bool = True
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = ""
+    SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
+    REPORT_DEFAULT_RECIPIENTS: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

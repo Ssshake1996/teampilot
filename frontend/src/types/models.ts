@@ -154,6 +154,7 @@ export interface TeamWorkload {
   user_id: string
   full_name: string
   avatar_url: string | null
+  workload_hours: number
   assigned_tasks: number
   in_progress_tasks: number
   completed_tasks: number

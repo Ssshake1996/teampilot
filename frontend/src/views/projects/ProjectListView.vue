@@ -7,6 +7,7 @@ import { projectsApi } from '@/api/projects'
 import { tasksApi } from '@/api/tasks'
 import { usersApi } from '@/api/users'
 import { aiApi } from '@/api/ai'
+import { reportsApi, type ReportType } from '@/api/reports'
 import { useAuthStore } from '@/stores/auth'
 import TaskDataSkillPanel from '@/components/tasks/TaskDataSkillPanel.vue'
 import type { Project, User, TaskProgress } from '@/types/models'
@@ -102,6 +103,9 @@ const dailyBriefDialogVisible = ref(false)
 const dailyBriefStatus = ref('')
 const dailyBriefResult = ref<any>(null)
 const dailyBriefLoading = ref(false)
+const reportType = ref<ReportType>('daily')
+const reportRecipients = ref('')
+const reportSending = ref(false)
 
 // AI retrospective
 const retrospectiveDialogVisible = ref(false)
@@ -165,6 +169,16 @@ async function loadTaskTree(pid: string, force = false) {
   finally { loadingTrees.value[pid] = false }
 }
 
+async function refreshProjectSummary(projectId: string) {
+  if (!projectId) return
+  try {
+    const res = await projectsApi.get(projectId)
+    projects.value = projects.value.map((item) => item.id === projectId ? { ...item, ...res.data } : item)
+  } catch {
+    // Summary refresh is non-blocking; the task operation already succeeded.
+  }
+}
+
 function toggleProject(pid: string) {
   if (expandedProjects.value.has(pid)) { expandedProjects.value.delete(pid) }
   else { expandedProjects.value.add(pid); loadTaskTree(pid) }
@@ -211,19 +225,17 @@ function taskNameIndentStyle(task: any) {
 // ── Inline Edit (admin only) ──
 async function handleAssigneeChange(task: any, newIds: string[]) {
   try {
-    await tasksApi.assign(task.id, newIds || [])
-    task.assignee_ids = newIds || []
-    task.assignee_names = task.assignee_ids
-      .map((id: string) => users.value.find(u => u.id === id)?.full_name)
-      .filter(Boolean)
-    task.assignee_name = userNames(task.assignee_ids)
+    const res = await tasksApi.assign(task.id, newIds || [])
+    Object.assign(task, res.data)
   } catch { ElMessage.error('更新失败') }
 }
 
 async function handleFieldUpdate(task: any, field: string, value: any) {
   try {
-    await tasksApi.update(task.id, { [field]: value || null } as any)
-    task[field] = value || null
+    const res = await tasksApi.update(task.id, { [field]: value || null } as any)
+    Object.assign(task, res.data)
+    const projectId = resolveProjectIdForTask(task)
+    if (field === 'start_date' && projectId) await refreshProjectSummary(projectId)
   } catch { ElMessage.error('更新失败') }
 }
 
@@ -273,7 +285,6 @@ async function handleTaskRowDragEnd(projectId: string, evt: any) {
     })))
     siblings.forEach((task: any, index: number) => { task.sort_order = index + 1 })
     ElMessage.success('排序已更新')
-    await loadTaskTree(projectId, true)
   } catch (err: any) {
     ElMessage({
       type: 'error',
@@ -314,7 +325,7 @@ async function handleDelete(task: any, projectId?: string) {
     if (taskDetail.value?.id === task.id) taskDetail.value = { ...taskDetail.value, is_deleted: true }
     ElMessage.success('任务已标记删除')
     if (pid) await loadTaskTree(pid, true)
-    await loadProjects()
+    if (pid) await refreshProjectSummary(pid)
   } catch {
     ElMessage.error('删除失败')
   }
@@ -330,7 +341,7 @@ async function handleRestore(task: any, projectId?: string) {
     if (taskDetail.value?.id === task.id) taskDetail.value = { ...taskDetail.value, ...res.data }
     ElMessage.success('任务已恢复')
     if (pid) await loadTaskTree(pid, true)
-    await loadProjects()
+    if (pid) await refreshProjectSummary(pid)
   } catch (err: any) {
     ElMessage.error(formatApiError(err, '恢复失败'))
   }
@@ -418,7 +429,6 @@ async function saveTaskDetail() {
     taskDetail.value = { ...taskDetail.value, ...res.data, projectId }
     syncTaskDetailForm(taskDetail.value)
     mergeTaskIntoTrees(res.data)
-    await loadProjects()
     ElMessage.success('任务信息已更新')
   } catch (err: any) {
     ElMessage.error(formatApiError(err, '保存失败'))
@@ -432,7 +442,6 @@ async function handleTaskDetailDataSkillAdopted(entry: TaskProgress) {
   taskDetail.value = { ...taskDetail.value, progress_pct: entry.progress_pct }
   const projectId = taskDetail.value.projectId || resolveProjectIdForTask(taskDetail.value)
   if (projectId) await loadTaskTree(projectId, true)
-  await loadProjects()
 }
 
 async function openFeedback(task: any, projectId?: string) {
@@ -470,16 +479,23 @@ async function submitFeedback() {
     })
     feedbackTask.value.progress_pct = feedbackForm.value.progress_pct
     feedbackTask.value.latest_note = feedbackForm.value.note
+    mergeTaskIntoTrees({
+      id: feedbackTask.value.id,
+      progress_pct: feedbackForm.value.progress_pct,
+      latest_note: feedbackForm.value.note,
+    })
+    if (taskDetail.value?.id === feedbackTask.value.id) {
+      taskDetail.value = {
+        ...taskDetail.value,
+        progress_pct: feedbackForm.value.progress_pct,
+        latest_note: feedbackForm.value.note,
+      }
+    }
     ElMessage.success('进展已提交')
     feedbackForm.value.note = ''
     feedbackForm.value.hours_spent = null
     const res = await tasksApi.getProgress(feedbackTask.value.id)
     feedbackHistory.value = res.data
-    const projectId = feedbackTask.value.projectId || resolveProjectIdForTask(feedbackTask.value)
-    if (projectId) {
-      await loadTaskTree(projectId, true)
-    }
-    await loadProjects()
   } catch (err: any) {
     ElMessage.error(formatApiError(err, '提交失败'))
   } finally {
@@ -607,23 +623,66 @@ async function commitProjectPlan() {
   }
 }
 
-async function openDailyBrief(silent = false) {
-  dailyBriefDialogVisible.value = true
+async function generateInspectionReport(type: ReportType, silent = false) {
+  reportType.value = type
   dailyBriefResult.value = null
-  dailyBriefStatus.value = '正在生成每日巡检报告...'
+  dailyBriefStatus.value = type === 'weekly' ? '正在生成周报...' : '正在生成每日巡检报告...'
   dailyBriefLoading.value = true
   try {
-    dailyBriefResult.value = await aiApi.dailyBrief((msg: string) => { dailyBriefStatus.value = msg })
+    if (type === 'weekly') {
+      const res = await reportsApi.weeklyReport()
+      dailyBriefResult.value = res.data
+    } else {
+      dailyBriefResult.value = await aiApi.dailyBrief((msg: string) => { dailyBriefStatus.value = msg })
+    }
     dailyBriefStatus.value = ''
   } catch (err: any) {
     dailyBriefStatus.value = ''
     if (!silent) {
-      ElMessage.error(formatApiError(err, '每日巡检报告生成失败'))
+      ElMessage.error(formatApiError(err, type === 'weekly' ? '周报生成失败' : '每日巡检报告生成失败'))
     } else {
       ElMessage.warning(formatApiError(err, '进展已同步，但巡检报告生成失败'))
     }
   } finally {
     dailyBriefLoading.value = false
+  }
+}
+
+async function openDailyBrief(silent = false) {
+  dailyBriefDialogVisible.value = true
+  await generateInspectionReport('daily', silent)
+}
+
+async function changeReportType(value: string | number | boolean | undefined) {
+  const type: ReportType = value === 'weekly' ? 'weekly' : 'daily'
+  if (dailyBriefLoading.value || type === reportType.value) return
+  await generateInspectionReport(type)
+}
+
+function parseReportRecipients(): string[] {
+  return reportRecipients.value
+    .split(/[,;\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+async function sendInspectionReport() {
+  const recipients = parseReportRecipients()
+  if (!dailyBriefResult.value) {
+    await generateInspectionReport(reportType.value)
+  }
+  reportSending.value = true
+  try {
+    await reportsApi.sendReport({
+      report_type: reportType.value,
+      recipients,
+      report: dailyBriefResult.value,
+    })
+    ElMessage.success('报告邮件已发送')
+  } catch (err: any) {
+    ElMessage.error(formatApiError(err, '报告邮件发送失败'))
+  } finally {
+    reportSending.value = false
   }
 }
 
@@ -681,8 +740,7 @@ async function handleCreateSubtask() {
       setTaskCollapsed(subtaskParent.value.projectId, subtaskParent.value.id, false)
     }
     await loadTaskTree(subtaskParent.value.projectId, true)
-    const projRes = await projectsApi.list(1, 100, showArchived.value)
-    projects.value = projRes.data.items
+    await refreshProjectSummary(subtaskParent.value.projectId)
   } catch { ElMessage.error('创建失败') }
   finally { creatingSubtask.value = false }
 }
@@ -772,13 +830,21 @@ function formatDate(d: string | null) { return d ? d.slice(0, 10) : '-' }
 function formatDateTime(d: string | null) { return d ? d.replace('T', ' ').slice(0, 16) : '' }
 function goToBoard(pid: string) { router.push(`/projects/${pid}/board`) }
 function asList(value: any): any[] { return Array.isArray(value) ? value : [] }
+const reportSectionKeys = computed(() => {
+  const base = ['risky_projects', 'overdue_blocked_tasks', 'members_without_updates', 'priority_tasks', 'signoff_pending']
+  if (dailyBriefResult.value?.completed_tasks) base.push('completed_tasks')
+  if (dailyBriefResult.value?.progress_updates) base.push('progress_updates')
+  return base
+})
 function dailySectionLabel(section: string): string {
   return ({
-    risky_projects: '今日风险项目',
+    risky_projects: '风险项目',
     overdue_blocked_tasks: '逾期 / 阻塞任务',
-    members_without_updates: '今日未更新成员',
+    members_without_updates: reportType.value === 'weekly' ? '本周未更新成员' : '今日未更新成员',
     priority_tasks: '优先推进任务',
     signoff_pending: '待会签任务',
+    completed_tasks: '已会签完成',
+    progress_updates: '进展记录',
   } as any)[section] || section
 }
 function retrospectiveSectionLabel(section: string): string {
@@ -790,8 +856,8 @@ async function handleSignoff(task: any, projectId: string) {
     const res = await tasksApi.signoff(task.id)
     Object.assign(task, res.data)
     if (task._parentId) recalcParent(task._parentId)
-    await loadTaskTree(projectId, true)
-    await loadProjects()
+    if (taskDetail.value?.id === task.id) taskDetail.value = { ...taskDetail.value, ...res.data }
+    await refreshProjectSummary(projectId)
     ElMessage.success('任务已会签完成')
   } catch {
     ElMessage.error('会签失败，请确认进度已达到 100%')
@@ -939,7 +1005,7 @@ onMounted(loadProjects)
               <!-- Assignee -->
               <div class="col-who" @click.stop>
                 <template v-if="canAssignTask && !task.is_deleted">
-                  <el-select :model-value="task.assignee_ids || []" size="small" placeholder="未分配" clearable filterable multiple collapse-tags collapse-tags-tooltip class="isel" @change="(v: string[]) => handleAssigneeChange(task, v)">
+                  <el-select :model-value="task.assignee_ids || []" size="small" placeholder="未分配" clearable filterable multiple class="isel" @change="(v: string[]) => handleAssigneeChange(task, v)">
                     <el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" />
                   </el-select>
                 </template>
@@ -1075,12 +1141,25 @@ onMounted(loadProjects)
     </el-dialog>
 
     <!-- Daily Inspection Dialog -->
-    <el-dialog v-model="dailyBriefDialogVisible" title="每日巡检报告" width="760px">
+    <el-dialog v-model="dailyBriefDialogVisible" :title="reportType === 'weekly' ? '周报' : '每日巡检报告'" width="820px">
+      <div class="report-toolbar">
+        <el-radio-group :model-value="reportType" size="small" @change="changeReportType">
+          <el-radio-button value="daily">日报</el-radio-button>
+          <el-radio-button value="weekly">周报</el-radio-button>
+        </el-radio-group>
+        <el-input
+          v-model="reportRecipients"
+          class="report-recipient-input"
+          placeholder="接收人邮箱，多个用逗号分隔；留空使用默认接收人"
+          clearable
+        />
+        <el-button type="primary" :loading="reportSending" :disabled="dailyBriefLoading" @click="sendInspectionReport">邮件发送</el-button>
+      </div>
       <div v-loading="dailyBriefLoading" class="ai-result">
         <span v-if="dailyBriefStatus" class="ai-st">{{ dailyBriefStatus }}</span>
         <template v-if="dailyBriefResult">
           <div class="ai-result-head">
-            <div class="ai-result-title">今日摘要</div>
+            <div class="ai-result-title">{{ reportType === 'weekly' ? '本周摘要' : '今日摘要' }}</div>
             <el-tag
               size="small"
               :type="dailyBriefResult.source === 'ai' ? 'success' : 'warning'"
@@ -1090,7 +1169,7 @@ onMounted(loadProjects)
             </el-tag>
           </div>
           <p class="ai-result-summary">{{ dailyBriefResult.summary }}</p>
-          <div class="ai-section" v-for="section in ['risky_projects','overdue_blocked_tasks','members_without_updates','priority_tasks','signoff_pending']" :key="section">
+          <div class="ai-section" v-for="section in reportSectionKeys" :key="section">
             <h4>{{ dailySectionLabel(section) }}</h4>
             <ul>
               <li v-for="(item, idx) in asList(dailyBriefResult[section])" :key="idx">{{ typeof item === 'string' ? item : JSON.stringify(item) }}</li>
@@ -1464,7 +1543,7 @@ onMounted(loadProjects)
 .prow:hover { background: #f0f5ff; }
 .pn strong { font-size: 13px; }
 .thead { background: #f5f7fa; font-size: 11px; color: #909399; font-weight: 600; min-height: 30px; border-bottom: 1px solid #ebeef5; }
-.trow { border-bottom: 1px solid #f2f3f5; font-size: 12px; min-height: 36px; }
+.trow { border-bottom: 1px solid #f2f3f5; font-size: 12px; min-height: 40px; padding-top: 3px; padding-bottom: 3px; }
 .trow:last-child { border-bottom: none; }
 .d0 { background: #fff; } .d1 { background: #fafbfc; } .d2 { background: #f5f7fa; }
 
@@ -1558,8 +1637,8 @@ onMounted(loadProjects)
 .fb-text { font-size: 11px; color: #909399; cursor: pointer; padding: 2px 4px; border-radius: 3px; }
 .fb-text:hover { background: #ecf5ff; color: #409EFF; }
 
-.col-who { font-size: 11px; color: #606266; }
-.who-text { }
+.col-who { font-size: 11px; color: #606266; min-width: 0; }
+.who-text { white-space: normal; line-height: 1.4; }
 
 .col-hrs { font-size: 11px; color: #606266; }
 .col-hrs.center { text-align: center; }
@@ -1572,8 +1651,12 @@ onMounted(loadProjects)
 
 /* Inline controls */
 .isel { width: 100%; }
-.isel :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 0 2px; }
+.isel :deep(.el-select__wrapper),
+.isel :deep(.el-input__wrapper) { box-shadow: none !important; background: transparent; padding: 2px; min-height: 28px; align-items: flex-start; }
+.isel :deep(.el-select__wrapper:hover),
 .isel :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #dcdfe6 inset !important; }
+.isel :deep(.el-select__selection) { flex-wrap: wrap; align-items: center; gap: 2px; min-width: 0; }
+.isel :deep(.el-tag) { height: auto; min-height: 20px; margin: 1px 0; white-space: normal; max-width: 100%; }
 .isel :deep(.el-input__inner) { font-size: 11px; }
 .ist { width: 82px; }
 /* Clickable text for inline edit */
@@ -1614,6 +1697,17 @@ onMounted(loadProjects)
 .ai-section { margin-top: 14px; }
 .ai-section h4 { margin: 0 0 6px; font-size: 13px; color: #303133; }
 .ai-section ul { margin: 0; padding-left: 18px; color: #606266; font-size: 13px; line-height: 1.6; }
+.report-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(260px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.report-recipient-input { min-width: 0; }
+@media (max-width: 760px) {
+  .report-toolbar { grid-template-columns: 1fr; align-items: stretch; }
+}
 
 .task-create-dialog :deep(.el-dialog__body) {
   overflow: visible;

@@ -23,6 +23,7 @@ class TeamWorkload(BaseModel):
     user_id: uuid.UUID
     full_name: str
     avatar_url: str | None = None
+    workload_hours: float
     assigned_tasks: int
     in_progress_tasks: int
     completed_tasks: int

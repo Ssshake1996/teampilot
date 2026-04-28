@@ -55,6 +55,7 @@ id, username, full_name, role, department, bio, avatar_url, is_active, created_a
 | 能力 | `/api/v1/capabilities` | 能力档案 |
 | 仪表盘 | `/api/v1/dashboard` | 统计、四象限、项目进度 |
 | AI | `/api/v1/ai` | 推荐、分析、风险、配置 |
+| 报告 | `/api/v1/reports` | 周报生成、日报/周报邮件发送 |
 | 数据 Skill | `/api/v1/data-connectors`, `/api/v1/tasks/{task_id}/data-skills` | 内部平台 API 连接器、任务数据采集 Skill、执行快照和采纳进展 |
 | 权限 | `/api/v1/permissions` | 角色权限管理 |
 | WebSocket | `/ws/{token}` | 实时事件推送 |
@@ -226,3 +227,39 @@ curl -N http://localhost:8000/api/v1/ai/daily-brief \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
+
+## 报告与邮件发送
+
+项目管理页的“每日巡检报告”支持日报和周报：
+
+- 日报：调用 `POST /api/v1/ai/daily-brief`，优先使用 AI 生成。
+- 周报：调用 `GET /api/v1/reports/weekly`，按最近 7 天任务进展、会签、逾期和优先级生成。
+- 邮件发送：调用 `POST /api/v1/reports/send`。
+
+发送接口示例：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/reports/send \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "report_type":"daily",
+    "recipients":["pm@example.com"],
+    "report":{"summary":"今日巡检正常","risky_projects":["暂无风险"]}
+  }'
+```
+
+后端需要配置 SMTP：
+
+```env
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=robot@example.com
+SMTP_PASSWORD=your-password
+SMTP_FROM_EMAIL=teampilot@example.com
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
+REPORT_DEFAULT_RECIPIENTS=pm@example.com,lead@example.com
+```
+
+如果请求里没有 `recipients`，后端会使用 `REPORT_DEFAULT_RECIPIENTS`。如果 SMTP 未配置，接口会返回 400 并说明缺失项。

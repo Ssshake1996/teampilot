@@ -37,15 +37,23 @@ const showWorkload = ref(true)
 // Sorted team workload by total load descending
 const sortedWorkload = computed(() =>
   [...teamWorkload.value]
-    .map(w => ({ ...w, total_load: w.assigned_tasks + w.in_progress_tasks }))
-    .filter(w => w.total_load > 0 || w.completed_tasks > 0)
+    .map(w => ({ ...w, total_load: Number(w.workload_hours || 0) }))
+    .filter(w => w.total_load > 0 || w.assigned_tasks > 0 || w.completed_tasks > 0)
     .sort((a, b) => b.total_load - a.total_load)
 )
 
 function loadColor(n: number): string {
-  if (n >= 8) return '#F56C6C'
-  if (n >= 5) return '#E6A23C'
+  if (n >= 40) return '#F56C6C'
+  if (n >= 24) return '#E6A23C'
   return '#67C23A'
+}
+
+function workloadPercent(hours: number): number {
+  return Math.min(Math.round((hours / 40) * 100), 100)
+}
+
+function formatHours(hours: number): string {
+  return Number(hours || 0).toFixed(Number.isInteger(hours || 0) ? 0 : 1)
 }
 
 function formatDate(d: string | null) { return d ? d.slice(0, 10) : '-' }
@@ -198,11 +206,11 @@ onMounted(async () => {
         <div v-for="w in sortedWorkload" :key="w.user_id" class="wl-item">
           <div class="wl-name">{{ w.full_name }}</div>
           <div class="wl-bar-wrap">
-            <div class="wl-bar" :style="{ width: Math.min(w.total_load * 10, 100) + '%', background: loadColor(w.total_load) }"></div>
+            <div class="wl-bar" :style="{ width: workloadPercent(w.total_load) + '%', background: loadColor(w.total_load) }"></div>
           </div>
           <div class="wl-nums">
-            <span :style="{ color: loadColor(w.total_load), fontWeight: '700' }">{{ w.total_load }}</span>
-            <span class="wl-detail">待办{{ w.assigned_tasks }} + 进行{{ w.in_progress_tasks }}</span>
+            <span :style="{ color: loadColor(w.total_load), fontWeight: '700' }">{{ formatHours(w.total_load) }}h</span>
+            <span class="wl-detail">未完成{{ w.assigned_tasks }} · 进行中{{ w.in_progress_tasks }}</span>
             <span v-if="w.overdue_tasks > 0" class="wl-ovd">{{ w.overdue_tasks }}逾期</span>
           </div>
         </div>
