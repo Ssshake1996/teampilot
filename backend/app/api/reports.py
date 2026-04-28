@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
+from app.services.ai.errors import AIBackendError
 from app.services.report_service import (
     format_report_text,
     generate_weekly_report,
@@ -46,7 +47,15 @@ async def refresh_report(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await refresh_report_snapshot(db, data.report_type, trigger="manual")
+    try:
+        return await refresh_report_snapshot(
+            db,
+            data.report_type,
+            trigger="manual",
+            raise_ai_error=True,
+        )
+    except AIBackendError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
 
 
 @router.get("/weekly")

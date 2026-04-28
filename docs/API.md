@@ -235,7 +235,7 @@ curl -N http://localhost:8000/api/v1/ai/daily-brief \
 - 日报：每天 07:00 自动生成一次；手动刷新时优先使用 AI 生成。
 - 周报：每周五 12:30 自动生成一次；手动刷新时优先使用 AI 分析；项目进展情况表由系统生成，覆盖所有未归档项目。
 - 读取缓存：调用 `GET /api/v1/reports/snapshot?report_type=daily|weekly`。
-- 手动刷新：调用 `POST /api/v1/reports/refresh`。
+- 手动刷新：调用 `POST /api/v1/reports/refresh`。前端不设置请求超时，等待后端返回；如果后端访问 AI 超时或失败，会返回 504/502 和结构化错误详情。
 - 邮件发送：调用 `POST /api/v1/reports/send`。
 
 日报和周报返回格式固定。后端会规范化 AI 输出，确保包含：
@@ -271,6 +271,17 @@ curl -X POST http://localhost:8000/api/v1/reports/refresh \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"report_type":"daily"}'
+```
+
+AI 超时或失败时，`detail` 会包含：
+
+```json
+{
+  "message": "AI 生成巡检报告失败",
+  "status_code": 504,
+  "error_type": "ReadTimeout",
+  "backend_detail": "AI read timed out"
+}
 ```
 
 发送接口示例：

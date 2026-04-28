@@ -4,10 +4,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
+import httpx
 from httpx import AsyncClient
 
 from app.config import settings
 from app.models.project import Project, ProjectStatus
+from app.models.system_setting import SystemSetting
 from app.services import report_service
 from app.services.ai.project_automation import daily_brief
 
@@ -147,6 +149,44 @@ async def test_report_refresh_and_snapshot(client: AsyncClient, auth_headers):
     )
     assert snapshot.status_code == 200
     assert snapshot.json()["generated_at"] == refreshed["generated_at"]
+
+
+@pytest.mark.asyncio
+async def test_report_refresh_returns_ai_timeout_detail(client: AsyncClient, auth_headers, db_session, monkeypatch):
+    db_session.add(SystemSetting(
+        key=report_service.AI_CONFIG_KEY,
+        value_json={
+            "api_base_url": "http://ai.example.test/v1",
+            "api_key_encrypted": "test-key",
+            "model_name": "test-model",
+        },
+    ))
+    await db_session.commit()
+
+    class TimeoutLLM:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def chat_json(self, messages, **kwargs):
+            raise httpx.ReadTimeout("AI read timed out")
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(report_service, "LLMClient", TimeoutLLM)
+
+    res = await client.post(
+        "/api/v1/reports/refresh",
+        json={"report_type": "daily"},
+        headers=auth_headers,
+    )
+
+    assert res.status_code == 504
+    detail = res.json()["detail"]
+    assert detail["message"] == "AI 生成巡检报告失败"
+    assert detail["status_code"] == 504
+    assert detail["error_type"] == "ReadTimeout"
+    assert "AI read timed out" in detail["backend_detail"]
 
 
 def test_report_schedule_slots():

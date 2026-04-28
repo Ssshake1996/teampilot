@@ -16,6 +16,7 @@ from app.models.user import User
 from app.schemas.project import ProjectCreate
 from app.schemas.task import TaskCreate
 from app.services import project_service, task_service
+from app.services.ai.errors import AIBackendError
 from app.services.ai.llm_client import LLMClient
 from app.services.report_metrics import progress_rankings
 
@@ -421,7 +422,11 @@ def _rule_based_inspection_report(
     }, "rules", "系统规则巡检")
 
 
-async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
+async def daily_brief(
+    db: AsyncSession,
+    llm: LLMClient | None = None,
+    raise_ai_error: bool = False,
+) -> dict:
     projects = await _project_snapshot(db, include_tasks=True)
     active_users = await _active_users(db)
     recent_rows = (
@@ -481,6 +486,8 @@ async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
         result = await llm.chat_json(messages, temperature=0.2, max_tokens=4096)
         return normalize_inspection_report(result, "ai", "AI 生成")
     except Exception as exc:
+        if raise_ai_error:
+            raise AIBackendError("AI 生成巡检报告失败", exc) from exc
         return _rule_based_inspection_report(projects, progress, active_users, f"{type(exc).__name__}: {exc}")
 
 

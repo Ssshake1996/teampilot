@@ -124,8 +124,11 @@ function userNames(ids: string[] | null | undefined): string {
 }
 
 function formatApiError(err: any, fallback: string) {
+  const responseStatus = err?.response?.status
   const detail = err?.response?.data?.detail
-  if (typeof detail === 'string' && detail.trim()) return detail
+  if (typeof detail === 'string' && detail.trim()) {
+    return responseStatus ? `${detail}（HTTP ${responseStatus}）` : detail
+  }
   if (Array.isArray(detail)) {
     const message = detail
       .map((item) => item?.msg || item?.message || item?.detail || JSON.stringify(item))
@@ -134,8 +137,17 @@ function formatApiError(err: any, fallback: string) {
     return message || fallback
   }
   if (detail && typeof detail === 'object') {
-    return detail.message || detail.msg || detail.detail || JSON.stringify(detail)
+    const message = detail.message || detail.msg || detail.detail || fallback
+    const status = detail.status_code || responseStatus
+    const parts = [message]
+    if (status) parts.push(`状态码 ${status}`)
+    if (detail.upstream_status_code) parts.push(`AI服务状态码 ${detail.upstream_status_code}`)
+    if (detail.error_type) parts.push(detail.error_type)
+    if (detail.backend_detail) parts.push(`后端详情：${detail.backend_detail}`)
+    return parts.join('；')
   }
+  if (responseStatus) return `${fallback}（HTTP ${responseStatus}）`
+  if (err?.code === 'ECONNABORTED') return `${fallback}：前端请求超时`
   return err?.message || fallback
 }
 

@@ -16,6 +16,7 @@ from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
 from app.services import task_service
+from app.services.ai.errors import AIBackendError
 from app.services.ai.llm_client import LLMClient
 from app.services.ai.project_automation import daily_brief
 from app.services.report_metrics import progress_rankings
@@ -197,7 +198,11 @@ def _date_value(value: datetime | date | None) -> date | None:
     return value
 
 
-async def generate_weekly_report(db: AsyncSession, llm: LLMClient | None = None) -> dict:
+async def generate_weekly_report(
+    db: AsyncSession,
+    llm: LLMClient | None = None,
+    raise_ai_error: bool = False,
+) -> dict:
     today = _today()
     period_start = today - timedelta(days=6)
     start_dt = datetime.combine(period_start, time.min)
@@ -461,7 +466,9 @@ async def generate_weekly_report(db: AsyncSession, llm: LLMClient | None = None)
     try:
         ai_report = await llm.chat_json(messages, temperature=0.2, max_tokens=4096)
         return _normalize_weekly_ai_report(ai_report, rule_report)
-    except Exception:
+    except Exception as exc:
+        if raise_ai_error:
+            raise AIBackendError("AI 生成周报失败", exc) from exc
         rule_report["summary"] += " AI 分析失败，当前结果由系统规则生成。"
         return rule_report
 
@@ -520,13 +527,17 @@ async def _get_llm(db: AsyncSession) -> LLMClient | None:
     )
 
 
-async def generate_report_payload(db: AsyncSession, report_type: str) -> dict:
+async def generate_report_payload(
+    db: AsyncSession,
+    report_type: str,
+    raise_ai_error: bool = False,
+) -> dict:
     llm = await _get_llm(db)
     try:
         if report_type == "daily":
-            return await daily_brief(db, llm)
+            return await daily_brief(db, llm, raise_ai_error=raise_ai_error)
         if report_type == "weekly":
-            return await generate_weekly_report(db, llm)
+            return await generate_weekly_report(db, llm, raise_ai_error=raise_ai_error)
         raise ValueError(f"Unsupported report type: {report_type}")
     finally:
         if llm:
@@ -579,8 +590,9 @@ async def refresh_report_snapshot(
     report_type: str,
     trigger: str = "manual",
     now: datetime | None = None,
+    raise_ai_error: bool = False,
 ) -> dict:
-    report = await generate_report_payload(db, report_type)
+    report = await generate_report_payload(db, report_type, raise_ai_error=raise_ai_error)
     return await save_report_snapshot(db, report_type, report, trigger, now)
 
 
