@@ -29,6 +29,7 @@ class Task(Base, UUIDMixin, TimestampMixin):
         Uuid, ForeignKey("projects.id"), nullable=False, index=True
     )
     title: Mapped[str] = mapped_column(String(300), nullable=False)
+    goal: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[TaskStatus] = mapped_column(
         Enum(TaskStatus), default=TaskStatus.NOT_STARTED, index=True

@@ -24,12 +24,20 @@
 
 保存项目基础信息：`name`, `goal`, `description`, `status`, `owner_id`, `start_date`, `end_date`。
 
+项目状态只保留：
+- `planning`：没有任务，或所有未完成任务都还未到开始时间。
+- `active`：存在已开始且未完成的任务。
+- `completed`：所有未删除任务都已会签完成。
+- `archived`：通过归档操作手动标记。
+
+除 `archived` 外，项目状态由任务数据自动推导，不需要人工维护。
+
 ### tasks
 
 保存任务本体、任务树和会签状态。
 
 关键字段：
-- `project_id`, `parent_task_id`, `title`, `description`, `priority`
+- `project_id`, `parent_task_id`, `title`, `goal`, `description`, `priority`
 - `start_date`, `deadline`, `estimated_hours`, `actual_hours`
 - `signed_off_by_id`, `signed_off_at`, `completed_at`
 - `is_deleted`, `deleted_at`, `required_skills_json`, `sort_order`

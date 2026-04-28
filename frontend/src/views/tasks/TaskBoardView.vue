@@ -108,6 +108,7 @@ async function handleCreateAiEstimate() {
     const data = await aiApi.estimateTask(
       projectId,
       createForm.value.title,
+      '',
       createForm.value.description,
       (msg: string) => { createAiStatusMsg.value = msg },
     )

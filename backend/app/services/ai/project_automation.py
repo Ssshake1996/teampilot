@@ -130,6 +130,7 @@ async def _project_snapshot(db: AsyncSession, include_tasks: bool = True) -> lis
                 {
                     "id": str(task.id),
                     "title": task.title,
+                    "goal": task.goal or "",
                     "status": task_service.effective_task_status(task).value,
                     "progress_pct": await task_service.get_task_progress_pct(db, task),
                     "assignee": ", ".join(
@@ -154,7 +155,7 @@ async def preview_project_plan(db: AsyncSession, prompt: str, llm: LLMClient) ->
                 "You are a senior project manager. Return JSON only. "
                 "{\"project\":{\"name\":\"\",\"goal\":\"\",\"description\":\"\",\"start_date\":\"YYYY-MM-DD\","
                 "\"end_date\":\"YYYY-MM-DD\"},"
-                "\"tasks\":[{\"title\":\"\",\"description\":\"\",\"priority\":\"medium\","
+                "\"tasks\":[{\"title\":\"\",\"goal\":\"\",\"description\":\"\",\"priority\":\"medium\","
                 "\"estimated_hours\":8,\"start_date\":\"YYYY-MM-DD\",\"deadline\":\"YYYY-MM-DD\","
                 "\"assignee_ids\":[],\"reason\":\"\",\"children\":[]}]} "
                 "priority must be low/medium/high/urgent. assignee_ids must come from team members."
@@ -205,6 +206,7 @@ async def commit_project_plan(db: AsyncSession, plan: dict, owner_id: uuid.UUID)
             project.id,
             TaskCreate(
                 title=item.get("title") or "Untitled task",
+                goal=item.get("goal") or "",
                 description=item.get("description") or "",
                 priority=_priority(item.get("priority")),
                 assignee_ids=assignee_ids,

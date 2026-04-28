@@ -20,7 +20,7 @@ router = APIRouter(tags=["任务"])
 async def require_task_update_permissions(db: AsyncSession, user: User, data: TaskUpdate) -> None:
     fields = set(data.model_dump(exclude_unset=True).keys())
     required: set[str] = set()
-    if fields & {"title", "description", "priority"}:
+    if fields & {"title", "goal", "description", "priority"}:
         required.add("task.edit")
     if "assignee_ids" in fields:
         required.add("task.assign")
@@ -64,6 +64,16 @@ async def create_task(
     await db.refresh(task)
     await emit_task_event("task.created", {"task_id": str(task.id), "project_id": str(project_id)})
     return await task_service.task_to_out(db, task)
+
+
+@router.patch("/tasks/reorder")
+async def reorder_tasks(
+    items: list[TaskReorder],
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("task.edit")),
+):
+    await task_service.reorder_tasks(db, [i.model_dump() for i in items])
+    return {"message": "Reordered"}
 
 
 @router.get("/tasks/{task_id}", response_model=TaskOut)
@@ -187,16 +197,6 @@ async def get_progress(
     current_user: User = Depends(require_permission("progress.view")),
 ):
     return await task_service.get_progress_history(db, task_id)
-
-
-@router.patch("/tasks/reorder")
-async def reorder_tasks(
-    items: list[TaskReorder],
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("task.edit")),
-):
-    await task_service.reorder_tasks(db, [i.model_dump() for i in items])
-    return {"message": "Reordered"}
 
 
 @router.get("/tasks/{task_id}/subtasks")

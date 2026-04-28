@@ -6,7 +6,10 @@ export const authApi = {
     return http.post<User>('/auth/register', data)
   },
   login(data: { username: string; password: string }) {
-    return http.post<{ access_token: string; token_type: string }>('/auth/login', data)
+    return http.post<{ access_token: string; refresh_token: string; token_type: string }>('/auth/login', data)
+  },
+  refresh(data: { refresh_token: string }) {
+    return http.post<{ access_token: string; refresh_token: string; token_type: string }>('/auth/refresh', data)
   },
   me() {
     return http.get<User>('/auth/me')

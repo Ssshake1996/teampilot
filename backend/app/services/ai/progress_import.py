@@ -71,6 +71,7 @@ async def parse_progress_updates(
             "project_id": str(task.project_id),
             "project_name": project_name,
             "title": task.title,
+            "goal": task.goal or "",
             "description": task.description or "",
             "assignee_name": "、".join(assignee_names),
             "status": effective_task_status(task).value,

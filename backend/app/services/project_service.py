@@ -32,6 +32,38 @@ async def get_project_member_count(db: AsyncSession, project_id: uuid.UUID) -> i
     ).scalar() or 0
 
 
+async def effective_project_status(db: AsyncSession, project: Project) -> ProjectStatus:
+    if project.status == ProjectStatus.ARCHIVED:
+        return ProjectStatus.ARCHIVED
+
+    tasks = (
+        await db.execute(
+            select(Task).where(
+                Task.project_id == project.id,
+                Task.is_deleted == False,
+            )
+        )
+    ).scalars().all()
+
+    if not tasks:
+        return ProjectStatus.PLANNING
+
+    statuses = [effective_task_status(task) for task in tasks]
+    if all(status == TaskStatus.DONE for status in statuses):
+        return ProjectStatus.COMPLETED
+    if all(status == TaskStatus.NOT_STARTED for status in statuses):
+        return ProjectStatus.PLANNING
+    return ProjectStatus.ACTIVE
+
+
+async def sync_project_status(db: AsyncSession, project: Project) -> ProjectStatus:
+    status = await effective_project_status(db, project)
+    if project.status != status:
+        project.status = status
+        await db.flush()
+    return status
+
+
 async def project_to_out(db: AsyncSession, project: Project) -> dict:
     task_count = (
         await db.execute(
@@ -51,12 +83,13 @@ async def project_to_out(db: AsyncSession, project: Project) -> dict:
         )
     ).scalar() or 0
     member_count = await get_project_member_count(db, project.id)
+    status = await sync_project_status(db, project)
     return {
         "id": project.id,
         "name": project.name,
         "goal": project.goal,
         "description": project.description,
-        "status": project.status,
+        "status": status,
         "owner_id": project.owner_id,
         "start_date": project.start_date,
         "end_date": project.end_date,
@@ -237,6 +270,7 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
         task_dict = {
             "id": str(task.id),
             "title": task.title,
+            "goal": task.goal,
             "description": task.description,
             "status": status,
             "priority": task.priority.value,

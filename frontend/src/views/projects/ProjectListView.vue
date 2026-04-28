@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import draggable from 'vuedraggable'
 import { projectsApi } from '@/api/projects'
 import { tasksApi } from '@/api/tasks'
 import { usersApi } from '@/api/users'
@@ -9,6 +10,15 @@ import { aiApi } from '@/api/ai'
 import { useAuthStore } from '@/stores/auth'
 import TaskDataSkillPanel from '@/components/tasks/TaskDataSkillPanel.vue'
 import type { Project, User, TaskProgress } from '@/types/models'
+import {
+  flattenTaskTree,
+  getVisibleTaskRows,
+  hasTaskChildren,
+  moveVisibleRow,
+  normalizeTaskTreeForScope,
+  orderedSiblingsForTask,
+  scopePeerForRow,
+} from '@/utils/taskTree'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -21,11 +31,14 @@ const showArchived = ref(false)
 const taskTrees = ref<Record<string, any[]>>({})
 const loadingTrees = ref<Record<string, boolean>>({})
 const expandedProjects = ref<Set<string>>(new Set())
+const draggingTaskId = ref<string | null>(null)
+const collapsedTaskIds = ref<Record<string, string[]>>({})
 
 const canCreateProject = computed(() => auth.can('project.create'))
 const canArchiveProject = computed(() => auth.can('project.archive'))
 const canEditProject = computed(() => auth.can('project.edit'))
 const canCreateTask = computed(() => auth.can('task.create'))
+const canEditTask = computed(() => auth.can('task.edit'))
 const canAssignTask = computed(() => auth.can('task.assign'))
 const canSetTaskHours = computed(() => auth.can('task.set_hours'))
 const canSetTaskDeadline = computed(() => auth.can('task.set_deadline'))
@@ -44,7 +57,7 @@ const creating = ref(false)
 // Add subtask
 const subtaskDialogVisible = ref(false)
 const subtaskParent = ref<{ id: string | null; title: string; projectId: string } | null>(null)
-const subtaskForm = ref({ title: '', description: '', assignee_ids: [] as string[], estimated_hours: null as number | null, deadline: '' })
+const subtaskForm = ref({ title: '', goal: '', description: '', assignee_ids: [] as string[], estimated_hours: null as number | null, deadline: '' })
 const creatingSubtask = ref(false)
 const aiEstimating = ref(false)
 const aiStatusMsg = ref('')
@@ -65,6 +78,8 @@ const projectDetail = ref<Project | null>(null)
 const projectDetailForm = ref({ goal: '', description: '' })
 const taskDetailVisible = ref(false)
 const taskDetail = ref<any>(null)
+const taskDetailSaving = ref(false)
+const taskDetailForm = ref({ title: '', goal: '', description: '' })
 
 // Group progress import
 const progressImportDialogVisible = ref(false)
@@ -103,6 +118,22 @@ function userNames(ids: string[] | null | undefined): string {
     .join('、') || '未分配'
 }
 
+function formatApiError(err: any, fallback: string) {
+  const detail = err?.response?.data?.detail
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail)) {
+    const message = detail
+      .map((item) => item?.msg || item?.message || item?.detail || JSON.stringify(item))
+      .filter(Boolean)
+      .join('；')
+    return message || fallback
+  }
+  if (detail && typeof detail === 'object') {
+    return detail.message || detail.msg || detail.detail || JSON.stringify(detail)
+  }
+  return err?.message || fallback
+}
+
 // ── Data Loading ──
 async function loadProjects() {
   loading.value = true
@@ -128,25 +159,10 @@ async function loadTaskTree(pid: string, force = false) {
   loadingTrees.value[pid] = true
   try {
     const res = await projectsApi.getTaskTree(pid)
-    taskTrees.value[pid] = flattenTree(res.data)
+    taskTrees.value[pid] = flattenTaskTree(res.data)
+    pruneCollapsedTaskIds(pid)
   } catch { ElMessage.error('加载任务树失败') }
   finally { loadingTrees.value[pid] = false }
-}
-
-function flattenTree(roots: any[]): any[] {
-  const list: any[] = []
-  for (const t of roots) {
-    list.push({ ...t, _depth: 0 })
-    if (t.children?.length) {
-      for (const c of t.children) {
-        list.push({ ...c, _depth: 1, _parentId: t.id })
-        if (c.children?.length) {
-          for (const gc of c.children) list.push({ ...gc, _depth: 2, _parentId: c.id })
-        }
-      }
-    }
-  }
-  return list
 }
 
 function toggleProject(pid: string) {
@@ -154,6 +170,43 @@ function toggleProject(pid: string) {
   else { expandedProjects.value.add(pid); loadTaskTree(pid) }
 }
 function isExpanded(pid: string) { return expandedProjects.value.has(pid) }
+
+function collapsedTaskSet(projectId: string) {
+  return new Set(collapsedTaskIds.value[projectId] || [])
+}
+
+function visibleTaskRows(projectId: string) {
+  return getVisibleTaskRows(taskTrees.value[projectId] || [], collapsedTaskSet(projectId))
+}
+
+function pruneCollapsedTaskIds(projectId: string) {
+  const ids = new Set((taskTrees.value[projectId] || []).map((task: any) => task.id))
+  const next = (collapsedTaskIds.value[projectId] || []).filter((id) => ids.has(id))
+  collapsedTaskIds.value = { ...collapsedTaskIds.value, [projectId]: next }
+}
+
+function isTaskCollapsed(projectId: string, task: any) {
+  return collapsedTaskSet(projectId).has(task.id)
+}
+
+function setTaskCollapsed(projectId: string, taskId: string, collapsed: boolean) {
+  const ids = new Set(collapsedTaskIds.value[projectId] || [])
+  if (collapsed) ids.add(taskId)
+  else ids.delete(taskId)
+  collapsedTaskIds.value = { ...collapsedTaskIds.value, [projectId]: Array.from(ids) }
+}
+
+function toggleTaskCollapse(projectId: string, task: any) {
+  setTaskCollapsed(projectId, task.id, !isTaskCollapsed(projectId, task))
+}
+
+function taskHasChildren(projectId: string, task: any) {
+  return hasTaskChildren(taskTrees.value[projectId] || [], task.id)
+}
+
+function taskNameIndentStyle(task: any) {
+  return { '--task-depth': `${task._depth || 0}` } as Record<string, string>
+}
 
 // ── Inline Edit (admin only) ──
 async function handleAssigneeChange(task: any, newIds: string[]) {
@@ -172,6 +225,64 @@ async function handleFieldUpdate(task: any, field: string, value: any) {
     await tasksApi.update(task.id, { [field]: value || null } as any)
     task[field] = value || null
   } catch { ElMessage.error('更新失败') }
+}
+
+function canMoveTaskRow(evt: any) {
+  const dragged = evt?.draggedContext?.element
+  const related = evt?.relatedContext?.element
+  if (!canEditTask.value || !dragged || dragged.is_deleted || !related) return false
+  const tree = Object.values(taskTrees.value).find((items: any[]) => items.some((task: any) => task.id === dragged.id)) as any[] | undefined
+  const peer = tree ? scopePeerForRow(tree, related, dragged) : null
+  return !!peer && peer.id !== dragged.id
+}
+
+function handleTaskRowDragStart(projectId: string, evt: any) {
+  const rows = visibleTaskRows(projectId)
+  draggingTaskId.value = rows[evt?.oldIndex]?.id || null
+}
+
+async function handleTaskRowDragEnd(projectId: string, evt: any) {
+  if (evt?.oldIndex === evt?.newIndex) {
+    draggingTaskId.value = null
+    return
+  }
+  const tree = taskTrees.value[projectId] || []
+  const visibleRows = visibleTaskRows(projectId)
+  const oldIndex = Number(evt?.oldIndex)
+  const newIndex = Number(evt?.newIndex)
+  const moved = visibleRows.find((task: any) => task.id === draggingTaskId.value) || visibleRows[oldIndex]
+  draggingTaskId.value = null
+  if (!moved) {
+    await loadTaskTree(projectId, true)
+    return
+  }
+
+  const reorderedVisibleRows = moveVisibleRow(visibleRows, oldIndex, newIndex)
+  const movedInReorderedRows = reorderedVisibleRows.find((task: any) => task.id === moved.id) || moved
+  const siblings = orderedSiblingsForTask(reorderedVisibleRows, movedInReorderedRows)
+  if (siblings.length < 2) {
+    await loadTaskTree(projectId, true)
+    return
+  }
+  taskTrees.value[projectId] = normalizeTaskTreeForScope(tree, movedInReorderedRows, siblings)
+  try {
+    await tasksApi.reorder(siblings.map((task: any, index: number) => ({
+      task_id: task.id,
+      status: task.status,
+      sort_order: index + 1,
+    })))
+    siblings.forEach((task: any, index: number) => { task.sort_order = index + 1 })
+    ElMessage.success('排序已更新')
+    await loadTaskTree(projectId, true)
+  } catch (err: any) {
+    ElMessage({
+      type: 'error',
+      message: formatApiError(err, '排序更新失败'),
+      showClose: true,
+      duration: 6000,
+    })
+    await loadTaskTree(projectId, true)
+  }
 }
 
 function recalcParent(parentId: string) {
@@ -221,7 +332,7 @@ async function handleRestore(task: any, projectId?: string) {
     if (pid) await loadTaskTree(pid, true)
     await loadProjects()
   } catch (err: any) {
-    ElMessage.error(err?.response?.data?.detail || '恢复失败')
+    ElMessage.error(formatApiError(err, '恢复失败'))
   }
 }
 
@@ -260,8 +371,8 @@ async function saveProjectDetail() {
     syncProjectDetailForm(projectDetail.value)
     projects.value = projects.value.map((item) => item.id === res.data.id ? { ...item, ...res.data } : item)
     ElMessage.success('项目信息已更新')
-  } catch {
-    ElMessage.error('保存失败')
+  } catch (err: any) {
+    ElMessage.error(formatApiError(err, '保存失败'))
   } finally {
     projectDetailSaving.value = false
   }
@@ -269,7 +380,51 @@ async function saveProjectDetail() {
 
 function openTaskDetail(task: any, projectId: string) {
   taskDetail.value = { ...task, projectId }
+  syncTaskDetailForm(taskDetail.value)
   taskDetailVisible.value = true
+}
+
+function syncTaskDetailForm(task: any | null) {
+  taskDetailForm.value = {
+    title: task?.title || '',
+    goal: task?.goal || '',
+    description: task?.description || '',
+  }
+}
+
+function mergeTaskIntoTrees(updated: any) {
+  for (const tree of Object.values(taskTrees.value)) {
+    const item = (tree as any[]).find((task) => task.id === updated.id)
+    if (item) Object.assign(item, updated)
+  }
+}
+
+async function saveTaskDetail() {
+  if (!taskDetail.value) return
+  const title = taskDetailForm.value.title.trim()
+  if (!title) {
+    ElMessage.warning('请输入任务名称')
+    return
+  }
+
+  taskDetailSaving.value = true
+  try {
+    const projectId = taskDetail.value.projectId || resolveProjectIdForTask(taskDetail.value)
+    const res = await tasksApi.update(taskDetail.value.id, {
+      title,
+      goal: taskDetailForm.value.goal.trim() || null,
+      description: taskDetailForm.value.description.trim() || null,
+    } as any)
+    taskDetail.value = { ...taskDetail.value, ...res.data, projectId }
+    syncTaskDetailForm(taskDetail.value)
+    mergeTaskIntoTrees(res.data)
+    await loadProjects()
+    ElMessage.success('任务信息已更新')
+  } catch (err: any) {
+    ElMessage.error(formatApiError(err, '保存失败'))
+  } finally {
+    taskDetailSaving.value = false
+  }
 }
 
 async function handleTaskDetailDataSkillAdopted(entry: TaskProgress) {
@@ -326,7 +481,7 @@ async function submitFeedback() {
     }
     await loadProjects()
   } catch (err: any) {
-    ElMessage.error(err?.response?.data?.detail || '提交失败')
+    ElMessage.error(formatApiError(err, '提交失败'))
   } finally {
     feedbackSubmitting.value = false
   }
@@ -463,9 +618,9 @@ async function openDailyBrief(silent = false) {
   } catch (err: any) {
     dailyBriefStatus.value = ''
     if (!silent) {
-      ElMessage.error(err?.message || '每日巡检报告生成失败')
+      ElMessage.error(formatApiError(err, '每日巡检报告生成失败'))
     } else {
-      ElMessage.warning(err?.message || '进展已同步，但巡检报告生成失败')
+      ElMessage.warning(formatApiError(err, '进展已同步，但巡检报告生成失败'))
     }
   } finally {
     dailyBriefLoading.value = false
@@ -492,14 +647,14 @@ async function openRetrospective(project: Project) {
 // ── Add Subtask (admin only) ──
 function openSubtaskDialog(task: any, projectId: string) {
   subtaskParent.value = { id: task.id, title: task.title, projectId }
-  subtaskForm.value = { title: '', description: '', assignee_ids: [], estimated_hours: null, deadline: '' }
+  subtaskForm.value = { title: '', goal: '', description: '', assignee_ids: [], estimated_hours: null, deadline: '' }
   aiRecommendations.value = []; aiEstimateInfo.value = null
   subtaskDialogVisible.value = true
 }
 
 function openRootTaskDialog(project: Project) {
   subtaskParent.value = { id: null, title: project.name, projectId: project.id }
-  subtaskForm.value = { title: '', description: '', assignee_ids: [], estimated_hours: null, deadline: '' }
+  subtaskForm.value = { title: '', goal: '', description: '', assignee_ids: [], estimated_hours: null, deadline: '' }
   aiRecommendations.value = []; aiEstimateInfo.value = null
   subtaskDialogVisible.value = true
 }
@@ -509,6 +664,7 @@ async function handleCreateSubtask() {
   creatingSubtask.value = true
   try {
     const payload: any = { title: subtaskForm.value.title }
+    if (subtaskForm.value.goal) payload.goal = subtaskForm.value.goal
     if (subtaskForm.value.description) payload.description = subtaskForm.value.description
     if (subtaskForm.value.assignee_ids.length) payload.assignee_ids = subtaskForm.value.assignee_ids
     if (subtaskForm.value.estimated_hours) payload.estimated_hours = subtaskForm.value.estimated_hours
@@ -521,6 +677,9 @@ async function handleCreateSubtask() {
       ElMessage.success('任务已创建')
     }
     subtaskDialogVisible.value = false
+    if (subtaskParent.value.id) {
+      setTaskCollapsed(subtaskParent.value.projectId, subtaskParent.value.id, false)
+    }
     await loadTaskTree(subtaskParent.value.projectId, true)
     const projRes = await projectsApi.list(1, 100, showArchived.value)
     projects.value = projRes.data.items
@@ -532,7 +691,7 @@ async function handleAiEstimate() {
   if (!subtaskForm.value.title.trim() || !subtaskParent.value) return
   aiEstimating.value = true; aiStatusMsg.value = '正在启动 AI...'
   try {
-    const data = await aiApi.estimateTask(subtaskParent.value.projectId, subtaskForm.value.title, subtaskForm.value.description, (msg: string) => { aiStatusMsg.value = msg })
+    const data = await aiApi.estimateTask(subtaskParent.value.projectId, subtaskForm.value.title, subtaskForm.value.goal, subtaskForm.value.description, (msg: string) => { aiStatusMsg.value = msg })
     aiEstimateInfo.value = data
     aiRecommendations.value = data.recommended_assignees || []
     if (data.estimated_hours && !subtaskForm.value.estimated_hours) subtaskForm.value.estimated_hours = data.estimated_hours
@@ -592,8 +751,8 @@ function projectProgressColor(p: Project): string {
   const deviation = pct - (Math.min(Date.now() - new Date(p.start_date).getTime(), span) / span * 100)
   return deviation >= 0 ? '#67C23A' : deviation >= -20 ? '#E6A23C' : '#F56C6C'
 }
-function statusType(s: string) { return ({ planning: 'info', active: '', paused: 'warning', completed: 'success', archived: 'danger' } as any)[s] || 'info' }
-function statusLabel(s: string) { return ({ planning: '规划中', active: '进行中', paused: '已暂停', completed: '已完成', archived: '已归档' } as any)[s] || s }
+function statusType(s: string) { return ({ planning: 'info', active: '', completed: 'success', archived: 'danger' } as any)[s] || 'info' }
+function statusLabel(s: string) { return ({ planning: '规划中', active: '进行中', completed: '已完成', archived: '已归档' } as any)[s] || s }
 function taskStatusType(s: string) { return ({ not_started: 'info', in_progress: 'warning', done: 'success' } as any)[s] || 'info' }
 function taskStatusLabel(s: string) { return ({ not_started: '待开始', in_progress: '进行中', done: '已完成' } as any)[s] || s }
 function taskNeedsSignoff(task: any) { return task.status !== 'done' && (task.progress_pct ?? 0) >= 100 }
@@ -718,17 +877,58 @@ onMounted(loadProjects)
               <div class="col-act center">状态 / 操作</div>
             </div>
 
-            <div v-for="task in taskTrees[project.id]" :key="task.id" class="trow" :class="['d' + task._depth, { tdel: task.is_deleted }]">
-              <div class="col-exp">
-                <span v-if="task._depth === 0 && task.subtask_total > 0" class="sbadge">{{ task.subtask_done }}/{{ task.subtask_total }}</span>
+            <draggable
+              :model-value="visibleTaskRows(project.id)"
+              item-key="id"
+              tag="div"
+              class="task-drag-list"
+              ghost-class="ghost-row"
+              handle=".task-drag-handle"
+              :animation="160"
+              :disabled="!canEditTask"
+              :move="canMoveTaskRow"
+              @start="(evt: any) => handleTaskRowDragStart(project.id, evt)"
+              @end="(evt: any) => handleTaskRowDragEnd(project.id, evt)"
+            >
+              <template #item="{ element: task }">
+            <div class="trow" :class="['d' + task._depth, { tdel: task.is_deleted }]">
+              <div class="col-exp task-tools">
+                <button
+                  v-if="canEditTask && !task.is_deleted"
+                  type="button"
+                  class="task-drag-handle"
+                  title="拖拽排序"
+                  aria-label="拖拽排序"
+                  @click.stop
+                >
+                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                    <path d="M5 3h2v2H5V3Zm4 0h2v2H9V3ZM5 7h2v2H5V7Zm4 0h2v2H9V7Zm-4 4h2v2H5v-2Zm4 0h2v2H9v-2Z" fill="currentColor"/>
+                  </svg>
+                </button>
+                <span v-else class="task-drag-spacer"></span>
+                <button
+                  v-if="taskHasChildren(project.id, task)"
+                  type="button"
+                  class="task-collapse-toggle"
+                  :class="{ collapsed: isTaskCollapsed(project.id, task) }"
+                  :title="isTaskCollapsed(project.id, task) ? '展开子任务' : '折叠子任务'"
+                  :aria-label="isTaskCollapsed(project.id, task) ? '展开子任务' : '折叠子任务'"
+                  @click.stop="toggleTaskCollapse(project.id, task)"
+                >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M4 6l4 4 4-4H4z" fill="currentColor"/>
+                  </svg>
+                </button>
+                <span v-else class="task-collapse-spacer"></span>
               </div>
-              <div class="col-name" :style="{ paddingLeft: (4 + task._depth * 18) + 'px' }">
-                <span v-if="task._depth > 0" class="si2">└</span>
+              <div class="col-name task-name-cell" :style="taskNameIndentStyle(task)">
+                <span v-if="task._depth > 0" class="task-branch" aria-hidden="true"></span>
                 <button type="button" class="task-link" @click.stop="openTaskDetail(task, project.id)">
                   <span class="tname">{{ task.title }}</span>
                 </button>
                 <el-tag v-if="task.priority === 'urgent'" type="danger" size="small" style="margin-left:4px">紧急</el-tag>
                 <el-tag v-else-if="task.priority === 'high'" type="danger" size="small" effect="plain" style="margin-left:4px">高</el-tag>
+                <span v-if="task._depth === 0 && task.subtask_total > 0" class="sbadge">{{ task.subtask_done }}/{{ task.subtask_total }}</span>
               </div>
               <!-- Progress History Column -->
               <div class="col-fb" @click.stop>
@@ -759,17 +959,21 @@ onMounted(loadProjects)
               </div>
               <!-- Start Date -->
               <div class="col-sd" @click.stop>
-                <el-popover v-if="canSetTaskDeadline && !task.is_deleted" trigger="click" :width="240" placement="bottom">
+                <el-popover v-if="canSetTaskDeadline && !task.is_deleted" trigger="click" :width="240" placement="bottom" :hide-after="0">
                   <template #reference><span class="dt-click">{{ formatDate(task.start_date || task.created_at) }}</span></template>
-                  <el-date-picker :model-value="(task.start_date || task.created_at || '').slice(0, 10)" type="date" size="small" value-format="YYYY-MM-DD" style="width:100%" @update:model-value="(v: string) => handleFieldUpdate(task, 'start_date', v)" />
+                  <div class="date-popover-body" @click.stop>
+                    <el-date-picker :model-value="(task.start_date || task.created_at || '').slice(0, 10)" type="date" size="small" value-format="YYYY-MM-DD" style="width:100%" :teleported="false" @update:model-value="(v: string) => handleFieldUpdate(task, 'start_date', v)" />
+                  </div>
                 </el-popover>
                 <span v-else>{{ formatDate(task.start_date || task.created_at) }}</span>
               </div>
               <!-- End Date -->
               <div class="col-ed" @click.stop>
-                <el-popover v-if="canSetTaskDeadline && !task.is_deleted" trigger="click" :width="240" placement="bottom">
+                <el-popover v-if="canSetTaskDeadline && !task.is_deleted" trigger="click" :width="240" placement="bottom" :hide-after="0">
                   <template #reference><span class="dt-click" :class="{ ovd: task.is_overdue }">{{ formatDate(task.deadline) || '-' }}</span></template>
-                  <el-date-picker :model-value="task.deadline ? task.deadline.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" style="width:100%" @update:model-value="(v: string) => handleFieldUpdate(task, 'deadline', v)" />
+                  <div class="date-popover-body" @click.stop>
+                    <el-date-picker :model-value="task.deadline ? task.deadline.slice(0, 10) : ''" type="date" size="small" value-format="YYYY-MM-DD" style="width:100%" :teleported="false" @update:model-value="(v: string) => handleFieldUpdate(task, 'deadline', v)" />
+                  </div>
                 </el-popover>
                 <span v-else :class="{ ovd: task.is_overdue }">{{ formatDate(task.deadline) }}</span>
               </div>
@@ -800,6 +1004,8 @@ onMounted(loadProjects)
                 </el-button>
               </div>
             </div>
+              </template>
+            </draggable>
           </template>
           <div v-else class="tloading">
             暂无任务
@@ -895,9 +1101,15 @@ onMounted(loadProjects)
     </el-dialog>
 
     <!-- Add Subtask Dialog -->
-    <el-dialog v-model="subtaskDialogVisible" :title="(subtaskParent?.id ? '添加子任务 — ' : '添加任务 — ') + (subtaskParent?.title || '')" width="640px">
-      <el-form label-width="80px">
+    <el-dialog
+      v-model="subtaskDialogVisible"
+      :title="(subtaskParent?.id ? '添加子任务 — ' : '添加任务 — ') + (subtaskParent?.title || '')"
+      width="640px"
+      class="task-create-dialog"
+    >
+      <el-form label-width="88px" class="task-create-form">
         <el-form-item label="任务标题"><el-input v-model="subtaskForm.title" /></el-form-item>
+        <el-form-item label="任务目标"><el-input v-model="subtaskForm.goal" type="textarea" :rows="2" placeholder="可选，说明任务要达到的结果" /></el-form-item>
         <el-form-item label="任务描述"><el-input v-model="subtaskForm.description" type="textarea" :rows="2" placeholder="可选，有助 AI 更准推荐" /></el-form-item>
         <el-form-item>
           <div class="ai-row">
@@ -921,7 +1133,20 @@ onMounted(loadProjects)
             </div>
           </div>
         </div>
-        <el-form-item label="负责人"><el-select v-model="subtaskForm.assignee_ids" placeholder="选择负责人" clearable filterable multiple class="full-assignee-select" style="width:100%"><el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" /></el-select></el-form-item>
+        <el-form-item label="负责人" class="assignee-form-item">
+          <el-select
+            v-model="subtaskForm.assignee_ids"
+            placeholder="选择负责人"
+            clearable
+            filterable
+            multiple
+            :teleported="false"
+            popper-class="task-create-assignee-popper"
+            class="full-assignee-select"
+          >
+            <el-option v-for="u in users" :key="u.id" :label="u.full_name" :value="u.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="预估工时"><el-input-number v-model="subtaskForm.estimated_hours" :min="0" :max="999" :precision="1" style="width:100%" /></el-form-item>
         <el-form-item label="截止日期"><el-date-picker v-model="subtaskForm.deadline" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
       </el-form>
@@ -1020,12 +1245,47 @@ onMounted(loadProjects)
           style="margin-bottom: 12px"
         />
         <div class="detail-section">
-          <h4>任务目标</h4>
-          <p class="task-detail-goal">{{ taskDetail.title }}</p>
-        </div>
-        <div class="detail-section">
-          <h4>任务描述</h4>
-          <p class="task-description">{{ taskDetail.description || '暂无任务描述' }}</p>
+          <div class="detail-section-head">
+            <h4>任务信息</h4>
+            <el-button
+              v-if="canEditTask && !taskDetail.is_deleted"
+              type="primary"
+              size="small"
+              :loading="taskDetailSaving"
+              @click="saveTaskDetail"
+            >
+              保存
+            </el-button>
+          </div>
+          <el-form v-if="canEditTask && !taskDetail.is_deleted" label-width="72px" class="task-detail-edit-form">
+            <el-form-item label="任务名称">
+              <el-input v-model="taskDetailForm.title" maxlength="300" show-word-limit />
+            </el-form-item>
+            <el-form-item label="任务目标">
+              <el-input
+                v-model="taskDetailForm.goal"
+                type="textarea"
+                :rows="4"
+                placeholder="说明这项任务要达成的结果"
+              />
+            </el-form-item>
+            <el-form-item label="任务描述">
+              <el-input
+                v-model="taskDetailForm.description"
+                type="textarea"
+                :rows="5"
+                placeholder="补充背景、约束和执行要求"
+              />
+            </el-form-item>
+          </el-form>
+          <template v-else>
+            <h4 class="detail-subtitle">任务名称</h4>
+            <p class="task-description">{{ taskDetail.title }}</p>
+            <h4 class="detail-subtitle">任务目标</h4>
+            <p class="task-detail-goal">{{ taskDetail.goal || '暂无任务目标' }}</p>
+            <h4 class="detail-subtitle">任务描述</h4>
+            <p class="task-description">{{ taskDetail.description || '暂无任务描述' }}</p>
+          </template>
         </div>
         <div class="detail-section">
           <h4>基本信息</h4>
@@ -1195,7 +1455,7 @@ onMounted(loadProjects)
 /* Grid: 9 columns, auto-fill width */
 .prow, .trow, .thead {
   display: grid;
-  grid-template-columns: 30px 3fr 2fr 1.2fr 0.7fr 1.2fr 1.2fr 1.2fr 2fr;
+  grid-template-columns: 64px 3fr 2fr 1.2fr 0.7fr 1.2fr 1.2fr 1.2fr 2fr;
   align-items: center; padding: 0 8px; min-height: 40px; gap: 2px;
   border-left: 4px solid transparent;
   box-sizing: border-box;
@@ -1208,16 +1468,83 @@ onMounted(loadProjects)
 .trow:last-child { border-bottom: none; }
 .d0 { background: #fff; } .d1 { background: #fafbfc; } .d2 { background: #f5f7fa; }
 
-.col-exp { display: flex; justify-content: center; align-items: center; color: #909399; }
+.col-exp { display: flex; justify-content: center; align-items: center; gap: 4px; color: #909399; }
 .ei { transition: transform 0.2s; } .ei.rot { transform: rotate(90deg); }
-.sbadge { font-size: 10px; color: #409EFF; background: #ecf5ff; padding: 1px 5px; border-radius: 8px; white-space: nowrap; }
+.sbadge { flex: 0 0 auto; font-size: 10px; color: #409EFF; background: #ecf5ff; padding: 1px 5px; border-radius: 8px; white-space: nowrap; }
+.task-drag-list { display: block; }
+.task-tools { justify-content: flex-start; padding-left: 4px; box-sizing: border-box; }
+.task-drag-handle {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #a8abb2;
+  cursor: grab;
+}
+.task-drag-handle:hover { background: #ecf5ff; color: #409EFF; }
+.task-drag-handle:active { cursor: grabbing; }
+.task-drag-spacer,
+.task-collapse-spacer,
+.task-collapse-toggle {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+}
+.task-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #909399;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+.task-collapse-toggle:hover { background: #ecf5ff; color: #409EFF; }
+.task-collapse-toggle.collapsed svg { transform: rotate(-90deg); }
+.task-collapse-toggle svg { transition: transform 0.15s ease; }
+.ghost-row { opacity: 0.48; background: #ecf5ff !important; }
 
 .col-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.si2 { color: #c0c4cc; margin-right: 3px; }
-.tname { }
+.task-name-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+  padding-left: calc(var(--task-depth) * 22px + 4px);
+  box-sizing: border-box;
+}
+.task-branch {
+  position: relative;
+  width: 14px;
+  height: 20px;
+  flex: 0 0 14px;
+}
+.task-branch::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0;
+  width: 9px;
+  height: 10px;
+  border-left: 1px solid #dcdfe6;
+  border-bottom: 1px solid #dcdfe6;
+}
+.tname {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .task-link {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
   max-width: 100%;
   padding: 0;
   border: 0;
@@ -1252,6 +1579,7 @@ onMounted(loadProjects)
 /* Clickable text for inline edit */
 .dt-click { cursor: pointer; padding: 2px 4px; border-radius: 3px; border-bottom: 1px dashed #c0c4cc; }
 .dt-click:hover { background: #ecf5ff; color: #409EFF; border-bottom-color: #409EFF; }
+.date-popover-body { width: 220px; }
 
 /* Deleted */
 .tdel { opacity: 0.75; }
@@ -1287,17 +1615,57 @@ onMounted(loadProjects)
 .ai-section h4 { margin: 0 0 6px; font-size: 13px; color: #303133; }
 .ai-section ul { margin: 0; padding-left: 18px; color: #606266; font-size: 13px; line-height: 1.6; }
 
+.task-create-dialog :deep(.el-dialog__body) {
+  overflow: visible;
+}
+
+.task-create-form :deep(.el-form-item) {
+  align-items: flex-start;
+}
+
+.task-create-form :deep(.el-form-item__label) {
+  min-height: 32px;
+  line-height: 32px;
+}
+
+.assignee-form-item :deep(.el-form-item__content) {
+  min-width: 0;
+  align-items: flex-start;
+}
+
+.full-assignee-select {
+  width: 100%;
+}
+
 .full-assignee-select :deep(.el-select__wrapper) {
   min-height: 32px;
-  align-items: flex-start;
-  padding-top: 4px;
-  padding-bottom: 4px;
+  width: 100%;
+  align-items: center;
+  padding-top: 1px;
+  padding-bottom: 1px;
+  box-sizing: border-box;
 }
 
 .full-assignee-select :deep(.el-select__selection) {
+  flex: 1;
+  min-width: 0;
+  min-height: 24px;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+}
+
+.full-assignee-select :deep(.el-select__input-wrapper) {
+  min-width: 96px;
+  height: 24px;
+  line-height: 24px;
+}
+
+.full-assignee-select :deep(.el-select__placeholder) {
+  height: 24px;
+  line-height: 24px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .full-assignee-select :deep(.el-tag) {
@@ -1307,10 +1675,22 @@ onMounted(loadProjects)
   white-space: normal;
 }
 
+:global(.task-create-assignee-popper) {
+  max-width: 520px;
+}
+
+:global(.task-create-assignee-popper .el-select-dropdown__wrap) {
+  max-height: 168px;
+}
+
 .project-detail-drawer,
 .task-detail-drawer { padding: 0 4px; }
 .detail-section { margin-bottom: 16px; }
+.detail-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.detail-section-head h4 { margin: 0; }
+.detail-subtitle { margin: 12px 0 6px; font-size: 13px; color: #303133; }
 .project-detail-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.task-detail-edit-form :deep(.el-form-item:last-child) { margin-bottom: 0; }
 .task-detail-goal, .task-description {
   margin: 0;
   font-size: 13px;

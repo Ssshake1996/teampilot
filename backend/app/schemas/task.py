@@ -9,6 +9,7 @@ from app.models.task import TaskStatus, TaskPriority
 
 class TaskCreate(BaseModel):
     title: str
+    goal: str | None = None
     description: str | None = None
     status: TaskStatus | None = None
     priority: TaskPriority = TaskPriority.MEDIUM
@@ -21,6 +22,7 @@ class TaskCreate(BaseModel):
 
 class TaskUpdate(BaseModel):
     title: str | None = None
+    goal: str | None = None
     description: str | None = None
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
@@ -35,6 +37,7 @@ class TaskOut(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
     title: str
+    goal: str | None = None
     description: str | None = None
     status: TaskStatus
     priority: TaskPriority
@@ -67,7 +70,7 @@ class TaskAssign(BaseModel):
 
 class TaskReorder(BaseModel):
     task_id: uuid.UUID
-    status: TaskStatus
+    status: TaskStatus | None = None
     sort_order: int
 
 

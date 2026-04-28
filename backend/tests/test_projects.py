@@ -91,12 +91,41 @@ async def test_update_project(client: AsyncClient, auth_headers):
     res = await client.patch(f"/api/v1/projects/{pid}", json={
         "name": "Updated Name",
         "goal": "Updated goal",
-        "status": "active",
     }, headers=auth_headers)
     assert res.status_code == 200
     assert res.json()["name"] == "Updated Name"
     assert res.json()["goal"] == "Updated goal"
-    assert res.json()["status"] == "active"
+    assert res.json()["status"] == "planning"
+
+
+@pytest.mark.asyncio
+async def test_project_status_is_derived_from_tasks(client: AsyncClient, auth_headers):
+    create_res = await client.post("/api/v1/projects", json={
+        "name": "Derived Status Project",
+    }, headers=auth_headers)
+    pid = create_res.json()["id"]
+    assert create_res.json()["status"] == "planning"
+
+    task_res = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Active Task"}, headers=auth_headers)
+    assert task_res.status_code == 201
+    tid = task_res.json()["id"]
+
+    active_res = await client.get(f"/api/v1/projects/{pid}", headers=auth_headers)
+    assert active_res.status_code == 200
+    assert active_res.json()["status"] == "active"
+
+    progress_res = await client.post(
+        "/api/v1/ai/progress-import/commit",
+        json={"updates": [{"task_id": tid, "progress_pct": 100, "note": "Done"}]},
+        headers=auth_headers,
+    )
+    assert progress_res.status_code == 200
+    signoff_res = await client.post(f"/api/v1/tasks/{tid}/signoff", headers=auth_headers)
+    assert signoff_res.status_code == 200
+
+    completed_res = await client.get(f"/api/v1/projects/{pid}", headers=auth_headers)
+    assert completed_res.status_code == 200
+    assert completed_res.json()["status"] == "completed"
 
 
 @pytest.mark.asyncio

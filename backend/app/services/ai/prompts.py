@@ -162,6 +162,7 @@ TASK_ESTIMATE_SYSTEM = """你是任务工时评估助手。
 
 TASK_ESTIMATE_USER = """## 任务信息
 - 标题：{task_title}
+- 目标：{task_goal}
 - 描述：{task_description}
 - 所属项目：{project_name}
 

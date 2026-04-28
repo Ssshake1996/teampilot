@@ -31,6 +31,7 @@ export interface Task {
   id: string
   project_id: string
   title: string
+  goal: string | null
   description: string | null
   status: TaskStatus
   priority: TaskPriority

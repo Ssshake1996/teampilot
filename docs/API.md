@@ -20,8 +20,10 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin123"}'
 
-# 返回: {"access_token":"eyJ...", "token_type":"bearer"}
+# 返回: {"access_token":"eyJ...", "refresh_token":"eyJ...", "token_type":"bearer"}
 ```
+
+前端会在 access token 过期后自动使用 `refresh_token` 续期；默认 refresh token 有效期为 90 天，可通过 `REFRESH_TOKEN_EXPIRE_DAYS` 调整。
 
 ### 注册
 
@@ -61,6 +63,8 @@ id, username, full_name, role, department, bio, avatar_url, is_active, created_a
 
 - `GET /api/v1/permissions/me`：返回当前用户的角色和有效权限，用于前端按钮显示。
 - `GET /api/v1/permissions/catalog`、`GET/PUT/POST/DELETE /api/v1/permissions/roles`：需要 `system.role_manage` 权限。
+
+项目状态由任务自动推导：无任务或任务未到开始时间为 `planning`，存在已开始未完成任务为 `active`，全部会签完成为 `completed`；`archived` 只由归档操作产生。
 
 ## 任务状态与会签
 
@@ -163,7 +167,7 @@ AI 接口使用 Server-Sent Events 流式返回:
 curl -N http://localhost:8000/api/v1/ai/estimate-task \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"project_id":"xxx","title":"任务标题","description":"描述"}'
+  -d '{"project_id":"xxx","title":"任务标题","goal":"任务目标","description":"描述"}'
 
 # 返回:
 # event: status

@@ -10,7 +10,6 @@ from app.models import Base, TimestampMixin, UUIDMixin
 class ProjectStatus(str, enum.Enum):
     PLANNING = "planning"
     ACTIVE = "active"
-    PAUSED = "paused"
     COMPLETED = "completed"
     ARCHIVED = "archived"
 

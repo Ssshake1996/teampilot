@@ -33,7 +33,7 @@ async def test_register_duplicate_username(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_login_success(client: AsyncClient):
-    """Test successful login returns access token."""
+    """Test successful login returns access and refresh tokens."""
     await client.post("/api/v1/auth/register", json={
         "username": "loginuser",
         "password": "mypassword",
@@ -46,6 +46,29 @@ async def test_login_success(client: AsyncClient):
     assert res.status_code == 200
     data = res.json()
     assert "access_token" in data
+    assert "refresh_token" in data
+    assert data["token_type"] == "bearer"
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_returns_new_token_pair(client: AsyncClient):
+    """Test refresh endpoint returns a new access and refresh token pair."""
+    await client.post("/api/v1/auth/register", json={
+        "username": "refreshuser",
+        "password": "mypassword",
+        "full_name": "Refresh User",
+    })
+    login_res = await client.post("/api/v1/auth/login", json={
+        "username": "refreshuser",
+        "password": "mypassword",
+    })
+    refresh_token = login_res.json()["refresh_token"]
+
+    res = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    assert res.status_code == 200
+    data = res.json()
+    assert "access_token" in data
+    assert "refresh_token" in data
     assert data["token_type"] == "bearer"
 
 

@@ -12,14 +12,36 @@ async def test_create_task(client: AsyncClient, auth_headers):
 
     res = await client.post(f"/api/v1/projects/{pid}/tasks", json={
         "title": "Test Task",
+        "goal": "Reach the expected task outcome",
         "description": "Do something",
         "priority": "high",
     }, headers=auth_headers)
     assert res.status_code == 201
     data = res.json()
     assert data["title"] == "Test Task"
+    assert data["goal"] == "Reach the expected task outcome"
     assert data["status"] == "in_progress"
     assert data["priority"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_update_task_goal(client: AsyncClient, auth_headers):
+    """Test updating task title, goal, and description."""
+    proj = await client.post("/api/v1/projects", json={"name": "Task Goal Project"}, headers=auth_headers)
+    pid = proj.json()["id"]
+    task = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Old Task"}, headers=auth_headers)
+    tid = task.json()["id"]
+
+    res = await client.patch(f"/api/v1/tasks/{tid}", json={
+        "title": "Updated Task",
+        "goal": "Updated goal",
+        "description": "Updated description",
+    }, headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["title"] == "Updated Task"
+    assert data["goal"] == "Updated goal"
+    assert data["description"] == "Updated description"
 
 
 @pytest.mark.asyncio
@@ -34,6 +56,52 @@ async def test_list_tasks(client: AsyncClient, auth_headers):
     res = await client.get(f"/api/v1/projects/{pid}/tasks", headers=auth_headers)
     assert res.status_code == 200
     assert res.json()["total"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_reorder_subtasks(client: AsyncClient, auth_headers):
+    """Test reordering sibling subtasks by sort_order."""
+    proj = await client.post("/api/v1/projects", json={"name": "Reorder Project"}, headers=auth_headers)
+    pid = proj.json()["id"]
+    parent = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Parent"}, headers=auth_headers)
+    parent_id = parent.json()["id"]
+
+    first = await client.post(f"/api/v1/tasks/{parent_id}/subtasks", json={"title": "First"}, headers=auth_headers)
+    second = await client.post(f"/api/v1/tasks/{parent_id}/subtasks", json={"title": "Second"}, headers=auth_headers)
+    third = await client.post(f"/api/v1/tasks/{parent_id}/subtasks", json={"title": "Third"}, headers=auth_headers)
+
+    res = await client.patch("/api/v1/tasks/reorder", json=[
+        {"task_id": third.json()["id"], "sort_order": 1},
+        {"task_id": first.json()["id"], "sort_order": 2},
+        {"task_id": second.json()["id"], "sort_order": 3},
+    ], headers=auth_headers)
+    assert res.status_code == 200
+
+    subtasks = await client.get(f"/api/v1/tasks/{parent_id}/subtasks", headers=auth_headers)
+    assert subtasks.status_code == 200
+    assert [item["title"] for item in subtasks.json()] == ["Third", "First", "Second"]
+
+
+@pytest.mark.asyncio
+async def test_reorder_parent_tasks_with_children(client: AsyncClient, auth_headers):
+    """Test reordering parent tasks keeps child task tree valid."""
+    proj = await client.post("/api/v1/projects", json={"name": "Parent Reorder Project"}, headers=auth_headers)
+    pid = proj.json()["id"]
+    first = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "First Parent"}, headers=auth_headers)
+    second = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Second Parent"}, headers=auth_headers)
+    child = await client.post(f"/api/v1/tasks/{first.json()['id']}/subtasks", json={"title": "First Child"}, headers=auth_headers)
+    assert child.status_code == 201
+
+    res = await client.patch("/api/v1/tasks/reorder", json=[
+        {"task_id": second.json()["id"], "sort_order": 1},
+        {"task_id": first.json()["id"], "sort_order": 2},
+    ], headers=auth_headers)
+    assert res.status_code == 200
+
+    tree = await client.get(f"/api/v1/projects/{pid}/task-tree", headers=auth_headers)
+    assert tree.status_code == 200
+    assert [item["title"] for item in tree.json()] == ["Second Parent", "First Parent"]
+    assert tree.json()[1]["children"][0]["title"] == "First Child"
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ import type { User } from '@/types/models'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem('token'))
+  const refreshToken = ref<string | null>(localStorage.getItem('refresh_token'))
   const user = ref<User | null>(null)
   const permissions = ref<string[]>([])
 
@@ -15,9 +16,17 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(username: string, password: string) {
     const res = await authApi.login({ username, password })
-    token.value = res.data.access_token
-    localStorage.setItem('token', res.data.access_token)
+    setTokens(res.data.access_token, res.data.refresh_token)
     await fetchUser()
+  }
+
+  function setTokens(accessToken: string, nextRefreshToken?: string | null) {
+    token.value = accessToken
+    localStorage.setItem('token', accessToken)
+    if (nextRefreshToken) {
+      refreshToken.value = nextRefreshToken
+      localStorage.setItem('refresh_token', nextRefreshToken)
+    }
   }
 
   async function fetchUser() {
@@ -47,10 +56,26 @@ export const useAuthStore = defineStore('auth', () => {
 
   function logout() {
     token.value = null
+    refreshToken.value = null
     user.value = null
     permissions.value = []
     localStorage.removeItem('token')
+    localStorage.removeItem('refresh_token')
   }
 
-  return { token, user, permissions, isAuthenticated, isAdmin, isManager, can, login, fetchUser, fetchPermissions, logout }
+  return {
+    token,
+    refreshToken,
+    user,
+    permissions,
+    isAuthenticated,
+    isAdmin,
+    isManager,
+    can,
+    login,
+    setTokens,
+    fetchUser,
+    fetchPermissions,
+    logout,
+  }
 })

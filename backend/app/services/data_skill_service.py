@@ -71,7 +71,7 @@ async def delete_connector(db: AsyncSession, connector_id: uuid.UUID) -> bool:
 
 
 def _task_text(task: Task) -> str:
-    return "\n".join([task.title or "", task.description or ""]).strip()
+    return "\n".join([task.title or "", task.goal or "", task.description or ""]).strip()
 
 
 def _safe_json(value: Any, default: Any) -> Any:
@@ -530,7 +530,11 @@ async def _analyze_response_with_ai(
             "role": "user",
             "content": json.dumps(
                 {
-                    "task": {"title": task.title, "description": task.description},
+                    "task": {
+                        "title": task.title,
+                        "goal": task.goal,
+                        "description": task.description,
+                    },
                     "natural_language": skill.natural_language,
                     "skill_json": skill.skill_json,
                     "response_data": response_data,

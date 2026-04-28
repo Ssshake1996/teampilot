@@ -74,8 +74,8 @@ function sseCallAsync(
 
 export const aiApi = {
   // SSE streaming AI calls — onStatus shows work progress, result arrives at end
-  estimateTask(projectId: string, title: string, description: string, onStatus?: (msg: string) => void) {
-    return sseCallAsync('/ai/estimate-task', { project_id: projectId, title, description }, onStatus)
+  estimateTask(projectId: string, title: string, goal: string, description: string, onStatus?: (msg: string) => void) {
+    return sseCallAsync('/ai/estimate-task', { project_id: projectId, title, goal, description }, onStatus)
   },
   recommendAssignee(taskId: string, onStatus?: (msg: string) => void) {
     return sseCallAsync('/ai/recommend-assignee', { task_id: taskId }, onStatus)

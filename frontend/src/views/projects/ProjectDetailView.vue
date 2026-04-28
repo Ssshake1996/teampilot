@@ -32,7 +32,6 @@ const addingMember = ref(false)
 const statusTagType: Record<string, string> = {
   [ProjectStatus.PLANNING]: 'info',
   [ProjectStatus.ACTIVE]: 'success',
-  [ProjectStatus.PAUSED]: 'warning',
   [ProjectStatus.COMPLETED]: '',
   [ProjectStatus.ARCHIVED]: 'danger',
 }
@@ -40,7 +39,6 @@ const statusTagType: Record<string, string> = {
 const statusLabel: Record<string, string> = {
   [ProjectStatus.PLANNING]: '规划中',
   [ProjectStatus.ACTIVE]: '进行中',
-  [ProjectStatus.PAUSED]: '已暂停',
   [ProjectStatus.COMPLETED]: '已完成',
   [ProjectStatus.ARCHIVED]: '已归档',
 }

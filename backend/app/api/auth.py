@@ -29,7 +29,10 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     tokens = create_tokens(user)
-    return {"access_token": tokens["access_token"]}
+    return {
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+    }
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -46,7 +49,10 @@ async def refresh(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     tokens = create_tokens(user)
-    return {"access_token": tokens["access_token"]}
+    return {
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+    }
 
 
 @router.get("/me", response_model=UserOut)

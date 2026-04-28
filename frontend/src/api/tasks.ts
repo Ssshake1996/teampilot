@@ -35,7 +35,7 @@ export const tasksApi = {
   getProgress(taskId: string) {
     return http.get<TaskProgress[]>(`/tasks/${taskId}/progress`)
   },
-  reorder(items: { task_id: string; status: TaskStatus; sort_order: number }[]) {
+  reorder(items: { task_id: string; status?: TaskStatus; sort_order: number }[]) {
     return http.patch('/tasks/reorder', items)
   },
   getSubtasks(taskId: string) {

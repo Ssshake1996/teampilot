@@ -10,7 +10,6 @@ class ProjectCreate(BaseModel):
     name: str
     goal: str | None = None
     description: str | None = None
-    status: ProjectStatus = ProjectStatus.PLANNING
     start_date: date | None = None
     end_date: date | None = None
 
@@ -19,7 +18,6 @@ class ProjectUpdate(BaseModel):
     name: str | None = None
     goal: str | None = None
     description: str | None = None
-    status: ProjectStatus | None = None
     start_date: date | None = None
     end_date: date | None = None
 

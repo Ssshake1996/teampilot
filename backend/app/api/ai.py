@@ -64,6 +64,7 @@ class DecomposeRequest(BaseModel):
 class EstimateRequest(BaseModel):
     project_id: uuid.UUID
     title: str
+    goal: str = ""
     description: str = ""
 
 class ProgressImportRequest(BaseModel):
@@ -194,7 +195,7 @@ async def task_estimation(
 
             yield sse_status("正在分析团队成员技能和工作负载...")
             async with async_session() as db:
-                result = await estimate_task(db, data.project_id, data.title, data.description, llm)
+                result = await estimate_task(db, data.project_id, data.title, data.goal, data.description, llm)
 
             yield sse_status("分析完成")
             yield sse_result(result)

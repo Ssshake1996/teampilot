@@ -12,7 +12,7 @@ from app.services.ai.task_assignment import _active_task_count, _project_candida
 
 
 async def estimate_task(
-    db: AsyncSession, project_id: uuid.UUID, title: str, description: str, llm: LLMClient
+    db: AsyncSession, project_id: uuid.UUID, title: str, goal: str, description: str, llm: LLMClient
 ) -> dict:
     project = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
     if not project:
@@ -34,6 +34,7 @@ async def estimate_task(
 
     prompt = TASK_ESTIMATE_USER.format(
         task_title=title,
+        task_goal=goal or "none",
         task_description=description or "none",
         project_name=project.name,
         team_members="\n".join(members_text_parts) or "none",
