@@ -55,7 +55,7 @@ id, username, full_name, role, department, bio, avatar_url, is_active, created_a
 | 能力 | `/api/v1/capabilities` | 能力档案 |
 | 仪表盘 | `/api/v1/dashboard` | 统计、四象限、项目进度 |
 | AI | `/api/v1/ai` | 推荐、分析、风险、配置 |
-| 报告 | `/api/v1/reports` | 周报生成、日报/周报邮件发送 |
+| 报告 | `/api/v1/reports` | 巡检报告缓存、刷新、周报生成、邮件发送 |
 | 数据 Skill | `/api/v1/data-connectors`, `/api/v1/tasks/{task_id}/data-skills` | 内部平台 API 连接器、任务数据采集 Skill、执行快照和采纳进展 |
 | 权限 | `/api/v1/permissions` | 角色权限管理 |
 | WebSocket | `/ws/{token}` | 实时事件推送 |
@@ -210,7 +210,7 @@ curl -X POST http://localhost:8000/api/v1/ai/progress-import/commit \
 
 - `POST /api/v1/ai/project-plan/preview`：根据自然语言目标生成项目计划、任务树、负责人建议、工时和日期。
 - `POST /api/v1/ai/project-plan/commit`：确认后创建项目和任务树。
-- `POST /api/v1/ai/daily-brief`：跨未归档项目生成日报巡检，包含完成项、进行中、风险、建议动作和待会签候选。
+- `POST /api/v1/ai/daily-brief`：跨未归档项目生成巡检报告，包含风险、逾期/阻塞、进展快慢 TOP3、优先推进和待会签候选。
 - `POST /api/v1/ai/signoff-assist`：根据任务进展历史和子任务给出会签建议。
 - `POST /api/v1/ai/project-retrospective`：根据项目任务树和进展历史生成项目复盘。
 
@@ -230,21 +230,48 @@ curl -N http://localhost:8000/api/v1/ai/daily-brief \
 
 ## 报告与邮件发送
 
-项目管理页的“巡检报告”支持日报和周报，并可按当前选择刷新：
+项目管理页的“巡检报告”支持日报和周报。打开弹窗和切换类型只读取缓存；只有点击“刷新”才重新生成。
 
-- 日报：调用 `POST /api/v1/ai/daily-brief`，优先使用 AI 生成。
-- 周报：调用 `GET /api/v1/reports/weekly`，按最近 7 天任务进展、会签、逾期和优先级生成。
+- 日报：每天 07:00 自动生成一次；手动刷新时优先使用 AI 生成。
+- 周报：每周五 12:30 自动生成一次；手动刷新时优先使用 AI 分析；项目进展情况表由系统生成，覆盖所有未归档项目。
+- 读取缓存：调用 `GET /api/v1/reports/snapshot?report_type=daily|weekly`。
+- 手动刷新：调用 `POST /api/v1/reports/refresh`。
 - 邮件发送：调用 `POST /api/v1/reports/send`。
 
-日报返回格式固定。后端会规范化 AI 输出，确保包含：
+日报和周报返回格式固定。后端会规范化 AI 输出，确保包含：
 
 ```text
 summary, risky_projects, overdue_blocked_tasks,
-members_without_updates, priority_tasks, signoff_pending,
+progress_fast_top3, progress_slow_top3,
+priority_tasks, signoff_pending,
 source, source_label
 ```
 
-其中 `summary` 是字符串，五个列表字段都是字符串数组；AI 缺字段或返回类型不一致时，后端会补齐默认结论。
+其中 `summary` 是字符串，列表字段都是字符串数组；AI 缺字段或返回类型不一致时，后端会补齐默认结论。
+
+周报额外包含：
+
+```text
+project_progress_table, completed_tasks, progress_updates, period_start, period_end
+```
+
+`project_progress_table` 每行包含 `project_name`, `progress_pct`, `weekly_progress`, `task_completion`, `overdue_tasks`, `risk_level`, `next_action`。
+
+读取缓存示例：
+
+```bash
+curl http://localhost:8000/api/v1/reports/snapshot?report_type=weekly \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+手动刷新示例：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/reports/refresh \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"report_type":"daily"}'
+```
 
 发送接口示例：
 
@@ -270,6 +297,7 @@ SMTP_FROM_EMAIL=teampilot@example.com
 SMTP_USE_TLS=true
 SMTP_USE_SSL=false
 REPORT_DEFAULT_RECIPIENTS=pm@example.com,lead@example.com
+REPORT_TIMEZONE=Asia/Shanghai
 ```
 
 如果请求里没有 `recipients`，后端会使用 `REPORT_DEFAULT_RECIPIENTS`。如果 SMTP 未配置，接口会返回 400 并说明缺失项。

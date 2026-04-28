@@ -54,8 +54,8 @@ PROJECTS = [
         ],
     },
     {
-        "name": "日报巡检优化",
-        "description": "增强日报汇总、风险提取和自动提醒链路。",
+        "name": "巡检报告优化",
+        "description": "增强巡检报告汇总、风险提取和自动提醒链路。",
         "owner": "钱华",
         "status": ProjectStatus.ACTIVE,
         "start_date": date(2026, 4, 20),

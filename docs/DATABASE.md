@@ -150,10 +150,12 @@
 - `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`
 - `SMTP_USE_TLS`, `SMTP_USE_SSL`
 - `REPORT_DEFAULT_RECIPIENTS`
+- `REPORT_TIMEZONE`：默认 `Asia/Shanghai`，用于日报 07:00 和周报周五 12:30 的自动生成判断。
 
 报告内容来源：
-- 日报：项目管理页调用 AI 巡检结果，发送时把当前报告内容提交给后端。
-- 周报：后端按最近 7 天的任务进展、会签、逾期和优先级生成。
+- 日报：后端每天 07:00 自动生成并缓存；手动刷新时优先调用 AI，结果写入 `system_settings` 的报告快照。
+- 周报：后端每周五 12:30 自动生成并缓存；手动刷新时优先调用 AI 分析；项目进展情况表由系统生成，覆盖所有未归档项目。
+- 页面打开和日报/周报切换只读取缓存；点击“刷新”才重新生成。
 
 ## AI 上下文
 

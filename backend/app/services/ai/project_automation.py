@@ -3,10 +3,12 @@ import uuid
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.project import Project, ProjectStatus
 from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.task_event import TaskEvent, TaskEventType
@@ -15,6 +17,7 @@ from app.schemas.project import ProjectCreate
 from app.schemas.task import TaskCreate
 from app.services import project_service, task_service
 from app.services.ai.llm_client import LLMClient
+from app.services.report_metrics import progress_rankings
 
 
 def _json_default(value: Any) -> str:
@@ -23,6 +26,14 @@ def _json_default(value: Any) -> str:
     if isinstance(value, Decimal):
         return str(value)
     return str(value)
+
+
+def _local_today() -> date:
+    try:
+        tz = ZoneInfo(settings.REPORT_TIMEZONE)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("Asia/Shanghai")
+    return datetime.now(tz).date()
 
 
 def _parse_date(value: Any) -> date | None:
@@ -166,7 +177,7 @@ async def preview_project_plan(db: AsyncSession, prompt: str, llm: LLMClient) ->
             "content": json.dumps({
                 "request": prompt,
                 "team_members": users,
-                "today": date.today().isoformat(),
+                "today": _local_today().isoformat(),
             }, ensure_ascii=False, default=_json_default),
         },
     ]
@@ -247,7 +258,8 @@ INSPECTION_REPORT_FIELDS = [
     "summary",
     "risky_projects",
     "overdue_blocked_tasks",
-    "members_without_updates",
+    "progress_fast_top3",
+    "progress_slow_top3",
     "priority_tasks",
     "signoff_pending",
 ]
@@ -256,7 +268,8 @@ INSPECTION_REPORT_DEFAULTS = {
     "summary": "当前没有生成有效摘要。",
     "risky_projects": ["今天没有发现明显的项目级风险。"],
     "overdue_blocked_tasks": ["今天没有逾期或明显阻塞的任务。"],
-    "members_without_updates": ["今天所有活跃成员都有进展记录。"],
+    "progress_fast_top3": ["今天没有足够数据判断进展较快成员。"],
+    "progress_slow_top3": ["今天没有足够数据判断进展较慢成员。"],
     "priority_tasks": ["今天没有需要额外优先处理的任务。"],
     "signoff_pending": ["今天没有达到 100% 但待会签的任务。"],
 }
@@ -291,9 +304,13 @@ def normalize_inspection_report(report: dict | None, source: str, source_label: 
             raw.get("overdue_blocked_tasks"),
             INSPECTION_REPORT_DEFAULTS["overdue_blocked_tasks"],
         ),
-        "members_without_updates": _as_string_list(
-            raw.get("members_without_updates"),
-            INSPECTION_REPORT_DEFAULTS["members_without_updates"],
+        "progress_fast_top3": _as_string_list(
+            raw.get("progress_fast_top3"),
+            INSPECTION_REPORT_DEFAULTS["progress_fast_top3"],
+        ),
+        "progress_slow_top3": _as_string_list(
+            raw.get("progress_slow_top3"),
+            INSPECTION_REPORT_DEFAULTS["progress_slow_top3"],
         ),
         "priority_tasks": _as_string_list(raw.get("priority_tasks"), INSPECTION_REPORT_DEFAULTS["priority_tasks"]),
         "signoff_pending": _as_string_list(raw.get("signoff_pending"), INSPECTION_REPORT_DEFAULTS["signoff_pending"]),
@@ -309,21 +326,19 @@ def _rule_based_inspection_report(
     members: list[dict],
     ai_error: str | None = None,
 ) -> dict:
-    today = date.today()
+    today = _local_today()
     blocked_keywords = ("阻塞", "卡住", "风险", "延期", "无法", "待确认", "依赖")
     risky_projects: list[str] = []
     overdue_blocked_tasks: list[str] = []
-    members_without_updates: list[str] = []
     priority_tasks: list[str] = []
     signoff_pending: list[str] = []
-    updated_today: set[str] = set()
     risky_project_names: set[str] = set()
 
     for item in progress:
         created_at = item.get("created_at")
         created_date = created_at.date() if isinstance(created_at, datetime) else _parse_date(created_at)
-        if created_date == today and item.get("user"):
-            updated_today.add(str(item["user"]))
+        if created_date != today:
+            continue
 
         note = str(item.get("note") or "")
         if note and any(keyword in note for keyword in blocked_keywords):
@@ -368,18 +383,19 @@ def _rule_based_inspection_report(
             risky_projects.append(f"{project_name}：{'，'.join(summary_bits)}")
             risky_project_names.add(project_name)
 
-    members_without_updates = [
-        member.get("name") or "未知成员"
-        for member in members
-        if (member.get("name") or "") not in updated_today
-    ]
+    progress_fast_top3, progress_slow_top3 = progress_rankings(
+        projects,
+        progress,
+        today,
+        today,
+        INSPECTION_REPORT_DEFAULTS["progress_fast_top3"][0],
+        INSPECTION_REPORT_DEFAULTS["progress_slow_top3"][0],
+    )
 
     if not risky_projects:
         risky_projects.append("今天没有发现明显的项目级风险。")
     if not overdue_blocked_tasks:
         overdue_blocked_tasks.append("今天没有逾期或明显阻塞的任务。")
-    if not members_without_updates:
-        members_without_updates.append("今天所有活跃成员都有进展记录。")
     if not priority_tasks:
         priority_tasks.append("今天没有需要额外优先处理的任务。")
     if not signoff_pending:
@@ -389,8 +405,7 @@ def _rule_based_inspection_report(
         f"今日覆盖 {len(projects)} 个活跃项目，"
         f"识别出 {sum(1 for item in risky_projects if '没有发现' not in item)} 个风险项目，"
         f"{sum(1 for item in overdue_blocked_tasks if '没有逾期' not in item)} 条逾期或阻塞任务，"
-        f"{sum(1 for item in signoff_pending if '没有达到' not in item)} 条待会签任务，"
-        f"{sum(1 for item in members_without_updates if '所有活跃成员' not in item)} 名成员今日未更新。"
+        f"{sum(1 for item in signoff_pending if '没有达到' not in item)} 条待会签任务。"
     )
     if ai_error:
         summary += " AI 生成失败，当前结果由系统规则生成。"
@@ -399,7 +414,8 @@ def _rule_based_inspection_report(
         "summary": summary,
         "risky_projects": risky_projects[:20],
         "overdue_blocked_tasks": overdue_blocked_tasks[:20],
-        "members_without_updates": members_without_updates[:20],
+        "progress_fast_top3": progress_fast_top3,
+        "progress_slow_top3": progress_slow_top3,
         "priority_tasks": priority_tasks[:20],
         "signoff_pending": signoff_pending[:20],
     }, "rules", "系统规则巡检")
@@ -443,9 +459,10 @@ async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
                 "你是项目管理办公室的巡检报告助手。"
                 "只返回 JSON 对象，不要输出 markdown 或解释文字。"
                 "JSON 必须且只能包含这些键：summary, risky_projects, overdue_blocked_tasks, "
-                "members_without_updates, priority_tasks, signoff_pending。"
+                "progress_fast_top3, progress_slow_top3, priority_tasks, signoff_pending。"
                 "summary 必须是一个简洁中文字符串。"
-                "其余五个字段必须是中文字符串数组；没有结果时也返回一句“没有发现...”类结论，不要返回空数组。"
+                "其余六个字段必须是中文字符串数组；没有结果时也返回一句“没有发现...”类结论，不要返回空数组。"
+                "progress_fast_top3 和 progress_slow_top3 必须各最多 3 条。"
                 "不要修改任何任务数据。"
                 "请基于输入给出简洁、准确、完整、可执行的中文结论。"
             ),
@@ -456,7 +473,7 @@ async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
                 "projects": projects,
                 "team_members": active_users,
                 "recent_progress": progress,
-                "today": date.today().isoformat(),
+                "today": _local_today().isoformat(),
             }, ensure_ascii=False, default=_json_default),
         },
     ]

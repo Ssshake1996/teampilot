@@ -103,6 +103,7 @@ const dailyBriefDialogVisible = ref(false)
 const dailyBriefStatus = ref('')
 const dailyBriefResult = ref<any>(null)
 const dailyBriefLoading = ref(false)
+const reportGeneratedAt = ref<string | null>(null)
 const reportType = ref<ReportType>('daily')
 const reportRecipients = ref('')
 const reportSending = ref(false)
@@ -560,7 +561,8 @@ async function commitProgressImport() {
     await Promise.all(Array.from(expandedProjects.value).map(pid => loadTaskTree(pid, true)))
     await loadProjects()
     progressImportDialogVisible.value = false
-    await openDailyBrief(true)
+    dailyBriefDialogVisible.value = true
+    await refreshInspectionReport('daily', true)
   } catch {
     ElMessage.error('同步进展失败')
   } finally {
@@ -623,25 +625,23 @@ async function commitProjectPlan() {
   }
 }
 
-async function generateInspectionReport(type: ReportType, silent = false) {
+async function loadInspectionReport(type: ReportType, silent = false) {
   reportType.value = type
   dailyBriefResult.value = null
-  dailyBriefStatus.value = type === 'weekly' ? '正在生成周报...' : '正在生成巡检报告...'
+  reportGeneratedAt.value = null
+  dailyBriefStatus.value = '正在读取巡检报告...'
   dailyBriefLoading.value = true
   try {
-    if (type === 'weekly') {
-      const res = await reportsApi.weeklyReport()
-      dailyBriefResult.value = res.data
-    } else {
-      dailyBriefResult.value = await aiApi.dailyBrief((msg: string) => { dailyBriefStatus.value = msg })
-    }
+    const res = await reportsApi.snapshot(type)
+    dailyBriefResult.value = res.data.report || null
+    reportGeneratedAt.value = res.data.generated_at || null
     dailyBriefStatus.value = ''
   } catch (err: any) {
     dailyBriefStatus.value = ''
     if (!silent) {
-      ElMessage.error(formatApiError(err, type === 'weekly' ? '周报生成失败' : '巡检报告生成失败'))
+      ElMessage.error(formatApiError(err, '巡检报告读取失败'))
     } else {
-      ElMessage.warning(formatApiError(err, '进展已同步，但巡检报告生成失败'))
+      ElMessage.warning(formatApiError(err, '进展已同步，但巡检报告读取失败'))
     }
   } finally {
     dailyBriefLoading.value = false
@@ -650,18 +650,40 @@ async function generateInspectionReport(type: ReportType, silent = false) {
 
 async function openDailyBrief(silent = false) {
   dailyBriefDialogVisible.value = true
-  await generateInspectionReport('daily', silent)
+  await loadInspectionReport('daily', silent)
 }
 
 async function changeReportType(value: string | number | boolean | undefined) {
   const type: ReportType = value === 'weekly' ? 'weekly' : 'daily'
   if (dailyBriefLoading.value || type === reportType.value) return
-  await generateInspectionReport(type)
+  await loadInspectionReport(type)
 }
 
-async function refreshInspectionReport() {
+async function refreshInspectionReport(type: ReportType = reportType.value, silent = false) {
   if (dailyBriefLoading.value) return
-  await generateInspectionReport(reportType.value)
+  reportType.value = type
+  dailyBriefResult.value = null
+  reportGeneratedAt.value = null
+  dailyBriefStatus.value = type === 'weekly' ? '正在刷新周报...' : '正在刷新巡检报告...'
+  dailyBriefLoading.value = true
+  try {
+    const res = await reportsApi.refresh(type)
+    dailyBriefResult.value = res.data.report || null
+    reportGeneratedAt.value = res.data.generated_at || null
+    dailyBriefStatus.value = ''
+    if (!silent) {
+      ElMessage.success('巡检报告已刷新')
+    }
+  } catch (err: any) {
+    dailyBriefStatus.value = ''
+    if (silent) {
+      ElMessage.warning(formatApiError(err, '进展已同步，但巡检报告刷新失败'))
+    } else {
+      ElMessage.error(formatApiError(err, '巡检报告刷新失败'))
+    }
+  } finally {
+    dailyBriefLoading.value = false
+  }
 }
 
 function parseReportRecipients(): string[] {
@@ -674,7 +696,11 @@ function parseReportRecipients(): string[] {
 async function sendInspectionReport() {
   const recipients = parseReportRecipients()
   if (!dailyBriefResult.value) {
-    await generateInspectionReport(reportType.value)
+    await loadInspectionReport(reportType.value)
+  }
+  if (!dailyBriefResult.value) {
+    ElMessage.warning('暂无巡检报告，请先刷新生成')
+    return
   }
   reportSending.value = true
   try {
@@ -836,7 +862,7 @@ function formatDateTime(d: string | null) { return d ? d.replace('T', ' ').slice
 function goToBoard(pid: string) { router.push(`/projects/${pid}/board`) }
 function asList(value: any): any[] { return Array.isArray(value) ? value : [] }
 const reportSectionKeys = computed(() => {
-  const base = ['risky_projects', 'overdue_blocked_tasks', 'members_without_updates', 'priority_tasks', 'signoff_pending']
+  const base = ['risky_projects', 'overdue_blocked_tasks', 'progress_fast_top3', 'progress_slow_top3', 'priority_tasks', 'signoff_pending']
   if (dailyBriefResult.value?.completed_tasks) base.push('completed_tasks')
   if (dailyBriefResult.value?.progress_updates) base.push('progress_updates')
   return base
@@ -845,7 +871,8 @@ function dailySectionLabel(section: string): string {
   return ({
     risky_projects: '风险项目',
     overdue_blocked_tasks: '逾期 / 阻塞任务',
-    members_without_updates: reportType.value === 'weekly' ? '本周未更新成员' : '今日未更新成员',
+    progress_fast_top3: '进展快 TOP3',
+    progress_slow_top3: '进展慢 TOP3',
     priority_tasks: '优先推进任务',
     signoff_pending: '待会签任务',
     completed_tasks: '已会签完成',
@@ -1159,7 +1186,7 @@ onMounted(loadProjects)
           clearable
         />
         <div class="report-actions">
-          <el-button plain :loading="dailyBriefLoading" :disabled="reportSending" @click="refreshInspectionReport">刷新</el-button>
+          <el-button plain :loading="dailyBriefLoading" :disabled="reportSending" @click="refreshInspectionReport()">刷新</el-button>
           <el-button type="primary" :loading="reportSending" :disabled="dailyBriefLoading" @click="sendInspectionReport">邮件发送</el-button>
         </div>
       </div>
@@ -1175,8 +1202,23 @@ onMounted(loadProjects)
             >
               {{ dailyBriefResult.source_label || (dailyBriefResult.source === 'ai' ? 'AI 生成' : '系统规则巡检') }}
             </el-tag>
+            <span v-if="reportGeneratedAt" class="report-generated-at">更新时间：{{ formatDateTime(reportGeneratedAt) }}</span>
           </div>
           <p class="ai-result-summary">{{ dailyBriefResult.summary }}</p>
+          <div v-if="reportType === 'weekly' && asList(dailyBriefResult.project_progress_table).length" class="ai-section">
+            <h4>项目进展情况表</h4>
+            <el-table :data="dailyBriefResult.project_progress_table" size="small" border class="report-project-table">
+              <el-table-column prop="project_name" label="项目" min-width="160" show-overflow-tooltip />
+              <el-table-column prop="progress_pct" label="总进度" width="86" align="center">
+                <template #default="{ row }">{{ row.progress_pct }}%</template>
+              </el-table-column>
+              <el-table-column prop="weekly_progress" label="本周进展" width="110" />
+              <el-table-column prop="task_completion" label="任务完成" width="96" align="center" />
+              <el-table-column prop="overdue_tasks" label="逾期" width="70" align="center" />
+              <el-table-column prop="risk_level" label="风险" width="70" align="center" />
+              <el-table-column prop="next_action" label="下周建议" min-width="220" show-overflow-tooltip />
+            </el-table>
+          </div>
           <div class="ai-section" v-for="section in reportSectionKeys" :key="section">
             <h4>{{ dailySectionLabel(section) }}</h4>
             <ul>
@@ -1184,6 +1226,11 @@ onMounted(loadProjects)
             </ul>
           </div>
         </template>
+        <el-empty
+          v-else-if="!dailyBriefLoading && !dailyBriefStatus"
+          description="暂无巡检报告，请点击刷新生成"
+          :image-size="72"
+        />
       </div>
     </el-dialog>
 
@@ -1713,6 +1760,11 @@ onMounted(loadProjects)
   margin-bottom: 12px;
 }
 .report-recipient-input { min-width: 0; }
+.report-generated-at {
+  font-size: 12px;
+  color: #909399;
+}
+.report-project-table { width: 100%; }
 .report-actions {
   display: flex;
   align-items: center;

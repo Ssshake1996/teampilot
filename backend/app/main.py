@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -61,7 +62,17 @@ async def lifespan(app: FastAPI):
             if settings.SEED_DEMO_USERS:
                 print("[OK] Demo users created: zhangsan/123456, lisi/123456, wangwu/123456")
 
-    yield
+    from app.services.report_service import report_scheduler_loop
+
+    report_scheduler = asyncio.create_task(report_scheduler_loop())
+    try:
+        yield
+    finally:
+        report_scheduler.cancel()
+        try:
+            await report_scheduler
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(

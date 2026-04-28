@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = True
     SMTP_USE_SSL: bool = False
     REPORT_DEFAULT_RECIPIENTS: str = ""
+    REPORT_TIMEZONE: str = "Asia/Shanghai"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

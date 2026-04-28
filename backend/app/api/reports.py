@@ -7,11 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.services.ai.project_automation import daily_brief
 from app.services.report_service import (
     format_report_text,
     generate_weekly_report,
+    get_report_snapshot,
     parse_recipients,
+    refresh_report_snapshot,
     report_subject,
     send_report_email,
 )
@@ -24,6 +25,28 @@ class SendReportRequest(BaseModel):
     recipients: list[str] = []
     subject: str | None = None
     report: dict | None = None
+
+
+class ReportSnapshotRequest(BaseModel):
+    report_type: Literal["daily", "weekly"] = "daily"
+
+
+@router.get("/snapshot")
+async def report_snapshot(
+    report_type: Literal["daily", "weekly"] = "daily",
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await get_report_snapshot(db, report_type)
+
+
+@router.post("/refresh")
+async def refresh_report(
+    data: ReportSnapshotRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await refresh_report_snapshot(db, data.report_type, trigger="manual")
 
 
 @router.get("/weekly")
@@ -43,9 +66,12 @@ async def send_report(
     report = data.report
     if not report:
         if data.report_type == "weekly":
-            report = await generate_weekly_report(db)
+            snapshot = await get_report_snapshot(db, "weekly")
         else:
-            report = await daily_brief(db, None)
+            snapshot = await get_report_snapshot(db, "daily")
+        report = snapshot.get("report")
+    if not report:
+        raise HTTPException(status_code=400, detail="No cached report. Refresh the report first.")
 
     recipients = parse_recipients(data.recipients)
     subject = data.subject or report_subject(data.report_type, report)
