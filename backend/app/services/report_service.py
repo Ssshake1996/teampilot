@@ -58,11 +58,11 @@ def report_subject(report_type: str, report: dict) -> str:
         end = report.get("period_end")
         suffix = f"{start} 至 {end}" if start and end else date.today().isoformat()
         return f"[TeamPilot] 周报 {suffix}"
-    return f"[TeamPilot] 每日巡检报告 {date.today().isoformat()}"
+    return f"[TeamPilot] 巡检报告 {date.today().isoformat()}"
 
 
 def format_report_text(report_type: str, report: dict) -> str:
-    title = "TeamPilot 周报" if report_type == "weekly" else "TeamPilot 每日巡检报告"
+    title = "TeamPilot 周报" if report_type == "weekly" else "TeamPilot 巡检报告"
     lines = [title]
     if report_type == "weekly":
         lines.append(f"周期：{report.get('period_start', '-')} 至 {report.get('period_end', '-')}")

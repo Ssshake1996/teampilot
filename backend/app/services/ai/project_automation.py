@@ -243,6 +243,66 @@ def _task_line(project: dict, task: dict) -> str:
     return f"{project.get('name', '')} / {task.get('title', '')} ({assignee}, {progress}%)"
 
 
+INSPECTION_REPORT_FIELDS = [
+    "summary",
+    "risky_projects",
+    "overdue_blocked_tasks",
+    "members_without_updates",
+    "priority_tasks",
+    "signoff_pending",
+]
+
+INSPECTION_REPORT_DEFAULTS = {
+    "summary": "当前没有生成有效摘要。",
+    "risky_projects": ["今天没有发现明显的项目级风险。"],
+    "overdue_blocked_tasks": ["今天没有逾期或明显阻塞的任务。"],
+    "members_without_updates": ["今天所有活跃成员都有进展记录。"],
+    "priority_tasks": ["今天没有需要额外优先处理的任务。"],
+    "signoff_pending": ["今天没有达到 100% 但待会签的任务。"],
+}
+
+
+def _as_string_list(value: Any, default: list[str]) -> list[str]:
+    if value is None:
+        return default.copy()
+    if isinstance(value, list):
+        items = [
+            item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, default=_json_default)
+            for item in value
+            if item not in (None, "")
+        ]
+    elif isinstance(value, str):
+        items = [value] if value.strip() else []
+    else:
+        items = [json.dumps(value, ensure_ascii=False, default=_json_default)]
+    return items[:20] or default.copy()
+
+
+def normalize_inspection_report(report: dict | None, source: str, source_label: str) -> dict:
+    raw = report or {}
+    summary = raw.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        summary = INSPECTION_REPORT_DEFAULTS["summary"]
+
+    normalized = {
+        "summary": summary.strip(),
+        "risky_projects": _as_string_list(raw.get("risky_projects"), INSPECTION_REPORT_DEFAULTS["risky_projects"]),
+        "overdue_blocked_tasks": _as_string_list(
+            raw.get("overdue_blocked_tasks"),
+            INSPECTION_REPORT_DEFAULTS["overdue_blocked_tasks"],
+        ),
+        "members_without_updates": _as_string_list(
+            raw.get("members_without_updates"),
+            INSPECTION_REPORT_DEFAULTS["members_without_updates"],
+        ),
+        "priority_tasks": _as_string_list(raw.get("priority_tasks"), INSPECTION_REPORT_DEFAULTS["priority_tasks"]),
+        "signoff_pending": _as_string_list(raw.get("signoff_pending"), INSPECTION_REPORT_DEFAULTS["signoff_pending"]),
+        "source": source,
+        "source_label": source_label,
+    }
+    return normalized
+
+
 def _rule_based_inspection_report(
     projects: list[dict],
     progress: list[dict],
@@ -335,16 +395,14 @@ def _rule_based_inspection_report(
     if ai_error:
         summary += " AI 生成失败，当前结果由系统规则生成。"
 
-    return {
-        "source": "rules",
-        "source_label": "系统规则巡检",
+    return normalize_inspection_report({
         "summary": summary,
         "risky_projects": risky_projects[:20],
         "overdue_blocked_tasks": overdue_blocked_tasks[:20],
         "members_without_updates": members_without_updates[:20],
         "priority_tasks": priority_tasks[:20],
         "signoff_pending": signoff_pending[:20],
-    }
+    }, "rules", "系统规则巡检")
 
 
 async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
@@ -382,11 +440,14 @@ async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
         {
             "role": "system",
             "content": (
-                "你是项目管理办公室的每日巡检助手。"
-                "只返回 JSON，且仅包含这些键：summary, risky_projects, overdue_blocked_tasks, "
+                "你是项目管理办公室的巡检报告助手。"
+                "只返回 JSON 对象，不要输出 markdown 或解释文字。"
+                "JSON 必须且只能包含这些键：summary, risky_projects, overdue_blocked_tasks, "
                 "members_without_updates, priority_tasks, signoff_pending。"
+                "summary 必须是一个简洁中文字符串。"
+                "其余五个字段必须是中文字符串数组；没有结果时也返回一句“没有发现...”类结论，不要返回空数组。"
                 "不要修改任何任务数据。"
-                "请基于输入给出简洁、准确、完整的中文结论。"
+                "请基于输入给出简洁、准确、完整、可执行的中文结论。"
             ),
         },
         {
@@ -401,15 +462,7 @@ async def daily_brief(db: AsyncSession, llm: LLMClient | None = None) -> dict:
     ]
     try:
         result = await llm.chat_json(messages, temperature=0.2, max_tokens=4096)
-        result.setdefault("summary", "")
-        result.setdefault("risky_projects", [])
-        result.setdefault("overdue_blocked_tasks", [])
-        result.setdefault("members_without_updates", [])
-        result.setdefault("priority_tasks", [])
-        result.setdefault("signoff_pending", [])
-        result["source"] = "ai"
-        result["source_label"] = "AI 生成"
-        return result
+        return normalize_inspection_report(result, "ai", "AI 生成")
     except Exception as exc:
         return _rule_based_inspection_report(projects, progress, active_users, f"{type(exc).__name__}: {exc}")
 

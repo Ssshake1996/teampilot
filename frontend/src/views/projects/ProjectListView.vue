@@ -626,7 +626,7 @@ async function commitProjectPlan() {
 async function generateInspectionReport(type: ReportType, silent = false) {
   reportType.value = type
   dailyBriefResult.value = null
-  dailyBriefStatus.value = type === 'weekly' ? '正在生成周报...' : '正在生成每日巡检报告...'
+  dailyBriefStatus.value = type === 'weekly' ? '正在生成周报...' : '正在生成巡检报告...'
   dailyBriefLoading.value = true
   try {
     if (type === 'weekly') {
@@ -639,7 +639,7 @@ async function generateInspectionReport(type: ReportType, silent = false) {
   } catch (err: any) {
     dailyBriefStatus.value = ''
     if (!silent) {
-      ElMessage.error(formatApiError(err, type === 'weekly' ? '周报生成失败' : '每日巡检报告生成失败'))
+      ElMessage.error(formatApiError(err, type === 'weekly' ? '周报生成失败' : '巡检报告生成失败'))
     } else {
       ElMessage.warning(formatApiError(err, '进展已同步，但巡检报告生成失败'))
     }
@@ -657,6 +657,11 @@ async function changeReportType(value: string | number | boolean | undefined) {
   const type: ReportType = value === 'weekly' ? 'weekly' : 'daily'
   if (dailyBriefLoading.value || type === reportType.value) return
   await generateInspectionReport(type)
+}
+
+async function refreshInspectionReport() {
+  if (dailyBriefLoading.value) return
+  await generateInspectionReport(reportType.value)
 }
 
 function parseReportRecipients(): string[] {
@@ -890,7 +895,7 @@ onMounted(loadProjects)
       </div>
       <div class="summary-actions">
         <el-switch v-model="showArchived" active-text="含归档" @change="onArchivedChange" />
-        <el-button v-if="canViewInspectionReport" type="info" plain @click="openDailyBrief()">每日巡检报告</el-button>
+        <el-button v-if="canViewInspectionReport" type="info" plain @click="openDailyBrief()">巡检报告</el-button>
         <el-button v-if="canCreateProject" type="primary" @click="openCreateProjectDialog">新建项目</el-button>
       </div>
     </div>
@@ -1140,8 +1145,8 @@ onMounted(loadProjects)
       </template>
     </el-dialog>
 
-    <!-- Daily Inspection Dialog -->
-    <el-dialog v-model="dailyBriefDialogVisible" :title="reportType === 'weekly' ? '周报' : '每日巡检报告'" width="820px">
+    <!-- Inspection Report Dialog -->
+    <el-dialog v-model="dailyBriefDialogVisible" title="巡检报告" width="860px">
       <div class="report-toolbar">
         <el-radio-group :model-value="reportType" size="small" @change="changeReportType">
           <el-radio-button value="daily">日报</el-radio-button>
@@ -1153,7 +1158,10 @@ onMounted(loadProjects)
           placeholder="接收人邮箱，多个用逗号分隔；留空使用默认接收人"
           clearable
         />
-        <el-button type="primary" :loading="reportSending" :disabled="dailyBriefLoading" @click="sendInspectionReport">邮件发送</el-button>
+        <div class="report-actions">
+          <el-button plain :loading="dailyBriefLoading" :disabled="reportSending" @click="refreshInspectionReport">刷新</el-button>
+          <el-button type="primary" :loading="reportSending" :disabled="dailyBriefLoading" @click="sendInspectionReport">邮件发送</el-button>
+        </div>
       </div>
       <div v-loading="dailyBriefLoading" class="ai-result">
         <span v-if="dailyBriefStatus" class="ai-st">{{ dailyBriefStatus }}</span>
@@ -1705,8 +1713,17 @@ onMounted(loadProjects)
   margin-bottom: 12px;
 }
 .report-recipient-input { min-width: 0; }
+.report-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
 @media (max-width: 760px) {
   .report-toolbar { grid-template-columns: 1fr; align-items: stretch; }
+  .report-actions { justify-content: stretch; }
+  .report-actions :deep(.el-button) { flex: 1; }
 }
 
 .task-create-dialog :deep(.el-dialog__body) {

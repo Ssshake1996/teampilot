@@ -429,12 +429,12 @@ async def daily_briefing(
             try:
                 llm = await _get_llm_from_db()
                 yield sse_status("正在汇总项目、任务和进展数据...")
-                yield sse_status("正在调用 AI 生成每日巡检报告...")
+                yield sse_status("正在调用 AI 生成巡检报告...")
             except Exception:
-                yield sse_status("AI 配置不可用，正在使用系统规则生成每日巡检报告...")
+                yield sse_status("AI 配置不可用，正在使用系统规则生成巡检报告...")
             async with async_session() as db:
                 result = await daily_brief(db, llm)
-            yield sse_status("每日巡检报告已生成")
+            yield sse_status("巡检报告已生成")
             yield sse_result(result)
         except Exception as e:
             traceback.print_exc()

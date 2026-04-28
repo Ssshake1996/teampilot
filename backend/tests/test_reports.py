@@ -5,6 +5,7 @@ from httpx import AsyncClient
 
 from app.config import settings
 from app.services import report_service
+from app.services.ai.project_automation import daily_brief
 
 
 class DummySMTP:
@@ -41,6 +42,29 @@ async def test_weekly_report_endpoint(client: AsyncClient, auth_headers):
     assert data["period_start"]
     assert data["period_end"]
     assert "summary" in data
+
+
+@pytest.mark.asyncio
+async def test_daily_brief_normalizes_ai_report_schema(db_session, test_user):
+    class PartialLLM:
+        async def chat_json(self, messages, temperature=0.2, max_tokens=4096):
+            return {
+                "summary": "AI 巡检摘要",
+                "risky_projects": "项目 A 有风险",
+                "extra_key": "should be ignored",
+            }
+
+    data = await daily_brief(db_session, PartialLLM())
+    assert data == {
+        "summary": "AI 巡检摘要",
+        "risky_projects": ["项目 A 有风险"],
+        "overdue_blocked_tasks": ["今天没有逾期或明显阻塞的任务。"],
+        "members_without_updates": ["今天所有活跃成员都有进展记录。"],
+        "priority_tasks": ["今天没有需要额外优先处理的任务。"],
+        "signoff_pending": ["今天没有达到 100% 但待会签的任务。"],
+        "source": "ai",
+        "source_label": "AI 生成",
+    }
 
 
 @pytest.mark.asyncio

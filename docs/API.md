@@ -230,11 +230,21 @@ curl -N http://localhost:8000/api/v1/ai/daily-brief \
 
 ## 报告与邮件发送
 
-项目管理页的“每日巡检报告”支持日报和周报：
+项目管理页的“巡检报告”支持日报和周报，并可按当前选择刷新：
 
 - 日报：调用 `POST /api/v1/ai/daily-brief`，优先使用 AI 生成。
 - 周报：调用 `GET /api/v1/reports/weekly`，按最近 7 天任务进展、会签、逾期和优先级生成。
 - 邮件发送：调用 `POST /api/v1/reports/send`。
+
+日报返回格式固定。后端会规范化 AI 输出，确保包含：
+
+```text
+summary, risky_projects, overdue_blocked_tasks,
+members_without_updates, priority_tasks, signoff_pending,
+source, source_label
+```
+
+其中 `summary` 是字符串，五个列表字段都是字符串数组；AI 缺字段或返回类型不一致时，后端会补齐默认结论。
 
 发送接口示例：
 
