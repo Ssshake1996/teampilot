@@ -41,6 +41,12 @@ class Task(Base, UUIDMixin, TimestampMixin):
     parent_task_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("tasks.id"), nullable=True
     )
+    weight: Mapped[Decimal] = mapped_column(
+        Numeric(10, 6),
+        default=Decimal("1.000000"),
+        server_default="1.000000",
+        nullable=False,
+    )
     estimated_hours: Mapped[Decimal | None] = mapped_column(Numeric(6, 1), nullable=True)
     actual_hours: Mapped[Decimal | None] = mapped_column(Numeric(6, 1), nullable=True)
     start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

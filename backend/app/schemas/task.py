@@ -15,6 +15,7 @@ class TaskCreate(BaseModel):
     priority: TaskPriority = TaskPriority.MEDIUM
     assignee_ids: list[uuid.UUID] = Field(default_factory=list)
     parent_task_id: uuid.UUID | None = None
+    weight: float | None = Field(default=None, ge=0, le=1)
     estimated_hours: float | None = None
     start_date: datetime | None = None
     deadline: datetime | None = None
@@ -27,6 +28,7 @@ class TaskUpdate(BaseModel):
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
     assignee_ids: list[uuid.UUID] | None = None
+    weight: float | None = Field(default=None, ge=0, le=1)
     estimated_hours: float | None = None
     actual_hours: float | None = None
     start_date: datetime | None = None
@@ -46,6 +48,7 @@ class TaskOut(BaseModel):
     assignee_names: list[str] = Field(default_factory=list)
     creator_id: uuid.UUID
     parent_task_id: uuid.UUID | None = None
+    weight: float = 1.0
     estimated_hours: float | None = None
     actual_hours: float | None = None
     start_date: datetime | None = None

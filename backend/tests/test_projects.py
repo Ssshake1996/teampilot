@@ -17,6 +17,8 @@ async def test_create_project(client: AsyncClient, auth_headers):
     assert data["goal"] == "Ship the milestone on time"
     assert data["status"] == "planning"
     assert data["member_count"] == 1  # owner auto-added
+    assert data["owner_name"] == "Test User"
+    assert data["contact_names"] == ["Test User"]
 
 
 @pytest.mark.asyncio
@@ -47,6 +49,8 @@ async def test_get_project(client: AsyncClient, auth_headers):
     assert res.json()["name"] == "Detail Project"
     assert res.json()["goal"] == "Keep the scope tight"
     assert res.json()["description"] == "Project detail description"
+    assert res.json()["owner_name"] == "Test User"
+    assert res.json()["contact_names"] == ["Test User"]
 
 
 @pytest.mark.asyncio
@@ -78,6 +82,8 @@ async def test_project_member_count_includes_task_assignees(client: AsyncClient,
     assert list_res.status_code == 200
     project = next(item for item in list_res.json()["items"] if item["id"] == pid)
     assert project["member_count"] == 2
+    assert project["owner_name"] == "Test User"
+    assert project["contact_names"] == ["Test User"]
 
 
 @pytest.mark.asyncio

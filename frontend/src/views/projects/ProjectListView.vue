@@ -245,9 +245,12 @@ async function handleAssigneeChange(task: any, newIds: string[]) {
 
 async function handleFieldUpdate(task: any, field: string, value: any) {
   try {
-    const res = await tasksApi.update(task.id, { [field]: value || null } as any)
+    const fieldValue = field === 'weight' ? value : (value || null)
+    const res = await tasksApi.update(task.id, { [field]: fieldValue } as any)
     Object.assign(task, res.data)
     const projectId = resolveProjectIdForTask(task)
+    if (taskDetail.value?.id === task.id) taskDetail.value = { ...taskDetail.value, ...res.data }
+    if (field === 'weight' && projectId) await loadTaskTree(projectId, true)
     if (field === 'start_date' && projectId) await refreshProjectSummary(projectId)
   } catch { ElMessage.error('更新失败') }
 }
@@ -509,6 +512,8 @@ async function submitFeedback() {
     feedbackForm.value.hours_spent = null
     const res = await tasksApi.getProgress(feedbackTask.value.id)
     feedbackHistory.value = res.data
+    const projectId = feedbackTask.value.projectId || resolveProjectIdForTask(feedbackTask.value)
+    if (projectId) await loadTaskTree(projectId, true)
   } catch (err: any) {
     ElMessage.error(formatApiError(err, '提交失败'))
   } finally {
@@ -871,6 +876,10 @@ function canRestoreTask(task: any, projectId: string) {
 }
 function formatDate(d: string | null) { return d ? d.slice(0, 10) : '-' }
 function formatDateTime(d: string | null) { return d ? d.replace('T', ' ').slice(0, 16) : '' }
+function formatWeight(value: number | string | null | undefined) {
+  const numeric = Number(value ?? 1)
+  return Number.isFinite(numeric) ? numeric.toFixed(1) : '-'
+}
 function goToBoard(pid: string) { router.push(`/projects/${pid}/board`) }
 function asList(value: any): any[] { return Array.isArray(value) ? value : [] }
 const reportSectionKeys = computed(() => {
@@ -899,8 +908,8 @@ async function handleSignoff(task: any, projectId: string) {
   try {
     const res = await tasksApi.signoff(task.id)
     Object.assign(task, res.data)
-    if (task._parentId) recalcParent(task._parentId)
     if (taskDetail.value?.id === task.id) taskDetail.value = { ...taskDetail.value, ...res.data }
+    await loadTaskTree(projectId, true)
     await refreshProjectSummary(projectId)
     ElMessage.success('任务已会签完成')
   } catch {
@@ -953,6 +962,7 @@ onMounted(loadProjects)
           <div class="col-fb"></div>
           <div class="col-who">{{ project.member_count }} 人</div>
           <div class="col-hrs center">{{ project.task_count }} 任务</div>
+          <div class="col-weight center"></div>
           <div class="col-prog">
             <el-progress :percentage="projectProgress(project)" :stroke-width="8" :color="projectProgressColor(project)" style="width:100%" />
             <span class="ptxt">{{ project.completed_count }}/{{ project.task_count }}</span>
@@ -981,6 +991,7 @@ onMounted(loadProjects)
               <div class="col-fb">进展记录</div>
               <div class="col-who">负责人</div>
               <div class="col-hrs center">工时(h)</div>
+              <div class="col-weight center">权重</div>
               <div class="col-prog">进度</div>
               <div class="col-sd">开始日期</div>
               <div class="col-ed">截止日期</div>
@@ -1062,6 +1073,23 @@ onMounted(loadProjects)
                   <el-input-number :model-value="task.estimated_hours" size="small" :min="0" :max="999" :precision="1" style="width:100%" @change="(v: number) => handleFieldUpdate(task, 'estimated_hours', v)" />
                 </el-popover>
                 <span v-else>{{ task.estimated_hours ?? '-' }}</span>
+              </div>
+              <!-- Weight -->
+              <div class="col-weight center" @click.stop>
+                <el-popover v-if="task._parentId && canEditTask && !task.is_deleted" trigger="click" :width="160" placement="bottom">
+                  <template #reference><span class="dt-click">{{ formatWeight(task.weight) }}</span></template>
+                  <el-input-number
+                    :model-value="Number(task.weight ?? 1)"
+                    size="small"
+                    :min="0"
+                    :max="1"
+                    :step="0.1"
+                    :precision="1"
+                    style="width:100%"
+                    @change="(v: number) => handleFieldUpdate(task, 'weight', v)"
+                  />
+                </el-popover>
+                <span v-else>{{ task._parentId ? formatWeight(task.weight) : '-' }}</span>
               </div>
               <!-- Progress bar -->
               <div class="col-prog">
@@ -1445,6 +1473,9 @@ onMounted(loadProjects)
             <el-descriptions-item label="当前进度">
               <el-progress :percentage="taskDetail.progress_pct ?? 0" :stroke-width="8" />
             </el-descriptions-item>
+            <el-descriptions-item v-if="taskDetail.parent_task_id" label="权重">
+              {{ formatWeight(taskDetail.weight) }}
+            </el-descriptions-item>
             <el-descriptions-item label="开始日期">
               {{ formatDate(taskDetail.start_date || taskDetail.created_at) }}
             </el-descriptions-item>
@@ -1499,7 +1530,9 @@ onMounted(loadProjects)
               <el-descriptions-item label="状态">
                 <el-tag :type="(statusType(projectDetail.status) as any)" size="small">{{ statusLabel(projectDetail.status) }}</el-tag>
               </el-descriptions-item>
-              <el-descriptions-item label="成员数">{{ projectDetail.member_count }}</el-descriptions-item>
+              <el-descriptions-item label="创建人">{{ projectDetail.owner_name || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="接口人">{{ projectDetail.contact_names?.join('、') || projectDetail.owner_name || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="项目成员数">{{ projectDetail.member_count }}</el-descriptions-item>
               <el-descriptions-item label="任务数">{{ projectDetail.task_count }}</el-descriptions-item>
               <el-descriptions-item label="已完成">{{ projectDetail.completed_count }}</el-descriptions-item>
               <el-descriptions-item label="开始日期">{{ formatDate(projectDetail.start_date) }}</el-descriptions-item>
@@ -1598,10 +1631,10 @@ onMounted(loadProjects)
 .ptree { display: flex; flex-direction: column; gap: 2px; }
 .pblock { background: #fff; border-radius: 6px; overflow-x: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
 
-/* Grid: 9 columns, auto-fill width */
+/* Grid: 10 columns, auto-fill width */
 .prow, .trow, .thead {
   display: grid;
-  grid-template-columns: 64px 3fr 2fr 1.2fr 0.7fr 1.2fr 1.2fr 1.2fr 2fr;
+  grid-template-columns: 64px 3fr 2fr 1.2fr 0.7fr 0.6fr 1.2fr 1.2fr 1.2fr 2fr;
   align-items: center; padding: 0 8px; min-height: 40px; gap: 2px;
   border-left: 4px solid transparent;
   box-sizing: border-box;
@@ -1709,6 +1742,8 @@ onMounted(loadProjects)
 
 .col-hrs { font-size: 11px; color: #606266; }
 .col-hrs.center { text-align: center; }
+.col-weight { font-size: 11px; color: #606266; }
+.col-weight.center { text-align: center; }
 .col-prog { display: flex; align-items: center; }
 .ptxt { font-size: 10px; color: #909399; white-space: nowrap; margin-left: 4px; }
 .col-sd, .col-ed { font-size: 11px; color: #909399; }

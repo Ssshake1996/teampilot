@@ -44,9 +44,9 @@ const statusLabel: Record<string, string> = {
 }
 
 const roleLabel: Record<string, string> = {
-  owner: '负责人',
-  admin: '管理员',
+  lead: '接口人',
   member: '成员',
+  observer: '观察者',
 }
 
 async function fetchProject() {
@@ -151,6 +151,17 @@ onMounted(async () => {
         </div>
       </div>
       <div class="project-overview">
+        <div class="project-section project-basic-section">
+          <h3>基本信息</h3>
+          <div class="project-basic-grid">
+            <span>创建人</span>
+            <strong>{{ project.owner_name || '-' }}</strong>
+            <span>接口人</span>
+            <strong>{{ project.contact_names?.join('、') || project.owner_name || '-' }}</strong>
+            <span>项目成员数</span>
+            <strong>{{ project.member_count }}</strong>
+          </div>
+        </div>
         <div class="project-section">
           <h3>项目目标</h3>
           <p class="project-text">{{ project.goal || '暂无项目目标' }}</p>
@@ -192,7 +203,7 @@ onMounted(async () => {
               <el-table-column prop="full_name" label="姓名" min-width="150" />
               <el-table-column prop="role_in_project" label="角色" width="120">
                 <template #default="{ row }">
-                  <el-tag size="small" :type="row.role_in_project === 'owner' ? 'danger' : 'info'">
+                  <el-tag size="small" :type="row.role_in_project === 'lead' ? 'danger' : 'info'">
                     {{ roleLabel[row.role_in_project] || row.role_in_project }}
                   </el-tag>
                 </template>
@@ -200,7 +211,7 @@ onMounted(async () => {
               <el-table-column label="操作" width="100" align="center">
                 <template #default="{ row }">
                   <el-button
-                    v-if="canManageMembers && row.role_in_project !== 'owner'"
+                    v-if="canManageMembers && row.role_in_project !== 'lead'"
                     type="danger"
                     :icon="Delete"
                     size="small"
@@ -300,6 +311,19 @@ onMounted(async () => {
   font-size: 14px;
   font-weight: 600;
   color: #303133;
+}
+
+.project-basic-grid {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px 12px;
+  font-size: 13px;
+  color: #909399;
+}
+
+.project-basic-grid strong {
+  color: #303133;
+  font-weight: 600;
 }
 
 .project-text {

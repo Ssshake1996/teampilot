@@ -10,7 +10,11 @@ from app.models.task import Task, TaskStatus
 from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectUpdate
-from app.services.task_service import effective_task_status, get_task_assignee_map
+from app.services.task_service import (
+    effective_task_status,
+    get_project_task_progress_map,
+    get_task_assignee_map,
+)
 
 
 async def get_project_member_count(db: AsyncSession, project_id: uuid.UUID) -> int:
@@ -30,6 +34,36 @@ async def get_project_member_count(db: AsyncSession, project_id: uuid.UUID) -> i
     return (
         await db.execute(select(func.count()).select_from(member_union))
     ).scalar() or 0
+
+
+async def get_project_contact_map(db: AsyncSession, project_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[dict]]:
+    if not project_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(Assignment.project_id, Assignment.user_id, User.full_name)
+            .join(User, Assignment.user_id == User.id)
+            .where(
+                Assignment.project_id.in_(project_ids),
+                Assignment.kind == AssignmentKind.PROJECT_MEMBER,
+                Assignment.role == ProjectRole.LEAD.value,
+            )
+        )
+    ).all()
+    contact_map: dict[uuid.UUID, list[dict]] = {project_id: [] for project_id in project_ids}
+    seen_by_project: dict[uuid.UUID, set[uuid.UUID]] = {project_id: set() for project_id in project_ids}
+    for project_id, user_id, full_name in rows:
+        if user_id in seen_by_project.setdefault(project_id, set()):
+            continue
+        seen_by_project[project_id].add(user_id)
+        contact_map.setdefault(project_id, []).append({
+            "user_id": user_id,
+            "full_name": full_name,
+        })
+
+    for contacts in contact_map.values():
+        contacts.sort(key=lambda item: ((item["full_name"] or ""), str(item["user_id"])))
+    return contact_map
 
 
 async def effective_project_status(db: AsyncSession, project: Project) -> ProjectStatus:
@@ -84,6 +118,12 @@ async def project_to_out(db: AsyncSession, project: Project) -> dict:
     ).scalar() or 0
     member_count = await get_project_member_count(db, project.id)
     status = await sync_project_status(db, project)
+    owner_name = (
+        await db.execute(select(User.full_name).where(User.id == project.owner_id))
+    ).scalar()
+    contacts = (await get_project_contact_map(db, [project.id])).get(project.id, [])
+    if not contacts and owner_name:
+        contacts = [{"user_id": project.owner_id, "full_name": owner_name}]
     return {
         "id": project.id,
         "name": project.name,
@@ -91,6 +131,9 @@ async def project_to_out(db: AsyncSession, project: Project) -> dict:
         "description": project.description,
         "status": status,
         "owner_id": project.owner_id,
+        "owner_name": owner_name,
+        "contact_user_ids": [item["user_id"] for item in contacts],
+        "contact_names": [item["full_name"] for item in contacts if item["full_name"]],
         "start_date": project.start_date,
         "end_date": project.end_date,
         "created_at": project.created_at,
@@ -260,6 +303,10 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
         )
     ).scalars().all()
     assignee_map = await get_task_assignee_map(db, tasks)
+    computed_progress_map = {
+        str(task_id): progress
+        for task_id, progress in (await get_project_task_progress_map(db, project_id)).items()
+    }
 
     all_tasks: dict[str, dict] = {}
     children_map: dict[str, list[dict]] = {}
@@ -286,8 +333,10 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
             "signed_off_at": task.signed_off_at.isoformat() if task.signed_off_at else None,
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "parent_task_id": str(task.parent_task_id) if task.parent_task_id else None,
+            "weight": float(task.weight) if task.weight is not None else 1.0,
             "is_deleted": bool(task.is_deleted),
             "deleted_at": task.deleted_at.isoformat() if task.deleted_at else None,
+            "updated_at": task.updated_at.isoformat() if task.updated_at else None,
             "is_overdue": bool(
                 not task.is_deleted
                 and task.deadline
@@ -325,23 +374,10 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
         task_dict["children"] = children_map.get(task_id, [])
         children = task_dict["children"]
 
-        if children:
-            active_children = [child for child in children if not child.get("is_deleted")]
-            done_children = sum(1 for child in active_children if child["status"] == "done")
-            total_active = len(active_children) or 1
-            task_dict["progress_pct"] = round(done_children / total_active * 100)
-            task_dict["subtask_total"] = len(active_children)
-            task_dict["subtask_done"] = done_children
-        else:
-            logged = progress_map.get(task_id)
-            if task_dict["status"] == "done":
-                task_dict["progress_pct"] = 100
-            elif logged is not None:
-                task_dict["progress_pct"] = logged
-            else:
-                task_dict["progress_pct"] = 0
-            task_dict["subtask_total"] = 0
-            task_dict["subtask_done"] = 0
+        active_children = [child for child in children if not child.get("is_deleted")]
+        task_dict["progress_pct"] = computed_progress_map.get(task_id, 0)
+        task_dict["subtask_total"] = len(active_children)
+        task_dict["subtask_done"] = sum(1 for child in active_children if child["status"] == "done")
 
         task_dict["latest_note"] = note_map.get(task_id, "")
 

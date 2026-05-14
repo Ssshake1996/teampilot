@@ -20,7 +20,7 @@ router = APIRouter(tags=["任务"])
 async def require_task_update_permissions(db: AsyncSession, user: User, data: TaskUpdate) -> None:
     fields = set(data.model_dump(exclude_unset=True).keys())
     required: set[str] = set()
-    if fields & {"title", "goal", "description", "priority"}:
+    if fields & {"title", "goal", "description", "priority", "weight"}:
         required.add("task.edit")
     if "assignee_ids" in fields:
         required.add("task.assign")

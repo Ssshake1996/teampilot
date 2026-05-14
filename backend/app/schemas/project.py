@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.project import ProjectStatus, ProjectRole
 
@@ -29,6 +29,9 @@ class ProjectOut(BaseModel):
     description: str | None = None
     status: ProjectStatus
     owner_id: uuid.UUID
+    owner_name: str | None = None
+    contact_user_ids: list[uuid.UUID] = Field(default_factory=list)
+    contact_names: list[str] = Field(default_factory=list)
     start_date: date | None = None
     end_date: date | None = None
     created_at: datetime

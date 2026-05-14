@@ -12,19 +12,40 @@ from app.websocket.manager import manager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from sqlalchemy import func, select
+    from sqlalchemy import func, inspect, select, text
 
     from app.database import async_session, engine
     from app.models import Base
+    from app.models.task import Task
     from app.models.user import User, UserRole
+    from app.services.task_service import normalize_sibling_weights
     from app.utils.security import hash_password
 
-    # Auto-create tables on startup. Schema drift is handled explicitly in code
-    # and tests instead of startup-time compatibility patches.
+    # Auto-create tables on startup; explicit compatibility patches cover local
+    # SQLite/PostgreSQL deployments where Alembic is not configured yet.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+        def ensure_task_weight_column(sync_conn):
+            columns = {column["name"] for column in inspect(sync_conn).get_columns("tasks")}
+            if "weight" not in columns:
+                sync_conn.execute(
+                    text("ALTER TABLE tasks ADD COLUMN weight NUMERIC(10, 6) NOT NULL DEFAULT 1")
+                )
+
+        await conn.run_sync(ensure_task_weight_column)
+
     async with async_session() as session:
+        parent_ids = (
+            await session.execute(
+                select(Task.parent_task_id)
+                .where(Task.parent_task_id.isnot(None), Task.is_deleted == False)
+                .distinct()
+            )
+        ).scalars().all()
+        for parent_id in parent_ids:
+            await normalize_sibling_weights(session, parent_id)
+
         count = (await session.execute(select(func.count(User.id)))).scalar()
         if count == 0:
             users = [
@@ -61,6 +82,7 @@ async def lifespan(app: FastAPI):
             print(f"[OK] Bootstrap admin created: {settings.ADMIN_USERNAME}")
             if settings.SEED_DEMO_USERS:
                 print("[OK] Demo users created: zhangsan/123456, lisi/123456, wangwu/123456")
+        await session.commit()
 
     from app.services.report_service import report_scheduler_loop
 

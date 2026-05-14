@@ -105,6 +105,74 @@ async def test_reorder_parent_tasks_with_children(client: AsyncClient, auth_head
 
 
 @pytest.mark.asyncio
+async def test_subtask_weights_default_to_even_split(client: AsyncClient, auth_headers):
+    """New subtasks under the same parent are evenly weighted by default."""
+    proj = await client.post("/api/v1/projects", json={"name": "Weight Defaults Project"}, headers=auth_headers)
+    pid = proj.json()["id"]
+    parent = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Parent"}, headers=auth_headers)
+    parent_id = parent.json()["id"]
+
+    first = await client.post(f"/api/v1/tasks/{parent_id}/subtasks", json={"title": "First"}, headers=auth_headers)
+    assert first.status_code == 201
+    second = await client.post(f"/api/v1/tasks/{parent_id}/subtasks", json={"title": "Second"}, headers=auth_headers)
+    assert second.status_code == 201
+
+    subtasks = await client.get(f"/api/v1/tasks/{parent_id}/subtasks", headers=auth_headers)
+    weights = sorted(round(item["weight"], 6) for item in subtasks.json())
+    assert weights == [0.5, 0.5]
+    assert abs(sum(item["weight"] for item in subtasks.json()) - 1) <= 0.01
+
+    third = await client.post(f"/api/v1/tasks/{parent_id}/subtasks", json={"title": "Third"}, headers=auth_headers)
+    assert third.status_code == 201
+
+    subtasks = await client.get(f"/api/v1/tasks/{parent_id}/subtasks", headers=auth_headers)
+    weights = [item["weight"] for item in subtasks.json()]
+    assert len(weights) == 3
+    assert abs(sum(weights) - 1) <= 0.01
+    assert all(abs(weight - (1 / 3)) <= 0.01 for weight in weights)
+
+
+@pytest.mark.asyncio
+async def test_weighted_progress_rolls_up_through_ancestors(client: AsyncClient, auth_headers):
+    """Child progress changes and weight edits update parent and ancestor progress."""
+    proj = await client.post("/api/v1/projects", json={"name": "Weighted Progress Project"}, headers=auth_headers)
+    pid = proj.json()["id"]
+    grandparent = await client.post(f"/api/v1/projects/{pid}/tasks", json={"title": "Grandparent"}, headers=auth_headers)
+    grandparent_id = grandparent.json()["id"]
+    parent = await client.post(f"/api/v1/tasks/{grandparent_id}/subtasks", json={"title": "Parent"}, headers=auth_headers)
+    parent_id = parent.json()["id"]
+    first = await client.post(f"/api/v1/tasks/{parent_id}/subtasks", json={"title": "First"}, headers=auth_headers)
+    second = await client.post(f"/api/v1/tasks/{parent_id}/subtasks", json={"title": "Second"}, headers=auth_headers)
+    first_id = first.json()["id"]
+    second_id = second.json()["id"]
+
+    weighted = await client.patch(f"/api/v1/tasks/{first_id}", json={"weight": 0.8}, headers=auth_headers)
+    assert weighted.status_code == 200
+
+    subtasks = await client.get(f"/api/v1/tasks/{parent_id}/subtasks", headers=auth_headers)
+    weights = {item["id"]: item["weight"] for item in subtasks.json()}
+    assert abs(weights[first_id] - 0.8) <= 0.01
+    assert abs(weights[second_id] - 0.2) <= 0.01
+    assert abs(sum(weights.values()) - 1) <= 0.01
+
+    await client.post(
+        f"/api/v1/tasks/{first_id}/progress",
+        json={"progress_pct": 100, "note": "First done"},
+        headers=auth_headers,
+    )
+    await client.post(
+        f"/api/v1/tasks/{second_id}/progress",
+        json={"progress_pct": 50, "note": "Second half done"},
+        headers=auth_headers,
+    )
+
+    parent_res = await client.get(f"/api/v1/tasks/{parent_id}", headers=auth_headers)
+    grandparent_res = await client.get(f"/api/v1/tasks/{grandparent_id}", headers=auth_headers)
+    assert parent_res.json()["progress_pct"] == 90
+    assert grandparent_res.json()["progress_pct"] == 90
+
+
+@pytest.mark.asyncio
 async def test_complete_task_sets_completed_at(client: AsyncClient, auth_headers):
     """Test that signoff after 100% progress sets completed_at."""
     proj = await client.post("/api/v1/projects", json={"name": "Complete Project"}, headers=auth_headers)

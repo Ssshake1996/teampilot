@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,140 @@ def _aware(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+WEIGHT_TOTAL = Decimal("1.000000")
+WEIGHT_SCALE = Decimal("0.000001")
+WEIGHT_TOLERANCE = Decimal("0.01")
+PERCENT_SCALE = Decimal("1")
+
+
+def _decimal_weight(value: object, *, default: Decimal | None = None) -> Decimal:
+    if value is None:
+        if default is not None:
+            return default
+        raise ValueError("Task weight is required.")
+    weight = Decimal(str(value)).quantize(WEIGHT_SCALE)
+    if weight < 0 or weight > WEIGHT_TOTAL:
+        raise ValueError("Task weight must be between 0 and 1.")
+    return weight
+
+
+def _split_weight_evenly(total: Decimal, count: int) -> list[Decimal]:
+    if count <= 0:
+        return []
+    if count == 1:
+        return [total]
+    base = (total / Decimal(count)).quantize(WEIGHT_SCALE, rounding=ROUND_DOWN)
+    weights = [base for _ in range(count)]
+    weights[-1] = total - (base * Decimal(count - 1))
+    return weights
+
+
+async def _active_sibling_tasks(db: AsyncSession, parent_task_id: uuid.UUID) -> list[Task]:
+    return (
+        await db.execute(
+            select(Task)
+            .where(
+                Task.parent_task_id == parent_task_id,
+                Task.is_deleted == False,
+            )
+            .order_by(Task.sort_order, Task.created_at)
+        )
+    ).scalars().all()
+
+
+async def rebalance_sibling_weights_evenly(
+    db: AsyncSession,
+    parent_task_id: uuid.UUID | None,
+) -> None:
+    if parent_task_id is None:
+        return
+    siblings = await _active_sibling_tasks(db, parent_task_id)
+    for task, weight in zip(siblings, _split_weight_evenly(WEIGHT_TOTAL, len(siblings))):
+        task.weight = weight
+    await db.flush()
+
+
+async def normalize_sibling_weights(
+    db: AsyncSession,
+    parent_task_id: uuid.UUID | None,
+) -> None:
+    if parent_task_id is None:
+        return
+    siblings = await _active_sibling_tasks(db, parent_task_id)
+    if not siblings:
+        return
+
+    current_weights = [
+        _decimal_weight(task.weight, default=WEIGHT_TOTAL) for task in siblings
+    ]
+    current_total = sum(current_weights, Decimal("0"))
+    if current_total <= 0:
+        for task, weight in zip(siblings, _split_weight_evenly(WEIGHT_TOTAL, len(siblings))):
+            task.weight = weight
+        await db.flush()
+        return
+
+    running = Decimal("0")
+    for task, current in zip(siblings[:-1], current_weights[:-1]):
+        next_weight = (current / current_total * WEIGHT_TOTAL).quantize(
+            WEIGHT_SCALE,
+            rounding=ROUND_DOWN,
+        )
+        task.weight = next_weight
+        running += next_weight
+    siblings[-1].weight = WEIGHT_TOTAL - running
+    await db.flush()
+
+
+async def set_sibling_weight(
+    db: AsyncSession,
+    task: Task,
+    requested_weight: object,
+) -> None:
+    weight = _decimal_weight(requested_weight)
+    if task.parent_task_id is None:
+        task.weight = weight
+        await db.flush()
+        return
+
+    siblings = await _active_sibling_tasks(db, task.parent_task_id)
+    if len(siblings) <= 1:
+        task.weight = WEIGHT_TOTAL
+        await db.flush()
+        return
+
+    remaining = WEIGHT_TOTAL - weight
+    other_tasks = [item for item in siblings if item.id != task.id]
+    other_total = sum(
+        (_decimal_weight(item.weight, default=WEIGHT_TOTAL) for item in other_tasks),
+        Decimal("0"),
+    )
+
+    task.weight = weight
+    if other_total <= 0:
+        for other, other_weight in zip(other_tasks, _split_weight_evenly(remaining, len(other_tasks))):
+            other.weight = other_weight
+    else:
+        running = Decimal("0")
+        for other in other_tasks[:-1]:
+            current = _decimal_weight(other.weight, default=WEIGHT_TOTAL)
+            next_weight = (current / other_total * remaining).quantize(
+                WEIGHT_SCALE,
+                rounding=ROUND_DOWN,
+            )
+            other.weight = next_weight
+            running += next_weight
+        other_tasks[-1].weight = remaining - running
+
+    total = sum(
+        (_decimal_weight(item.weight, default=WEIGHT_TOTAL) for item in siblings),
+        Decimal("0"),
+    )
+    if abs(total - WEIGHT_TOTAL) > WEIGHT_TOLERANCE:
+        raise ValueError("Sibling task weights must sum to 1.")
+    await db.flush()
 
 
 def effective_task_status(task: Task, now: datetime | None = None) -> TaskStatus:
@@ -51,43 +186,87 @@ def normalize_assignee_ids(assignee_ids: list[uuid.UUID] | None = None) -> list[
     return normalized
 
 
-async def get_task_progress_pct(db: AsyncSession, task: Task) -> int:
-    if task.status == TaskStatus.DONE:
-        return 100
-
-    child_total = (
+async def get_project_task_progress_map(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+) -> dict[uuid.UUID, int]:
+    tasks = (
         await db.execute(
-            select(func.count(Task.id)).where(
-                Task.parent_task_id == task.id,
-                Task.is_deleted == False,
-            )
+            select(Task)
+            .where(Task.project_id == project_id)
+            .order_by(Task.sort_order, Task.created_at)
         )
-    ).scalar() or 0
-    if child_total:
-        child_done = (
-            await db.execute(
-                select(func.count(Task.id)).where(
-                    Task.parent_task_id == task.id,
-                    Task.status == TaskStatus.DONE,
-                    Task.is_deleted == False,
-                )
-            )
-        ).scalar() or 0
-        return round(child_done / child_total * 100)
+    ).scalars().all()
+    if not tasks:
+        return {}
 
-    progress = (
+    task_by_id = {task.id: task for task in tasks}
+    children_by_parent: dict[uuid.UUID | None, list[Task]] = {}
+    for task in tasks:
+        children_by_parent.setdefault(task.parent_task_id, []).append(task)
+
+    latest_progress: dict[uuid.UUID, int] = {}
+    progress_rows = (
         await db.execute(
-            select(TaskEvent.progress_pct)
+            select(TaskEvent.task_id, TaskEvent.progress_pct)
             .where(
-                TaskEvent.task_id == task.id,
+                TaskEvent.task_id.in_(list(task_by_id.keys())),
                 TaskEvent.event_type == TaskEventType.PROGRESS,
                 TaskEvent.progress_pct.isnot(None),
             )
             .order_by(TaskEvent.created_at.desc())
-            .limit(1)
         )
-    ).scalar()
-    return progress or 0
+    ).all()
+    for task_id, progress_pct in progress_rows:
+        latest_progress.setdefault(task_id, progress_pct)
+
+    progress_cache: dict[uuid.UUID, int] = {}
+    visiting: set[uuid.UUID] = set()
+
+    def compute(task_id: uuid.UUID) -> int:
+        if task_id in progress_cache:
+            return progress_cache[task_id]
+        task = task_by_id.get(task_id)
+        if task is None:
+            return 0
+        if task_id in visiting:
+            return latest_progress.get(task_id, 0)
+
+        visiting.add(task_id)
+        active_children = [
+            child for child in children_by_parent.get(task_id, [])
+            if not child.is_deleted
+        ]
+        if task.status == TaskStatus.DONE:
+            progress = 100
+        elif active_children:
+            weighted_sum = Decimal("0")
+            weight_sum = Decimal("0")
+            for child in active_children:
+                child_progress = Decimal(compute(child.id))
+                child_weight = _decimal_weight(child.weight, default=WEIGHT_TOTAL)
+                weighted_sum += child_progress * child_weight
+                weight_sum += child_weight
+
+            if weight_sum <= 0:
+                progress = round(sum(compute(child.id) for child in active_children) / len(active_children))
+            else:
+                progress = int(
+                    (weighted_sum / weight_sum).quantize(PERCENT_SCALE, rounding=ROUND_HALF_UP)
+                )
+        else:
+            progress = latest_progress.get(task_id, 0)
+
+        visiting.remove(task_id)
+        progress_cache[task_id] = max(0, min(100, progress))
+        return progress_cache[task_id]
+
+    return {task.id: compute(task.id) for task in tasks}
+
+
+async def get_task_progress_pct(db: AsyncSession, task: Task) -> int:
+    progress_map = await get_project_task_progress_map(db, task.project_id)
+    return progress_map.get(task.id, 0)
 
 
 async def get_task_assignee_map(
@@ -159,6 +338,7 @@ async def task_to_out(
     task: Task,
     assignee_name: str | None = None,
     assignee_map: dict[uuid.UUID, list[dict]] | None = None,
+    progress_map: dict[uuid.UUID, int] | None = None,
 ) -> dict:
     assignees = (assignee_map or {}).get(task.id)
     if assignees is None:
@@ -181,7 +361,12 @@ async def task_to_out(
         "assignee_ids": assignee_ids,
         "assignee_names": assignee_names,
         "signed_off_by_name": signed_off_by_name,
-        "progress_pct": await get_task_progress_pct(db, task),
+        "weight": float(_decimal_weight(task.weight, default=WEIGHT_TOTAL)),
+        "progress_pct": (
+            progress_map.get(task.id, 0)
+            if progress_map is not None
+            else await get_task_progress_pct(db, task)
+        ),
     }
 
 
@@ -229,7 +414,11 @@ async def list_tasks(
         )
     ).scalars().all()
     assignee_map = await get_task_assignee_map(db, tasks)
-    items = [await task_to_out(db, task, assignee_map=assignee_map) for task in tasks]
+    progress_map = await get_project_task_progress_map(db, project_id) if tasks else {}
+    items = [
+        await task_to_out(db, task, assignee_map=assignee_map, progress_map=progress_map)
+        for task in tasks
+    ]
     return items, total
 
 
@@ -241,8 +430,11 @@ async def create_task(
 ) -> Task:
     task_data = data.model_dump()
     assignee_ids = normalize_assignee_ids(task_data.pop("assignee_ids", None))
+    requested_weight = task_data.pop("weight", None)
     if task_data.get("status") is None:
         task_data["status"] = initial_task_status(data.start_date)
+    if requested_weight is not None:
+        task_data["weight"] = _decimal_weight(requested_weight)
 
     max_order = (
         await db.execute(
@@ -262,6 +454,11 @@ async def create_task(
     db.add(task)
     await db.flush()
     await sync_task_assignees(db, task, assignee_ids)
+    if task.parent_task_id:
+        if requested_weight is None:
+            await rebalance_sibling_weights_evenly(db, task.parent_task_id)
+        else:
+            await set_sibling_weight(db, task, requested_weight)
     return task
 
 
@@ -309,11 +506,17 @@ async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) ->
         raise ValueError("Task status is automatic. Submit progress and sign off completed tasks.")
 
     assignee_ids = normalize_assignee_ids(update_data.pop("assignee_ids", None)) if "assignee_ids" in update_data else None
+    has_weight_update = "weight" in update_data
+    requested_weight = update_data.pop("weight", None) if has_weight_update else None
+    if has_weight_update and requested_weight is None:
+        raise ValueError("Task weight is required.")
 
     for field, value in update_data.items():
         setattr(task, field, value)
     if assignee_ids is not None:
         await sync_task_assignees(db, task, assignee_ids)
+    if has_weight_update:
+        await set_sibling_weight(db, task, requested_weight)
     await db.flush()
     await db.refresh(task)
     return task
@@ -324,7 +527,10 @@ async def delete_task(db: AsyncSession, task_id: uuid.UUID, actor_id: uuid.UUID 
     if not task:
         return False
     deleted_at = _now()
+    affected_parent_ids: set[uuid.UUID] = set()
     for item in [task, *await get_task_descendants(db, task)]:
+        if item.parent_task_id:
+            affected_parent_ids.add(item.parent_task_id)
         item.is_deleted = True
         item.deleted_at = deleted_at
         if actor_id:
@@ -334,6 +540,8 @@ async def delete_task(db: AsyncSession, task_id: uuid.UUID, actor_id: uuid.UUID 
                 event_type=TaskEventType.DELETE,
                 note="Task deleted",
             ))
+    for parent_task_id in affected_parent_ids:
+        await normalize_sibling_weights(db, parent_task_id)
     await db.flush()
     await db.refresh(task)
     return True
@@ -349,7 +557,10 @@ async def restore_task(db: AsyncSession, task_id: uuid.UUID, actor_id: uuid.UUID
         if parent and parent.is_deleted:
             raise ValueError("Parent task is deleted. Restore the parent task first.")
 
+    affected_parent_ids: set[uuid.UUID] = set()
     for item in [task, *await get_task_descendants(db, task)]:
+        if item.parent_task_id:
+            affected_parent_ids.add(item.parent_task_id)
         item.is_deleted = False
         item.deleted_at = None
         if actor_id:
@@ -359,6 +570,8 @@ async def restore_task(db: AsyncSession, task_id: uuid.UUID, actor_id: uuid.UUID
                 event_type=TaskEventType.RESTORE,
                 note="Task restored",
             ))
+    for parent_task_id in affected_parent_ids:
+        await normalize_sibling_weights(db, parent_task_id)
     await db.flush()
     await db.refresh(task)
     return task
@@ -479,4 +692,8 @@ async def get_subtasks(db: AsyncSession, parent_task_id: uuid.UUID) -> list[dict
         )
     ).scalars().all()
     assignee_map = await get_task_assignee_map(db, tasks)
-    return [await task_to_out(db, task, assignee_map=assignee_map) for task in tasks]
+    progress_map = await get_project_task_progress_map(db, tasks[0].project_id) if tasks else {}
+    return [
+        await task_to_out(db, task, assignee_map=assignee_map, progress_map=progress_map)
+        for task in tasks
+    ]

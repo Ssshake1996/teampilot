@@ -193,6 +193,10 @@ function formatDateTime(dateStr: string | null): string {
   return dateStr.replace('T', ' ').slice(0, 16)
 }
 
+function projectContactText(): string {
+  return project.value?.contact_names?.join('、') || project.value?.owner_name || '-'
+}
+
 function isOverdue(task: Task): boolean {
   if (!task.deadline || task.status === TaskStatus.DONE) return false
   return new Date(task.deadline) < new Date()
@@ -839,6 +843,14 @@ onMounted(async () => {
         <h2>{{ project.name }}</h2>
       </div>
       <div class="project-summary-grid">
+        <div class="project-summary-section project-contact-section">
+          <span class="project-summary-label">接口人</span>
+          <p>{{ projectContactText() }}</p>
+        </div>
+        <div class="project-summary-section project-contact-section">
+          <span class="project-summary-label">创建人</span>
+          <p>{{ project.owner_name || '-' }}</p>
+        </div>
         <div class="project-summary-section">
           <span class="project-summary-label">项目目标</span>
           <p>{{ project.goal || '暂无项目目标' }}</p>
@@ -2344,5 +2356,10 @@ onMounted(async () => {
   line-height: 1.7;
   color: #606266;
   white-space: pre-wrap;
+}
+
+.project-contact-section p {
+  font-weight: 600;
+  color: #303133;
 }
 </style>

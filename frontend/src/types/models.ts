@@ -19,6 +19,9 @@ export interface Project {
   description: string | null
   status: ProjectStatus
   owner_id: string
+  owner_name: string | null
+  contact_user_ids: string[]
+  contact_names: string[]
   start_date: string | null
   end_date: string | null
   created_at: string
@@ -40,6 +43,7 @@ export interface Task {
   assignee_names: string[]
   creator_id: string
   parent_task_id: string | null
+  weight: number
   estimated_hours: number | null
   actual_hours: number | null
   start_date: string | null
