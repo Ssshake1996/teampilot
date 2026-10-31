@@ -41,7 +41,7 @@ curl -X POST http://localhost:8000/api/v1/auth/register \
 id, username, full_name, role, department, bio, avatar_url, is_active, created_at
 ```
 
-其中 `bio` 是人员详情页的个人介绍，会被 AI 派单、任务预估和能力分析作为参考。
+其中 `bio` 是人员详情页展示的个人介绍。
 
 ## API 总览
 
@@ -54,7 +54,6 @@ id, username, full_name, role, department, bio, avatar_url, is_active, created_a
 | 技能 | `/api/v1/skills` | 技能标签管理 |
 | 能力 | `/api/v1/capabilities` | 能力档案 |
 | 仪表盘 | `/api/v1/dashboard` | 统计、四象限、项目进度 |
-| DSH | `/api/v1/integrations/dsh` | 有界上下文、草稿、审批、幂等提交 |
 | 报告 | `/api/v1/reports` | 巡检报告缓存、刷新、周报生成、邮件发送 |
 | 数据 Skill | `/api/v1/data-connectors`, `/api/v1/tasks/{task_id}/data-skills` | 内部平台 API 连接器、任务数据采集 Skill、执行快照和采纳进展 |
 | 权限 | `/api/v1/permissions` | 角色权限管理 |
@@ -82,11 +81,11 @@ curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/signoff \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-会签需要 `task.signoff` 权限，且任务当前进度必须为 100%。进度由 `POST /api/v1/tasks/{task_id}/progress` 或群消息导入写入。
+会签需要 `task.signoff` 权限，且任务当前进度必须为 100%。手动进度通过 `POST /api/v1/tasks/{task_id}/progress` 写入，也可采纳任务数据 Skill 的执行结果。
 
 ## 任务数据 Skill
 
-任务数据 Skill 用于从公司内部平台 API 采集任务完成证据。用户在任务详情里用白话描述数据来源，系统生成 Skill 草稿，测试执行后确认，后续可重复执行。执行结果只有在“采纳进展”后才会写入 `task_events`。
+任务数据 Skill 用于从公司内部平台 API 采集任务完成证据。用户在任务详情里描述数据来源，系统按确定性规则生成 Skill 草稿，测试执行后确认，后续可重复执行。执行结果只有在“采纳进展”后才会写入 `task_events`。
 
 ### 数据连接器
 
@@ -159,26 +158,6 @@ curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/data-skills/runs/$RUN_I
   -H "Content-Type: application/json" \
   -d '{}'
 ```
-
-## DSH 集成
-
-旧 `/api/v1/ai` 路由已删除。自然语言分析在 DSH 原生 Agent 中进行，TeamPilot 不调用模型。
-前缀为 `/api/v1/integrations/dsh`，每个接口都使用真实业务用户 JWT。
-
-| 方法 | 路径 | 行为 |
-| --- | --- | --- |
-| GET | `/projects/{id}/context?page=1&page_size=50` | 有界任务页和整个项目 revision；最大页长 100，显式返回 truncated |
-| POST | `/drafts` | `{payload: ...}`，严格区分 project_plan/task_create/progress/task_update |
-| GET | `/drafts` | 当前作者最近 50 份草稿，不返回确认秘密 |
-| GET | `/drafts/{id}` | 当前作者草稿和前后值预览 |
-| POST | `/drafts/{id}/approve` | 用户界面审阅后发送 payload_hash；确认 Token 仅交给插件 Host |
-| POST | `/drafts/{id}/commit` | Host 发送 confirmation_token；重新检查 RBAC/revision，单事务幂等写入 |
-| POST | `/drafts/{id}/cancel` | 撤销未提交草稿和确认凭据 |
-
-草稿有效期一小时，批准有效期五分钟。作者不匹配返回 404，未经批准返回 403，项目已改变或批准过期返回 409，非法字段返回 422。Agent 无 approve 工具，也不能接收确认 Token。原生工具提交还需 DSH 自身审批。
-
-新增任务复用现有权重重分配及祖先重新打开规则；进度达到 100% 仍不会自动会签。
-安装与完整流程见 [插件说明](../plugins/packages/dsh-teampilot/README.md)。
 
 ## 报告与邮件发送
 

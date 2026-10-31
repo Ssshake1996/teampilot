@@ -1,5 +1,0 @@
-- insert:
-    - id: teampilot
-      name: dsh-teampilot
-      config:
-        baseUrl: http://127.0.0.1:8000

@@ -88,7 +88,7 @@ docker compose logs -f --tail=50
 
 结构变更使用显式 Alembic 迁移。先在 `backend` 执行 `python scripts/backup_database.py`，再运行 `python -m alembic upgrade head`。启动时 `AUTO_MIGRATE=true` 会执行同一升级；生产可关闭自动迁移，改由部署步骤执行。不自动重建或清空业务数据。
 
-DSH 草稿迁移为 `20261005_02`。旧 AI 模块、路由和 Vue 控件已移除；历史 AI 数据不读不写，密钥不迁入 DSH。插件运行和打包见 [插件说明](../plugins/packages/dsh-teampilot/README.md)。插件卸载或重启会撤销内存中的业务登录与批准凭据，业务库不会被删除。
+历史 DSH 草稿迁移 `20261005_02` 仍在迁移链中。移除集成不会删除已有 `dsh_drafts` 表、草稿记录或业务数据；运行时已无对应 ORM、API、审批与提交入口。历史 AI 配置和分析字段同样保留，当前业务流程不读取这些配置或调用模型。
 
 ## 常见排障
 

@@ -859,7 +859,7 @@ onMounted(async () => {
               type="info"
               :closable="false"
               show-icon
-              title="在此提交真实进展与工时。批量整理群消息可在 DSH 的 TeamPilot 对话中提出，写入前需要审阅确认。"
+              title="在此填写真实进展说明和本次投入工时。提交后保留历史记录，进度达到 100% 后仍需会签完成。"
             />
           </div>
 

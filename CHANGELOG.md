@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-10-31
+
+- Remove the native DSH plugin, its runtime/build dependencies, dedicated business-query and draft-approval endpoints, and plugin release checks.
+- Keep project, task, personnel, manual progress, deterministic reports and task data Skill workflows available as an independent Web application.
+- Preserve existing business records and legacy draft history during database upgrades; retired integrations are no longer exposed at runtime.
+- Remove plugin instructions and UI links while keeping the published 0.3.0 release history below unchanged.
+- Align frontend and backend version metadata at `0.4.0`; publish source and production Web assets without a plugin package.
+
 ## 0.3.0 — 2026-10-31
 
 ### Frontend and interaction

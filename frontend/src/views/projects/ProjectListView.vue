@@ -1397,7 +1397,7 @@ watch([inlineEditor, draggingTaskId], async () => {
           type="info"
           :closable="false"
           show-icon
-          title="填写真实进展。批量群消息可在 DSH 的 TeamPilot 对话中生成草稿，再经审阅和审批提交。"
+          title="填写真实进展说明和本次投入工时。提交后保留历史记录，进度达到 100% 后仍需会签完成。"
           style="margin-bottom: 16px"
         />
         <div v-if="canManageProgress && !feedbackTask.is_deleted" class="fb-form">

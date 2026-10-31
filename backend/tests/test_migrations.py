@@ -37,3 +37,37 @@ async def test_fresh_schema_upgrade_is_repeatable(tmp_path):
         assert len(weights) == 3
         assert sum(weights) == pytest.approx(1, abs=0.000001)
         assert connection.execute("pragma integrity_check").fetchone()[0] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_retired_draft_history_survives_existing_revision_upgrade(tmp_path):
+    database = tmp_path / "existing.sqlite3"
+    env = dict(os.environ, DATABASE_URL=f"sqlite+aiosqlite:///{database.as_posix()}")
+    backend = Path(__file__).resolve().parents[1]
+
+    def upgrade():
+        result = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=backend, env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    upgrade()
+    user_id = "10000000000000000000000000000001"
+    draft_id = "20000000000000000000000000000002"
+    with sqlite3.connect(database) as connection:
+        connection.execute("insert into users (id, username, hashed_password, full_name, role, is_active) values (?, 'retained', 'hash', 'Retained', 'member', 1)", (user_id,))
+        connection.execute("""insert into dsh_drafts
+            (id, author_id, payload, payload_hash, preview, state, expires_at, confirmation_hash, approval_expires_at, result)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (
+            draft_id, user_id, '{"kind":"progress","updates":[]}', "a" * 64,
+            '{"items":[]}', "committed", "2026-01-01 00:00:00", "b" * 64,
+            "2026-01-01 00:00:00", '{"status":"historical"}',
+        ))
+        before = connection.execute("select * from dsh_drafts where id = ?", (draft_id,)).fetchone()
+        user_before = connection.execute("select * from users where id = ?", (user_id,)).fetchone()
+        assert connection.execute("select version_num from alembic_version").fetchone()[0] == "20261005_02"
+
+    upgrade()
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("select * from dsh_drafts where id = ?", (draft_id,)).fetchone() == before
+        assert connection.execute("select * from users where id = ?", (user_id,)).fetchone() == user_before
+        assert connection.execute("pragma integrity_check").fetchone()[0] == "ok"
