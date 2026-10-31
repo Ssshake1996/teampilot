@@ -74,7 +74,6 @@ class TaskDataSkillOut(BaseModel):
 
 class SkillRunRequest(BaseModel):
     params: dict = Field(default_factory=dict)
-    use_ai: bool = True
 
 
 class SkillRunOut(BaseModel):
@@ -86,7 +85,6 @@ class SkillRunOut(BaseModel):
     request_json: dict
     response_json: dict
     metrics_json: dict
-    ai_analysis_json: dict
     suggested_progress_pct: int | None = None
     suggested_note: str | None = None
     error_message: str | None = None

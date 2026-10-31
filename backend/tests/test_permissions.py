@@ -57,6 +57,6 @@ async def test_daily_brief_is_visible_to_any_logged_in_user(client: AsyncClient,
     })
     member_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
-    response = await client.post("/api/v1/ai/daily-brief", json={}, headers=member_headers)
+    response = await client.post("/api/v1/reports/refresh", json={"report_type": "daily"}, headers=member_headers)
     assert response.status_code == 200
-    assert "event: result" in response.text or "event: error" in response.text
+    assert response.json()["report"]["source"] == "rules"

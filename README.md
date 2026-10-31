@@ -1,16 +1,18 @@
 # TeamPilot
 
+当前版本：**0.3.0**。变化与升级说明见 [CHANGELOG.md](CHANGELOG.md)。GitHub Release 分别提供源码、生产 Web 资源和 DSH 原生插件包。
+
 TeamPilot 是一个面向中小团队的项目与任务进度管理系统，包含项目管理、任务看板、人员管理、进展汇总、巡检报告和多种 AI 辅助能力。
 
 ## 功能概览
 
 - 项目管理：项目列表、项目详情、成员管理、任务树
 - 任务管理：任务列表、任务看板、子任务拆解、进度记录、会签完成
-- 进展更新：支持粘贴群消息，由 AI 识别项目和任务并生成待确认更新
+- 进展更新：手动提交进度；群消息识别在 DSH 原生会话中生成待确认草稿
 - 任务数据 Skill：支持用白话描述内部平台 API，生成可执行 Skill，采集外部证据后采纳为任务进展
 - 人员管理：成员列表、个人介绍、技能维度、能力分析
 - 权限控制：登录认证、角色权限、菜单和接口校验
-- AI 辅助：任务分配建议、任务估时、任务拆解、项目计划生成、巡检报告、风险分析、会签建议、项目复盘
+- DSH 插件：原生 Agent 分析、项目计划、任务树、负责人/工时建议和进度草稿；审阅与运行时审批后才写入
 - 报告发送：巡检报告支持日报 07:00、周报周五 12:30 自动更新，手动刷新和 SMTP 邮件发送
 
 ## 技术栈
@@ -65,7 +67,7 @@ bash deploy.sh
 
 - 检查并尽量安装 Docker / Docker Compose
 - 自动生成 `deploy.env`
-- 自动补齐 `JWT_SECRET_KEY`、`AI_ENCRYPTION_KEY`、`ADMIN_PASSWORD`
+- 自动补齐 `JWT_SECRET_KEY`、`ADMIN_PASSWORD`
 - 构建并启动前端、后端和 PostgreSQL
 - 等待后端健康检查通过
 
@@ -113,10 +115,29 @@ http://localhost:5173
 
 - 生产部署默认使用 PostgreSQL 16
 - 本地开发和测试可以直接使用 SQLite
-- 当前仓库不再维护“启动时自动兼容旧字段/旧状态”的迁移逻辑
-- 当前项目定位为实验性项目；如果模型字段有破坏性变化，推荐先备份，再重建或重灌数据，不再为旧数据做兼容补丁
+- 结构升级使用 Alembic；升级前执行 `backend/scripts/backup_database.py`
+- 不自动清空业务数据；历史 AI 配置和分析列保留但不再读取或暴露
 
 数据库字段说明见 [docs/DATABASE.md](docs/DATABASE.md)。
+
+## DSH 原生插件
+
+旧模型调用、`/api/v1/ai` 路由及 Vue AI 控件已删除，没有旧 AI 回退开关。
+模型、密钥、Agent 循环和会话由 DSH 管理。TeamPilot 只保留业务接口、权限和受控草稿提交。
+
+插件锁定官方 npm `latest` 对应的 `@deepseek-ai/dsh@0.2.0-rc.2`（2026-10-05 核查）。以下开发方式使用独立实例，不覆盖常用 DSH 配置；本机安装则使用原生插件管理器：
+
+```bash
+cd plugins
+npm ci
+npm run build
+npm test
+npm run dev
+```
+
+本地 Web 端口为 `5180`；首次浏览器认证使用启动终端中的本机链接，勿转发该链接。
+模型在 DSH 设置中配置，TeamPilot 用户在侧栏的 TeamPilot 面板中登录。
+安装、审批流程和兼容限制见 [插件说明](plugins/packages/dsh-teampilot/README.md)。
 
 ## 测试与构建
 

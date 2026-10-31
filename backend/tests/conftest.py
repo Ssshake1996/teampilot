@@ -17,6 +17,7 @@ from app.models import Base
 from app.database import get_db
 from app.main import app
 from app.utils.security import hash_password
+from app.websocket.events import publish_committed_events
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -45,6 +46,7 @@ async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
+            await publish_committed_events(session)
         except Exception:
             await session.rollback()
             raise

@@ -9,8 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev &
 # Install Python deps
 COPY pyproject.toml .
 RUN pip install --no-cache-dir \
-    fastapi "uvicorn[standard]" "sqlalchemy[asyncio]" asyncpg alembic \
-    pydantic-settings "python-jose[cryptography]" "passlib[bcrypt]" \
+    fastapi "uvicorn[standard]" "sqlalchemy[asyncio]" asyncpg aiosqlite alembic \
+    pydantic-settings "python-jose[cryptography]" "passlib[bcrypt]" "bcrypt==4.0.1" \
     httpx cryptography python-multipart
 
 # Copy app code

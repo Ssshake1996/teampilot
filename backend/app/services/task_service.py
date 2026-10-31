@@ -2,14 +2,16 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.assignment import Assignment, AssignmentKind
-from app.models.task import Task, TaskStatus
+from app.models.project import Project, ProjectStatus
+from app.models.task import Task, TaskStatus, TaskPriority
 from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
 from app.schemas.task import TaskCreate, TaskUpdate
+from app.websocket.events import queue_project_event
 
 
 def _now() -> datetime:
@@ -61,6 +63,7 @@ async def _active_sibling_tasks(db: AsyncSession, parent_task_id: uuid.UUID) -> 
                 Task.is_deleted == False,
             )
             .order_by(Task.sort_order, Task.created_at)
+            .execution_options(populate_existing=True)
         )
     ).scalars().all()
 
@@ -176,6 +179,47 @@ def initial_task_status(start_date: datetime | None) -> TaskStatus:
     return TaskStatus.IN_PROGRESS
 
 
+def effective_status_sql(now: datetime | None = None):
+    return case(
+        (Task.status == TaskStatus.DONE, TaskStatus.DONE.name),
+        (Task.start_date > (now or _now()), TaskStatus.NOT_STARTED.name),
+        else_=TaskStatus.IN_PROGRESS.name,
+    )
+
+
+async def latest_progress_entries(db: AsyncSession, project_id: uuid.UUID) -> dict:
+    ranked = select(
+        TaskEvent.task_id, TaskEvent.progress_pct, TaskEvent.note,
+        func.row_number().over(
+            partition_by=TaskEvent.task_id,
+            order_by=(TaskEvent.created_at.desc(), TaskEvent.id.desc()),
+        ).label("rank"),
+    ).join(Task, TaskEvent.task_id == Task.id).where(
+        Task.project_id == project_id,
+        TaskEvent.event_type == TaskEventType.PROGRESS,
+        TaskEvent.progress_pct.isnot(None),
+    ).subquery()
+    rows = (await db.execute(select(ranked).where(ranked.c.rank == 1))).all()
+    return {row.task_id: row for row in rows}
+
+
+async def reopen_ancestors(db: AsyncSession, task_id: uuid.UUID | None, actor_id: uuid.UUID) -> None:
+    seen = set()
+    while task_id is not None and task_id not in seen:
+        seen.add(task_id)
+        task = (await db.execute(select(Task).where(Task.id == task_id).with_for_update()
+            .execution_options(populate_existing=True))).scalar_one_or_none()
+        if not task:
+            break
+        if task.status == TaskStatus.DONE:
+            task.status = initial_task_status(task.start_date)
+            task.completed_at = task.signed_off_at = task.signed_off_by_id = None
+            db.add(TaskEvent(task_id=task.id, actor_id=actor_id, event_type=TaskEventType.REOPEN,
+                             note="Task reopened; previous signoff retained in audit history"))
+        task_id = task.parent_task_id
+    await db.flush()
+
+
 def normalize_assignee_ids(assignee_ids: list[uuid.UUID] | None = None) -> list[uuid.UUID]:
     normalized: list[uuid.UUID] = []
     seen: set[uuid.UUID] = set()
@@ -189,14 +233,18 @@ def normalize_assignee_ids(assignee_ids: list[uuid.UUID] | None = None) -> list[
 async def get_project_task_progress_map(
     db: AsyncSession,
     project_id: uuid.UUID,
+    tasks: list[Task] | None = None,
+    latest: dict | None = None,
 ) -> dict[uuid.UUID, int]:
-    tasks = (
-        await db.execute(
-            select(Task)
-            .where(Task.project_id == project_id)
-            .order_by(Task.sort_order, Task.created_at)
-        )
-    ).scalars().all()
+    if tasks is None:
+        tasks = (
+            await db.execute(
+                select(Task)
+                .where(Task.project_id == project_id)
+                .order_by(Task.sort_order, Task.created_at)
+                .execution_options(populate_existing=True)
+            )
+        ).scalars().all()
     if not tasks:
         return {}
 
@@ -205,20 +253,8 @@ async def get_project_task_progress_map(
     for task in tasks:
         children_by_parent.setdefault(task.parent_task_id, []).append(task)
 
-    latest_progress: dict[uuid.UUID, int] = {}
-    progress_rows = (
-        await db.execute(
-            select(TaskEvent.task_id, TaskEvent.progress_pct)
-            .where(
-                TaskEvent.task_id.in_(list(task_by_id.keys())),
-                TaskEvent.event_type == TaskEventType.PROGRESS,
-                TaskEvent.progress_pct.isnot(None),
-            )
-            .order_by(TaskEvent.created_at.desc())
-        )
-    ).all()
-    for task_id, progress_pct in progress_rows:
-        latest_progress.setdefault(task_id, progress_pct)
+    entries = latest if latest is not None else await latest_progress_entries(db, project_id)
+    latest_progress = {task_id: entry.progress_pct for task_id, entry in entries.items()}
 
     progress_cache: dict[uuid.UUID, int] = {}
     visiting: set[uuid.UUID] = set()
@@ -339,6 +375,7 @@ async def task_to_out(
     assignee_name: str | None = None,
     assignee_map: dict[uuid.UUID, list[dict]] | None = None,
     progress_map: dict[uuid.UUID, int] | None = None,
+    signer_names: dict[uuid.UUID, str] | None = None,
 ) -> dict:
     assignees = (assignee_map or {}).get(task.id)
     if assignees is None:
@@ -350,9 +387,12 @@ async def task_to_out(
 
     signed_off_by_name = None
     if task.signed_off_by_id:
-        signed_off_by_name = (
-            await db.execute(select(User.full_name).where(User.id == task.signed_off_by_id))
-        ).scalar()
+        if signer_names is not None:
+            signed_off_by_name = signer_names.get(task.signed_off_by_id)
+        else:
+            signed_off_by_name = (
+                await db.execute(select(User.full_name).where(User.id == task.signed_off_by_id))
+            ).scalar()
 
     return {
         **{c.name: getattr(task, c.name) for c in task.__table__.columns},
@@ -370,6 +410,14 @@ async def task_to_out(
     }
 
 
+async def get_signer_names(db: AsyncSession, tasks: list[Task]) -> dict[uuid.UUID, str]:
+    signer_ids = {task.signed_off_by_id for task in tasks if task.signed_off_by_id}
+    if not signer_ids:
+        return {}
+    rows = (await db.execute(select(User.id, User.full_name).where(User.id.in_(signer_ids)))).all()
+    return dict(rows)
+
+
 async def list_tasks(
     db: AsyncSession,
     project_id: uuid.UUID,
@@ -377,9 +425,18 @@ async def list_tasks(
     user_id: uuid.UUID | None = None,
     page: int = 1,
     page_size: int = 50,
+    priority: TaskPriority | None = None,
+    sort_by: str | None = None,
+    sort_order: str = "desc",
 ) -> tuple[list[dict], int]:
+    allowed_sort = {"created_at", "title", "status", "priority", "assignee_name", "deadline", "progress_pct"}
+    if (sort_by is not None and sort_by not in allowed_sort) or sort_order not in {"asc", "desc"}:
+        raise ValueError("Unsupported task sort")
     q = select(Task).where(Task.project_id == project_id)
     count_q = select(func.count(Task.id)).where(Task.project_id == project_id)
+    if priority is not None:
+        q = q.where(Task.priority == priority)
+        count_q = count_q.where(Task.priority == priority)
 
     if status == TaskStatus.DONE:
         q = q.where(Task.status == TaskStatus.DONE)
@@ -406,19 +463,40 @@ async def list_tasks(
         count_q = count_q.where(Task.id.in_(assigned_task_ids))
 
     total = (await db.execute(count_q)).scalar()
-    tasks = (
-        await db.execute(
-            q.order_by(Task.sort_order, Task.created_at.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        )
-    ).scalars().all()
+    # Plain fields sort in SQL before pagination. Derived progress and multi-person
+    # names need the complete filtered set, then use their actual displayed values.
+    derived_sort = sort_by in {"progress_pct", "assignee_name"}
+    order_fields = {
+        "created_at": Task.created_at,
+        "title": Task.title,
+        "deadline": Task.deadline,
+        "status": case((effective_status_sql() == TaskStatus.NOT_STARTED.name, 0),
+            (effective_status_sql() == TaskStatus.IN_PROGRESS.name, 1), else_=2),
+        "priority": case((Task.priority == TaskPriority.LOW, 0), (Task.priority == TaskPriority.MEDIUM, 1),
+            (Task.priority == TaskPriority.HIGH, 2), else_=3),
+    }
+    if sort_by in order_fields:
+        field = order_fields[sort_by]
+        ordered = field.asc() if sort_order == "asc" else field.desc()
+        q = q.order_by(ordered.nulls_last(), Task.id.asc())
+    else:
+        q = q.order_by(Task.sort_order, Task.created_at.desc(), Task.id.asc())
+    if not derived_sort:
+        q = q.offset((page - 1) * page_size).limit(page_size)
+    tasks = (await db.execute(q)).scalars().all()
     assignee_map = await get_task_assignee_map(db, tasks)
+    signer_names = await get_signer_names(db, tasks)
     progress_map = await get_project_task_progress_map(db, project_id) if tasks else {}
     items = [
-        await task_to_out(db, task, assignee_map=assignee_map, progress_map=progress_map)
+        await task_to_out(db, task, assignee_map=assignee_map, progress_map=progress_map, signer_names=signer_names)
         for task in tasks
     ]
+    if derived_sort:
+        items.sort(key=lambda item: str(item["id"]))
+        def display_value(item):
+            return item["progress_pct"] if sort_by == "progress_pct" else "、".join(item.get("assignee_names") or []).casefold()
+        items.sort(key=display_value, reverse=sort_order == "desc")
+        items = items[(page - 1) * page_size:page * page_size]
     return items, total
 
 
@@ -428,11 +506,22 @@ async def create_task(
     data: TaskCreate,
     creator_id: uuid.UUID,
 ) -> Task:
+    if data.status == TaskStatus.DONE:
+        raise ValueError("Completed tasks must be signed off after reaching 100% progress.")
+    project = (await db.execute(select(Project).where(Project.id == project_id).with_for_update()
+        .execution_options(populate_existing=True))).scalar_one_or_none()
+    if not project or project.status == ProjectStatus.ARCHIVED:
+        raise ValueError("Project not found or archived.")
+    if data.parent_task_id:
+        parent = (await db.execute(select(Task).where(Task.id == data.parent_task_id)
+            .execution_options(populate_existing=True))).scalar_one_or_none()
+        if not parent or parent.project_id != project_id or parent.is_deleted:
+            raise ValueError("Parent must be an active task in the same project.")
+        await reopen_ancestors(db, parent.id, creator_id)
     task_data = data.model_dump()
     assignee_ids = normalize_assignee_ids(task_data.pop("assignee_ids", None))
     requested_weight = task_data.pop("weight", None)
-    if task_data.get("status") is None:
-        task_data["status"] = initial_task_status(data.start_date)
+    task_data["status"] = initial_task_status(data.start_date)
     if requested_weight is not None:
         task_data["weight"] = _decimal_weight(requested_weight)
 
@@ -459,6 +548,7 @@ async def create_task(
             await rebalance_sibling_weights_evenly(db, task.parent_task_id)
         else:
             await set_sibling_weight(db, task, requested_weight)
+    queue_project_event(db, project_id)
     return task
 
 
@@ -472,6 +562,11 @@ async def get_task(
         query = query.where(Task.is_deleted == False)
     result = await db.execute(query)
     return result.scalar_one_or_none()
+
+
+async def lock_project(db: AsyncSession, task: Task) -> None:
+    await db.execute(select(Project.id).where(Project.id == task.project_id).with_for_update())
+    await db.refresh(task)
 
 
 async def get_task_descendants(db: AsyncSession, task: Task) -> list[Task]:
@@ -500,6 +595,9 @@ async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) ->
     task = await get_task(db, task_id)
     if not task:
         return None
+    await lock_project(db, task)
+    if task.is_deleted:
+        return None
 
     update_data = data.model_dump(exclude_unset=True)
     if "status" in update_data:
@@ -519,6 +617,7 @@ async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) ->
         await set_sibling_weight(db, task, requested_weight)
     await db.flush()
     await db.refresh(task)
+    queue_project_event(db, task.project_id)
     return task
 
 
@@ -526,6 +625,7 @@ async def delete_task(db: AsyncSession, task_id: uuid.UUID, actor_id: uuid.UUID 
     task = await get_task(db, task_id, include_deleted=True)
     if not task:
         return False
+    await lock_project(db, task)
     deleted_at = _now()
     affected_parent_ids: set[uuid.UUID] = set()
     for item in [task, *await get_task_descendants(db, task)]:
@@ -544,6 +644,7 @@ async def delete_task(db: AsyncSession, task_id: uuid.UUID, actor_id: uuid.UUID 
         await normalize_sibling_weights(db, parent_task_id)
     await db.flush()
     await db.refresh(task)
+    queue_project_event(db, task.project_id)
     return True
 
 
@@ -551,11 +652,16 @@ async def restore_task(db: AsyncSession, task_id: uuid.UUID, actor_id: uuid.UUID
     task = await get_task(db, task_id, include_deleted=True)
     if not task:
         return None
+    await lock_project(db, task)
+    if not task.is_deleted:
+        return task
 
     if task.parent_task_id:
         parent = await get_task(db, task.parent_task_id, include_deleted=True)
         if parent and parent.is_deleted:
             raise ValueError("Parent task is deleted. Restore the parent task first.")
+        if actor_id:
+            await reopen_ancestors(db, task.parent_task_id, actor_id)
 
     affected_parent_ids: set[uuid.UUID] = set()
     for item in [task, *await get_task_descendants(db, task)]:
@@ -574,6 +680,7 @@ async def restore_task(db: AsyncSession, task_id: uuid.UUID, actor_id: uuid.UUID
         await normalize_sibling_weights(db, parent_task_id)
     await db.flush()
     await db.refresh(task)
+    queue_project_event(db, task.project_id)
     return task
 
 
@@ -581,6 +688,11 @@ async def signoff_task(db: AsyncSession, task_id: uuid.UUID, user_id: uuid.UUID)
     task = await get_task(db, task_id)
     if not task:
         return None
+    await lock_project(db, task)
+    if task.is_deleted:
+        return None
+    if task.status == TaskStatus.DONE:
+        return task
 
     progress = await get_task_progress_pct(db, task)
     if progress < 100:
@@ -600,6 +712,7 @@ async def signoff_task(db: AsyncSession, task_id: uuid.UUID, user_id: uuid.UUID)
     ))
     await db.flush()
     await db.refresh(task)
+    queue_project_event(db, task.project_id)
     return task
 
 
@@ -611,8 +724,12 @@ async def assign_task(
     task = await get_task(db, task_id)
     if not task:
         return None
+    await lock_project(db, task)
+    if task.is_deleted:
+        return None
     await sync_task_assignees(db, task, normalize_assignee_ids(assignee_ids))
     await db.refresh(task)
+    queue_project_event(db, task.project_id)
     return task
 
 
@@ -630,8 +747,11 @@ async def log_progress(
     task = await get_task(db, task_id, include_deleted=True)
     if not task:
         raise ValueError("Task not found.")
+    await lock_project(db, task)
     if task.is_deleted:
         raise ValueError("Deleted tasks cannot accept progress updates.")
+    if progress_pct < 100:
+        await reopen_ancestors(db, task.id, user_id)
 
     entry = TaskEvent(
         task_id=task_id,
@@ -643,6 +763,7 @@ async def log_progress(
     )
     db.add(entry)
     await db.flush()
+    queue_project_event(db, task.project_id)
     return entry
 
 
@@ -674,6 +795,10 @@ async def get_progress_history(db: AsyncSession, task_id: uuid.UUID) -> list[dic
 
 
 async def reorder_tasks(db: AsyncSession, items: list[dict]) -> None:
+    project_ids = (await db.execute(select(Task.project_id).where(Task.id.in_([item["task_id"] for item in items]))
+        .distinct().order_by(Task.project_id))).scalars().all()
+    for project_id in project_ids:
+        await db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
     for item in items:
         await db.execute(
             update(Task)
@@ -692,8 +817,9 @@ async def get_subtasks(db: AsyncSession, parent_task_id: uuid.UUID) -> list[dict
         )
     ).scalars().all()
     assignee_map = await get_task_assignee_map(db, tasks)
+    signer_names = await get_signer_names(db, tasks)
     progress_map = await get_project_task_progress_map(db, tasks[0].project_id) if tasks else {}
     return [
-        await task_to_out(db, task, assignee_map=assignee_map, progress_map=progress_map)
+        await task_to_out(db, task, assignee_map=assignee_map, progress_map=progress_map, signer_names=signer_names)
         for task in tasks
     ]

@@ -1,0 +1,60 @@
+name: Quality Checks
+on: [push, pull_request]
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: teampilot_test
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -e '.[test]'
+      - run: pytest tests/ -q
+      - run: python -m alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:test-only-password@localhost:5432/teampilot_test
+      - run: python -m alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:test-only-password@localhost:5432/teampilot_test
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run test:unit
+      - run: npm run build
+  dsh-plugin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: plugins/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm pack --dry-run -w dsh-teampilot

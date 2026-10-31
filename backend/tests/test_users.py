@@ -74,3 +74,25 @@ async def test_get_workload(client: AsyncClient, auth_headers, test_user):
     data = res.json()
     assert "total_tasks" in data
     assert "in_progress_tasks" in data
+
+
+@pytest.mark.asyncio
+async def test_personnel_responses_exclude_legacy_ai_analysis(
+    client: AsyncClient, auth_headers, db_session, test_user,
+):
+    user, _ = test_user
+    user.capability_summary = "Manual capability summary"
+    user.capability_ai_analysis = {"legacy_private_analysis": "retained history"}
+    await db_session.commit()
+
+    detail = await client.get(f"/api/v1/users/{user.id}/detail-bundle", headers=auth_headers)
+    overview = await client.get("/api/v1/users/overview", headers=auth_headers)
+    assert detail.status_code == overview.status_code == 200
+    capability = detail.json()["capability"]
+    assert capability["summary"] == "Manual capability summary"
+    assert "ai_analysis" not in capability
+    assert "last_analyzed_at" not in capability
+    assert "legacy_private_analysis" not in str(detail.json())
+    assert "legacy_private_analysis" not in str(overview.json())
+    await db_session.refresh(user)
+    assert user.capability_ai_analysis == {"legacy_private_analysis": "retained history"}

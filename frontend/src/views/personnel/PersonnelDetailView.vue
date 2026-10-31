@@ -12,7 +12,7 @@ import {
 } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { usersApi } from '@/api/users'
-import { aiApi } from '@/api/ai'
+
 import { skillsApi } from '@/api/skills'
 import { useAuthStore } from '@/stores/auth'
 import { useUserStore } from '@/stores/user'
@@ -27,7 +27,7 @@ const auth = useAuthStore()
 const userStore = useUserStore()
 const userId = computed(() => route.params.id as string)
 const canEditSkills = computed(() => auth.can('personnel.edit_skills'))
-const canAnalyzeCapability = computed(() => auth.can('ai.capability'))
+
 const canEditBio = computed(() => auth.user?.id === userId.value || auth.can('personnel.edit'))
 
 const user = ref<User | null>(null)
@@ -36,7 +36,11 @@ const capability = ref<CapabilityProfile | null>(null)
 const workload = ref<any>(null)
 const userTasks = ref<any[]>([])
 const loading = ref(false)
-const analyzing = ref(false)
+const loadError = ref('')
+const updatedAt = ref('')
+const savingSkills = ref(false)
+const skillOptionsError = ref('')
+
 const editingBio = ref(false)
 const savingBio = ref(false)
 const bioDraft = ref('')
@@ -119,37 +123,33 @@ const taskHistory = computed(() => {
   return items
 })
 
-async function loadData() {
+async function loadData(force = false) {
   loading.value = true
+  loadError.value = ''
   try {
-    const data = await userStore.fetchDetailBundle(userId.value)
+    const data = await userStore.fetchDetailBundle(userId.value, force)
     user.value = data.user
     bioDraft.value = data.user?.bio || ''
     skills.value = data.skills || []
     capability.value = data.capability || null
     workload.value = data.workload || null
     userTasks.value = data.tasks || []
+    updatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  } catch (error: any) {
+    loadError.value = error?.response?.data?.detail || '人员详情读取失败，请重试'
   } finally {
     loading.value = false
   }
 }
 
-async function refreshData() {
-  userStore.invalidate(userId.value)
-  const data = await userStore.fetchDetailBundle(userId.value, true)
-  user.value = data.user
-  bioDraft.value = data.user?.bio || ''
-  skills.value = data.skills || []
-  capability.value = data.capability || null
-  workload.value = data.workload || null
-  userTasks.value = data.tasks || []
-}
+async function refreshData() { userStore.invalidate(userId.value); await loadData(true) }
 
 async function loadAllSkills() {
+  skillOptionsError.value = ''
   try {
     const res = await skillsApi.list()
     allSkills.value = res.data
-  } catch { /* silent */ }
+  } catch { skillOptionsError.value = '技能选项读取失败，请重试' }
 }
 
 function openSkillEditor() {
@@ -168,9 +168,7 @@ async function addSkill() {
   if (skills.value.some(s => s.skill_id === newSkillId.value)) { ElMessage.warning('该技能已存在'); return }
   const skill = allSkills.value.find(s => s.id === newSkillId.value)
   const updated = [...skills.value, { skill_id: newSkillId.value, skill_name: skill?.name || '', category: skill?.category || null, proficiency: newProficiency.value }]
-  await saveSkills(updated)
-  newSkillId.value = ''
-  newProficiency.value = 3
+  if (await saveSkills(updated)) { newSkillId.value = ''; newProficiency.value = 3 }
 }
 
 async function updateProficiency(skillId: string, val: number) {
@@ -179,13 +177,17 @@ async function updateProficiency(skillId: string, val: number) {
 }
 
 async function saveSkills(updatedSkills: UserSkill[]) {
+  if (savingSkills.value) return false
+  savingSkills.value = true
   try {
     await usersApi.updateSkills(userId.value, updatedSkills.map(s => ({ skill_id: s.skill_id, proficiency: s.proficiency })))
     await refreshData()
     ElMessage.success('技能已更新')
+    return true
   } catch {
-    ElMessage.error('技能更新失败')
-  }
+    ElMessage.error('技能更新失败，请重试')
+    return false
+  } finally { savingSkills.value = false }
 }
 
 function openBioEditor() {
@@ -194,7 +196,7 @@ function openBioEditor() {
 }
 
 async function saveBio() {
-  if (!user.value) return
+  if (!user.value || savingBio.value) return
   savingBio.value = true
   try {
     const res = await usersApi.update(userId.value, { bio: bioDraft.value.trim() || null })
@@ -211,25 +213,10 @@ async function saveBio() {
   }
 }
 
-const aiStatusMsg = ref('')
-
-async function analyzeCapability() {
-  analyzing.value = true
-  aiStatusMsg.value = '正在启动...'
-  try {
-    await aiApi.analyzeCapability(userId.value, (msg: string) => { aiStatusMsg.value = msg })
-    ElMessage.success('AI 能力分析已完成')
-    await refreshData()
-  } catch {
-    ElMessage.error('AI 能力分析失败，请稍后重试')
-  } finally {
-    analyzing.value = false
-    aiStatusMsg.value = ''
-  }
-}
 
 function formatDateTime(d: string | null) { return d ? d.replace('T', ' ').slice(0, 16) : '' }
 function taskStatusLabel(s: string) { return ({ not_started: '待开始', in_progress: '进行中', done: '已完成' } as any)[s] || s }
+function taskDetailLink(task: any) { return { path: `/projects/${task.project_id}/board`, query: { taskId: task.id, from: route.fullPath } } }
 function taskStatusType(s: string) { return ({ not_started: 'info', in_progress: 'warning', done: 'success' } as any)[s] || 'info' }
 
 onMounted(() => {
@@ -239,10 +226,9 @@ onMounted(() => {
 
 <template>
   <div v-loading="loading" class="personnel-detail">
+    <div class="detail-toolbar"><el-button @click="router.push('/personnel')">返回人员列表</el-button><el-button :loading="loading" :disabled="editingBio || savingSkills" @click="refreshData">刷新详情</el-button><span v-if="updatedAt">读取于 {{ updatedAt }}</span></div>
+    <el-alert v-if="loadError" type="error" :closable="false" show-icon :title="loadError + (user ? '，下方保留上次数据' : '')"><el-button link @click="refreshData">重试</el-button></el-alert>
     <template v-if="user">
-      <div class="detail-toolbar">
-        <el-button @click="router.push('/personnel')">返回人员列表</el-button>
-      </div>
 
       <!-- Profile Header -->
       <el-card class="profile-header-card">
@@ -259,12 +245,7 @@ onMounted(() => {
               <span v-if="user.department" class="profile-department">{{ user.department }}</span>
             </div>
           </div>
-          <div v-if="canAnalyzeCapability" class="profile-actions">
-            <el-button type="primary" :loading="analyzing" @click="analyzeCapability">
-              AI 能力分析
-            </el-button>
-            <div v-if="aiStatusMsg" class="ai-status-text">{{ aiStatusMsg }}</div>
-          </div>
+
         </div>
       </el-card>
 
@@ -282,7 +263,7 @@ onMounted(() => {
             :rows="5"
             maxlength="1000"
             show-word-limit
-            placeholder="填写擅长领域、项目经验、偏好的工作类型、当前限制等，AI 分析工作安排时会作为参考。"
+            placeholder="填写擅长领域、项目经验、偏好的工作类型、当前限制等，用于工作安排参考。"
           />
           <div class="bio-actions">
             <el-button @click="editingBio = false">取消</el-button>
@@ -334,7 +315,7 @@ onMounted(() => {
           <el-empty v-else :description="canEditSkills ? '暂无技能数据，请点击编辑维度添加' : '暂无技能数据'" />
 
           <!-- Skill Editor Panel -->
-          <div v-if="editingSkills" class="skill-editor">
+          <div v-if="editingSkills" v-loading="savingSkills" class="skill-editor">
             <div class="skill-list">
               <div v-for="s in skills" :key="s.skill_id" class="skill-item">
                 <span class="skill-name">{{ s.skill_name }}</span>
@@ -342,62 +323,16 @@ onMounted(() => {
                 <el-button type="danger" link size="small" @click="removeSkill(s.skill_id)">删除</el-button>
               </div>
             </div>
-            <div class="skill-add-row">
+            <p v-if="skillOptionsError" role="alert" class="options-error">{{ skillOptionsError }} <el-button link @click="loadAllSkills">重试</el-button></p><div class="skill-add-row">
               <el-select v-model="newSkillId" placeholder="添加技能" filterable size="small" style="flex:1">
                 <el-option v-for="s in allSkills.filter(a => !skills.some(e => e.skill_id === a.id))" :key="s.id" :label="s.name + (s.category ? ' (' + s.category + ')' : '')" :value="s.id" />
               </el-select>
               <el-rate v-model="newProficiency" :max="5" style="margin:0 8px" />
-              <el-button type="primary" size="small" @click="addSkill">添加</el-button>
+              <el-button type="primary" :loading="savingSkills" size="small" @click="addSkill">添加</el-button>
             </div>
           </div>
         </el-card>
 
-        <!-- Right: AI Analysis -->
-        <el-card class="analysis-card">
-          <template #header>
-            <div class="card-header-row">
-              <span>AI 分析报告</span>
-              <span v-if="capability?.last_analyzed_at" class="analysis-time">{{ formatDateTime(capability.last_analyzed_at) }}</span>
-            </div>
-          </template>
-          <template v-if="capability?.ai_analysis">
-            <div class="analysis-section">
-              <h4>优势</h4>
-              <ul>
-                <li v-for="(item, idx) in capability.ai_analysis.strengths" :key="'s-' + idx">
-                  {{ item }}
-                </li>
-              </ul>
-            </div>
-            <div class="analysis-section">
-              <h4>成长方向</h4>
-              <ul>
-                <li v-for="(item, idx) in capability.ai_analysis.growth_areas" :key="'g-' + idx">
-                  {{ item }}
-                </li>
-              </ul>
-            </div>
-            <div class="analysis-section">
-              <h4>推荐任务类型</h4>
-              <div class="recommended-tags">
-                <el-tag
-                  v-for="(item, idx) in capability.ai_analysis.recommended_task_types"
-                  :key="'r-' + idx"
-                  type="success"
-                  size="small"
-                  class="rec-tag"
-                >
-                  {{ item }}
-                </el-tag>
-              </div>
-            </div>
-            <div v-if="capability.ai_analysis.summary" class="analysis-section">
-              <h4>综合评价</h4>
-              <p class="analysis-summary">{{ capability.ai_analysis.summary }}</p>
-            </div>
-          </template>
-          <el-empty v-else description="暂无 AI 分析，请点击上方按钮进行分析" />
-        </el-card>
       </div>
 
       <!-- Task List -->
@@ -405,10 +340,10 @@ onMounted(() => {
         <template #header>
           <span>当前任务</span>
         </template>
-        <el-table v-if="userTasks.length" :data="userTasks" stripe size="small" style="width:100%" :row-style="{ cursor: 'pointer' }" @row-click="(row: any) => $router.push('/projects/' + row.project_id + '/board')">
+        <el-table v-if="userTasks.length" class="detail-task-table" :data="userTasks" stripe size="small" style="width:100%">
           <el-table-column label="任务名称" min-width="200" show-overflow-tooltip>
             <template #default="{ row }">
-              <span style="color:#409EFF">{{ row.title }}</span>
+              <RouterLink class="task-detail-link" :to="taskDetailLink(row)">{{ row.title }}</RouterLink>
             </template>
           </el-table-column>
           <el-table-column label="所属项目" prop="project_name" min-width="160" show-overflow-tooltip />
@@ -435,6 +370,7 @@ onMounted(() => {
             </template>
           </el-table-column>
         </el-table>
+        <ul v-if="userTasks.length" class="detail-task-cards"><li v-for="task in userTasks" :key="task.id"><RouterLink :to="taskDetailLink(task)"><strong>{{ task.title }}</strong><span>{{ task.project_name }}</span><span>{{ taskStatusLabel(task.status) }} · 截止 {{ task.deadline ? task.deadline.slice(0, 10) : '未设置' }}</span></RouterLink></li></ul>
         <el-empty v-else description="暂无分配任务" />
       </el-card>
     </template>
@@ -450,6 +386,9 @@ onMounted(() => {
 .detail-toolbar {
   display: flex;
   justify-content: flex-start;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:8px;
   margin-bottom: 12px;
 }
 
@@ -503,19 +442,6 @@ onMounted(() => {
   color: #909399;
   font-size: 14px;
 }
-
-.profile-actions {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-}
-.ai-status-text {
-  font-size: 13px;
-  color: #e6a23c;
-  animation: pulse 1.5s infinite;
-}
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 .stats-row {
@@ -549,7 +475,7 @@ onMounted(() => {
 
 .detail-columns {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -565,67 +491,14 @@ onMounted(() => {
   height: 350px;
 }
 
-.analysis-card {
-  overflow: auto;
-}
-
-.analysis-section {
-  margin-bottom: 16px;
-}
-
-.analysis-section h4 {
-  margin: 0 0 8px 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: #303133;
-}
-
-.analysis-section ul {
-  margin: 0;
-  padding-left: 20px;
-}
-
-.analysis-section li {
-  margin-bottom: 4px;
-  font-size: 13px;
-  color: #606266;
-  line-height: 1.6;
-}
-
-.recommended-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.rec-tag {
-  margin: 0;
-}
-
-.analysis-summary {
-  margin: 0;
-  font-size: 13px;
-  color: #606266;
-  line-height: 1.6;
-}
-
 .task-history-card {
   margin-bottom: 20px;
-}
-
-.task-timeline {
-  padding: 10px 0;
 }
 
 .card-header-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-.analysis-time {
-  font-size: 12px;
-  color: #909399;
-  font-weight: normal;
 }
 
 .skill-editor {
@@ -663,4 +536,6 @@ onMounted(() => {
   padding-top: 8px;
   border-top: 1px dashed #dcdfe6;
 }
+.detail-toolbar span { font-size:12px; color:var(--muted); }.options-error { color:#b83d43; font-size:13px; }.task-detail-link { color:var(--brand); text-decoration:underline; text-underline-offset:3px; }.detail-task-cards { display:none; list-style:none; padding:0; }.detail-task-cards li { border-bottom:1px solid var(--border); }.detail-task-cards a { display:flex; flex-direction:column; gap:8px; padding:12px 0; font-size:13px; }.detail-task-cards strong { font-size:14px; color:var(--brand); }.detail-task-cards span { color:var(--muted); }
+@media (max-width:760px) { .stats-row { grid-template-columns:repeat(2,minmax(0,1fr)); }.task-stats-card { grid-column:1/-1; }.profile-header { gap:12px; }.profile-info { min-width:0; }.profile-name { font-size:20px; overflow-wrap:anywhere; }.profile-meta,.skill-add-row,.card-header-row { flex-wrap:wrap; gap:8px; }.skill-add-row .el-select { flex-basis:100% !important; }.detail-task-table { display:none; }.detail-task-cards { display:block; }.radar-chart { height:280px; }.skill-item { flex-wrap:wrap; } }
 </style>

@@ -32,7 +32,20 @@ Thumbs.db
 # Database
 *.db
 *.sqlite3
+backups/
+output/
 
 # Logs
 *.log
 npm-debug.log*
+
+# DSH generated artifacts and isolated local profile
+plugins/packages/*/lib/
+plugins/packages/.protocol-reflection/
+plugins/tsconfig.reflection.json
+plugins/.dsh-home/
+*.tsbuildinfo
+*.tgz
+
+# Local exported chat history
+claude_conversations.md

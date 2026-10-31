@@ -122,7 +122,7 @@
 - `task_data_skill_id`, `task_id`, `actor_id`
 - `status`: `success`, `failed`
 - `request_json`, `response_json`
-- `metrics_json`, `ai_analysis_json`
+- `metrics_json`；历史 `ai_analysis_json` 列保留但新执行不调用模型，API 不再暴露该列
 - `suggested_progress_pct`, `suggested_note`, `error_message`, `created_at`
 
 说明：
@@ -134,7 +134,7 @@
 保存系统级 JSON 配置。
 
 当前键：
-- `ai_config`：AI 服务地址、模型、API Key、温度、最大 token，以及自定义 prompt。
+- 历史 `ai_config` 数据保留以避免升级擦除，运行时不读取、不提供管理接口；模型配置改由 DSH 管理。
 - `role_permissions`：内置角色覆盖权限和自定义角色权限。
 
 说明：
@@ -153,11 +153,15 @@
 - `REPORT_TIMEZONE`：默认 `Asia/Shanghai`，用于日报 07:00 和周报周五 12:30 的自动生成判断。
 
 报告内容来源：
-- 日报：后端每天 07:00 自动生成并缓存；手动刷新时优先调用 AI，结果写入 `system_settings` 的报告快照。
-- 周报：后端每周五 12:30 自动生成并缓存；手动刷新时优先调用 AI 分析；项目进展情况表由系统生成，覆盖所有未归档项目。
+- 日报：后端每天 07:00 按确定性规则生成并缓存，手动刷新使用同一规则。
+- 周报：后端每周五 12:30 按确定性规则生成并缓存，项目进展情况表覆盖所有未归档项目。
 - 页面打开和日报/周报切换只读取缓存；点击“刷新”才重新生成。
 
-## AI 上下文
+## DSH 草稿
+
+`dsh_drafts` 保存作者、严格业务 payload、SHA-256 hash、前后值预览、状态、草稿过期时间、确认凭据 hash、批准过期时间和幂等结果。该表不保存模型密钥、登录 Token 或 Agent 会话状态。迁移版本为 `20261005_02`。
+
+## DSH 上下文
 
 以下信息会进入 AI 分析上下文：
 - `users.bio`

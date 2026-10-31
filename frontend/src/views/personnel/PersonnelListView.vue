@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { useSessionStorage, watchDebounced } from '@vueuse/core'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
@@ -16,10 +17,14 @@ const canEditProfile = computed(() => auth.can('personnel.edit'))
 const canDeactivate = computed(() => auth.can('personnel.deactivate'))
 const canManageRoles = computed(() => auth.can('system.role_manage'))
 
-const currentPage = ref(1)
-
-const searchText = ref('')
-const filterDept = ref('')
+const listState = useSessionStorage(`teampilot.personnelList:${auth.user?.id || 'anonymous'}`, { page: 1, pageSize: 20, search: '', department: '', scroll: 0 })
+if (!Number.isInteger(listState.value.page) || listState.value.page < 1) listState.value.page = 1
+if (![20, 50, 100].includes(listState.value.pageSize)) listState.value.pageSize = 20
+const currentPage = computed({ get: () => listState.value.page, set: value => { listState.value.page = value } })
+const pageSize = computed({ get: () => listState.value.pageSize, set: value => { listState.value.pageSize = value; currentPage.value = 1 } })
+const searchText = ref(listState.value.search)
+const filterDept = computed({ get: () => listState.value.department, set: value => { listState.value.department = value || ''; currentPage.value = 1 } })
+watchDebounced(searchText, () => handleSearch(), { debounce: 350, maxWait: 1200 })
 
 // Add user dialog
 const addDialogVisible = ref(false)
@@ -43,8 +48,8 @@ type PersonnelOverviewItem = {
 
 const queryParams = computed(() => ({
   page: currentPage.value,
-  pageSize: 100,
-  search: searchText.value.trim(),
+  pageSize: pageSize.value,
+  search: listState.value.search,
   department: filterDept.value,
 }))
 
@@ -110,19 +115,27 @@ const userTaskCountMap = computed<Record<string, number>>(() => Object.fromEntri
 ))
 const initialLoading = computed(() => usersQuery.isLoading.value && !users.value.length)
 const isRefreshing = computed(() => usersQuery.isFetching.value || overviewQuery.isFetching.value)
+const overviewReady = computed(() => Boolean(overviewQuery.data.value) && !overviewQuery.isPlaceholderData.value)
+let restoredPosition = false
+watch(() => usersQuery.data.value, async data => {
+  if (!data || usersQuery.isPlaceholderData.value || restoredPosition) return
+  restoredPosition = true
+  await nextTick()
+  document.querySelector('.app-content')?.scrollTo({ top: listState.value.scroll })
+}, { immediate: true, flush: 'post' })
 const listError = computed(() => usersQuery.error.value as any)
 const overviewError = computed(() => overviewQuery.error.value as any)
 const dataUpdatedLabel = computed(() => {
   const updatedAt = Math.max(usersQuery.dataUpdatedAt.value || 0, overviewQuery.dataUpdatedAt.value || 0)
-  return updatedAt ? new Date(updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''
+  return updatedAt ? new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : ''
 })
 
 async function refreshPersonnel() {
   await queryClient.invalidateQueries({ queryKey: ['personnel'] })
 }
 
-function handleSearch() { currentPage.value = 1; refreshPersonnel() }
-function handleDeptFilter() { currentPage.value = 1; refreshPersonnel() }
+function handleSearch() { currentPage.value = 1; listState.value.search = searchText.value.trim() }
+function handleDeptFilter() { currentPage.value = 1 }
 
 // Group users by department
 const groupedUsers = computed(() => {
@@ -141,9 +154,11 @@ const groupedUsers = computed(() => {
   return sorted
 })
 
-function navigateToDetail(id: string) { router.push('/personnel/' + id) }
+function rememberPosition() { listState.value.scroll = document.querySelector('.app-content')?.scrollTop || 0 }
+function navigateToDetail(id: string) { rememberPosition(); router.push('/personnel/' + id) }
 
 async function handleAdd() {
+  if (adding.value) return
   if (!addForm.value.username.trim() || !addForm.value.full_name.trim()) {
     ElMessage.warning('请填写用户名和姓名'); return
   }
@@ -172,6 +187,7 @@ function openEditDialog(user: User) {
 }
 
 async function handleSaveEdit() {
+  if (savingEdit.value) return
   if (!editUser.value) return
   if (!editForm.value.full_name.trim()) {
     ElMessage.warning('请填写姓名'); return
@@ -196,16 +212,19 @@ async function handleSaveEdit() {
 
 async function handleDeactivate(user: User) {
   try {
-    await ElMessageBox.confirm(`删除/停用 ${user.full_name}？该用户将无法登录，历史数据会保留。`, '确认删除', { type: 'warning' })
+    await ElMessageBox.confirm(`停用 ${user.full_name}？该用户将无法登录，历史数据会保留。`, '确认停用', { type: 'warning' })
     await http.delete('/users/' + user.id)
-    ElMessage.success('已删除/停用')
+    ElMessage.success('人员已停用')
     await refreshPersonnel()
-  } catch {}
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.response?.data?.detail || '停用失败，请重试')
+  }
 }
 
 onMounted(async () => {
   if (canManageRoles.value) await loadRoles()
 })
+onBeforeUnmount(rememberPosition)
 </script>
 
 <template>
@@ -214,10 +233,10 @@ onMounted(async () => {
     <div class="pl-hd">
       <h2>人员管理</h2>
       <div class="pl-actions">
-        <el-input v-model="searchText" placeholder="搜索姓名/用户名" clearable style="width:200px" size="default" @clear="handleSearch" @keyup.enter="handleSearch">
+        <el-input v-model="searchText" placeholder="搜索姓名/用户名" clearable class="personnel-search" aria-label="搜索姓名或用户名" size="default" @clear="handleSearch" @keyup.enter="handleSearch">
           <template #prefix><span style="color:#909399">搜</span></template>
         </el-input>
-        <el-select v-model="filterDept" placeholder="全部分组" clearable style="width:140px" @change="handleDeptFilter">
+        <el-select v-model="filterDept" placeholder="全部分组" clearable class="personnel-department" aria-label="人员分组" @change="handleDeptFilter">
           <el-option v-for="d in departments" :key="d" :label="d" :value="d" />
         </el-select>
         <el-button :loading="isRefreshing" @click="refreshPersonnel">刷新</el-button>
@@ -226,8 +245,10 @@ onMounted(async () => {
     </div>
 
     <div class="data-status">
+      <span v-if="usersQuery.data.value">共 {{ total }} 人 · 第 {{ currentPage }} 页 · 分组数量为当前页人数</span>
       <span v-if="dataUpdatedLabel">上次更新 {{ dataUpdatedLabel }}</span>
-      <span v-if="isRefreshing">正在后台刷新</span>
+      <span v-if="isRefreshing">正在后台刷新，当前显示上次结果</span>
+      <span v-if="listError && users.length" class="refresh-error">刷新失败，已保留上次人员列表</span>
       <span v-if="overviewError && users.length">概览数据暂不可用，已保留人员列表</span>
     </div>
     <el-alert
@@ -237,7 +258,7 @@ onMounted(async () => {
       show-icon
       :title="listError?.response?.data?.detail || listError?.message || '人员列表加载失败'"
       style="margin-bottom:12px"
-    />
+    ><el-button link @click="refreshPersonnel">重试</el-button></el-alert>
 
     <!-- Grouped Table -->
     <div v-loading="initialLoading">
@@ -246,13 +267,10 @@ onMounted(async () => {
           <span class="dept-name">{{ group.dept }}</span>
           <el-badge :value="group.members.length" type="info" />
         </div>
-        <el-table :data="group.members" size="small" style="width:100%">
+        <el-table class="personnel-table" :data="group.members" size="small" style="width:100%">
           <el-table-column label="姓名" min-width="160">
             <template #default="{ row }">
-              <div class="u-cell" @click="navigateToDetail(row.id)">
-                <el-avatar :size="30">{{ row.full_name?.charAt(0) }}</el-avatar>
-                <span class="u-name">{{ row.full_name }}</span>
-              </div>
+              <button v-if="auth.can('personnel.view_detail') || row.id === auth.user?.id" type="button" class="u-cell" @click="navigateToDetail(row.id)"><el-avatar :size="30">{{ row.full_name?.charAt(0) }}</el-avatar><span class="u-name">{{ row.full_name }}</span></button><span v-else>{{ row.full_name }}</span>
             </template>
           </el-table-column>
           <el-table-column label="角色" width="110">
@@ -265,31 +283,34 @@ onMounted(async () => {
               <div class="sk-cell">
                 <el-tag v-for="s in (userSkillsMap[row.id] || []).slice(0, 4)" :key="s.skill_id" size="small" type="success" class="sk-tag">{{ s.skill_name }}</el-tag>
                 <el-tag v-if="(userSkillsMap[row.id] || []).length > 4" size="small" type="info">+{{ (userSkillsMap[row.id] || []).length - 4 }}</el-tag>
-                <span v-if="!(userSkillsMap[row.id] || []).length" class="no-sk">-</span>
+                <span v-if="overviewError || !overviewReady" class="no-sk">{{ overviewError ? '读取失败' : '读取中…' }}</span><span v-else-if="!(userSkillsMap[row.id] || []).length" class="no-sk">未填写</span>
               </div>
             </template>
           </el-table-column>
           <el-table-column label="任务" width="60" align="center">
-            <template #default="{ row }">{{ userTaskCountMap[row.id] ?? '-' }}</template>
+            <template #default="{ row }">{{ overviewError || !overviewReady ? '—' : (userTaskCountMap[row.id] ?? '—') }}</template>
           </el-table-column>
           <el-table-column label="操作" width="180" align="center">
             <template #default="{ row }">
-              <el-button type="primary" link size="small" @click="navigateToDetail(row.id)">详情</el-button>
+              <el-button v-if="auth.can('personnel.view_detail') || row.id === auth.user?.id" type="primary" link size="small" @click="navigateToDetail(row.id)">详情</el-button>
               <el-button v-if="canEditProfile || canManageRoles" type="primary" link size="small" @click="openEditDialog(row)">编辑</el-button>
-              <el-button v-if="canDeactivate && row.id !== auth.user?.id" type="danger" link size="small" @click="handleDeactivate(row)">删除</el-button>
+              <el-button v-if="canDeactivate && row.id !== auth.user?.id" type="danger" link size="small" @click="handleDeactivate(row)">停用</el-button>
             </template>
           </el-table-column>
         </el-table>
+        <ul class="personnel-cards"><li v-for="person in group.members" :key="person.id"><div class="personnel-card-header"><button v-if="auth.can('personnel.view_detail') || person.id === auth.user?.id" type="button" class="u-cell" @click="navigateToDetail(person.id)"><el-avatar :size="30">{{ person.full_name?.charAt(0) }}</el-avatar><span class="u-name">{{ person.full_name }}</span></button><strong v-else>{{ person.full_name }}</strong><el-tag :type="(roleTagType[person.role] as any) || 'info'" size="small">{{ roleLabel[person.role] || person.role }}</el-tag></div><div class="personnel-card-skills"><el-tag v-for="skill in (userSkillsMap[person.id] || []).slice(0, 4)" :key="skill.skill_id" size="small" type="success">{{ skill.skill_name }}</el-tag><span v-if="overviewError">技能与任务概览暂不可用</span><span v-else-if="!overviewReady">正在读取技能与任务…</span><span v-else-if="!(userSkillsMap[person.id] || []).length">未填写技能</span></div><div class="personnel-card-footer"><span>未完成任务 {{ overviewError || !overviewReady ? '—' : userTaskCountMap[person.id] }}</span><div><el-button v-if="auth.can('personnel.view_detail') || person.id === auth.user?.id" type="primary" link @click="navigateToDetail(person.id)">详情</el-button><el-button v-if="canEditProfile || canManageRoles" type="primary" link @click="openEditDialog(person)">编辑</el-button><el-button v-if="canDeactivate && person.id !== auth.user?.id" type="danger" link @click="handleDeactivate(person)">停用</el-button></div></div></li></ul>
       </div>
-      <el-empty v-if="!groupedUsers.length && !initialLoading && !listError" description="暂无人员" />
+      <el-empty v-if="!groupedUsers.length && !initialLoading && !listError" :description="listState.search || filterDept ? '没有符合筛选条件的人员' : '暂无人员'" />
     </div>
+
+    <el-pagination v-if="total > 0" v-model:current-page="currentPage" v-model:page-size="pageSize" :page-sizes="[20, 50, 100]" :total="total" :disabled="isRefreshing" layout="total, sizes, prev, pager, next" class="personnel-pagination" />
 
     <!-- Add User Dialog -->
     <el-dialog v-model="addDialogVisible" title="添加人员" width="480px">
       <el-form label-width="80px">
         <el-form-item label="用户名"><el-input v-model="addForm.username" placeholder="登录用户名" /></el-form-item>
         <el-form-item label="姓名"><el-input v-model="addForm.full_name" placeholder="显示名称" /></el-form-item>
-        <el-form-item label="初始密码"><el-input v-model="addForm.password" placeholder="默认 123456" /></el-form-item>
+        <el-form-item label="初始密码"><el-input v-model="addForm.password" type="password" show-password autocomplete="new-password" placeholder="设置初始密码" /></el-form-item>
         <el-form-item label="分组">
           <el-select v-model="addForm.department" placeholder="选择或输入" filterable allow-create style="width:100%">
             <el-option v-for="d in departments" :key="d" :label="d" :value="d" />
@@ -334,18 +355,21 @@ onMounted(async () => {
 .pl { padding: 0; }
 .pl-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .pl-hd h2 { margin: 0; font-size: 20px; font-weight: 600; color: #303133; }
-.pl-actions { display: flex; gap: 8px; align-items: center; }
-.data-status { min-height: 20px; display: flex; align-items: center; gap: 12px; margin: -8px 0 10px; font-size: 12px; color: #909399; }
+.pl-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width:0; }
+.personnel-search { width:200px; }.personnel-department { width:140px; }
+.data-status { min-height: 20px; display: flex; flex-wrap:wrap; align-items: center; gap: 12px; margin: -8px 0 10px; font-size: 12px; color: #909399; }
 
 .dept-group { margin-bottom: 16px; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
 .dept-hd { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: #f5f7fa; border-bottom: 1px solid #ebeef5; font-weight: 600; font-size: 13px; color: #303133; }
 .dept-name { }
 
-.u-cell { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.u-cell { display: flex; align-items: center; gap: 8px; cursor: pointer; background:none; border:0; padding:4px 0; text-align:left; }
 .u-name { color: #409EFF; font-weight: 500; font-size: 13px; }
 .u-cell:hover .u-name { text-decoration: underline; }
 
 .sk-cell { display: flex; flex-wrap: wrap; gap: 3px; }
 .sk-tag { margin: 0; }
 .no-sk { color: #c0c4cc; font-size: 12px; }
+.personnel-cards { display:none; list-style:none; padding:0; }.personnel-cards li { padding:12px; border-bottom:1px solid var(--border); }.personnel-card-header,.personnel-card-footer { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }.personnel-card-skills { display:flex; flex-wrap:wrap; gap:5px; padding:8px 0; font-size:12px; color:var(--muted); }.personnel-card-footer { font-size:12px; color:var(--muted); }.personnel-pagination { justify-content:flex-end; margin:16px 0; }.refresh-error { color:#b83d43; }
+@media (max-width:760px) { .pl-hd { align-items:flex-start; }.pl-actions { width:100%; }.personnel-search { width:100%; }.personnel-department { flex:1; width:0; min-width:120px; }.personnel-table { display:none; }.personnel-cards { display:block; }.personnel-pagination { justify-content:flex-start; }.personnel-pagination :deep(.el-pagination__sizes) { flex-basis:100%; }.data-status { margin-top:0; font-size:12px; } }
 </style>

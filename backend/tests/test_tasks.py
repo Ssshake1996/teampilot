@@ -4,6 +4,59 @@ from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_task_sort_is_global_stable_and_keeps_missing_deadlines_last(client: AsyncClient, auth_headers):
+    project = await client.post('/api/v1/projects', json={'name': 'Global sorting'}, headers=auth_headers)
+    pid = project.json()['id']
+    created = []
+    for title, deadline in [('Late', '2030-06-03T00:00:00Z'), ('Missing', None),
+                            ('Early', '2030-06-01T00:00:00Z'), ('Tie', '2030-06-01T00:00:00Z')]:
+        response = await client.post(f'/api/v1/projects/{pid}/tasks',
+            json={'title': title, 'deadline': deadline}, headers=auth_headers)
+        assert response.status_code == 201
+        created.append(response.json())
+    async def read(page, order='asc'):
+        response = await client.get(f'/api/v1/projects/{pid}/tasks',
+            params={'page': page, 'page_size': 2, 'sort_by': 'deadline', 'sort_order': order}, headers=auth_headers)
+        assert response.status_code == 200
+        assert response.json()['total'] == 4
+        return response.json()['items']
+    ascending = await read(1) + await read(2)
+    expected_tie_ids = sorted([created[2]['id'], created[3]['id']])
+    assert [task['id'] for task in ascending[:2]] == expected_tie_ids
+    assert [task['title'] for task in ascending[2:]] == ['Late', 'Missing']
+    descending = await read(1, 'desc') + await read(2, 'desc')
+    assert descending[0]['title'] == 'Late'
+    assert [task['id'] for task in descending[1:3]] == expected_tie_ids
+    assert descending[-1]['title'] == 'Missing'
+
+
+@pytest.mark.asyncio
+async def test_task_progress_sort_uses_derived_parent_progress_before_paging(client: AsyncClient, auth_headers):
+    project = await client.post('/api/v1/projects', json={'name': 'Derived sorting'}, headers=auth_headers)
+    pid = project.json()['id']
+    parent = (await client.post(f'/api/v1/projects/{pid}/tasks', json={'title': 'Parent'}, headers=auth_headers)).json()
+    for title, progress in [('High child', 100), ('Low child', 20)]:
+        task = (await client.post(f"/api/v1/tasks/{parent['id']}/subtasks", json={'title': title}, headers=auth_headers)).json()
+        result = await client.post(f"/api/v1/tasks/{task['id']}/progress",
+            json={'progress_pct': progress, 'note': title}, headers=auth_headers)
+        assert result.status_code == 201
+    response = await client.get(f'/api/v1/projects/{pid}/tasks',
+        params={'page': 2, 'page_size': 1, 'sort_by': 'progress_pct', 'sort_order': 'asc'}, headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json()['total'] == 3
+    assert response.json()['items'][0]['id'] == parent['id']
+    assert response.json()['items'][0]['progress_pct'] == 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('params', [{'sort_by': 'title; DROP TABLE tasks'}, {'sort_order': 'random'}])
+async def test_task_sort_rejects_non_whitelisted_parameters(client: AsyncClient, auth_headers, params):
+    project = await client.post('/api/v1/projects', json={'name': 'Safe sorting'}, headers=auth_headers)
+    response = await client.get(f"/api/v1/projects/{project.json()['id']}/tasks", params=params, headers=auth_headers)
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_create_task(client: AsyncClient, auth_headers):
     """Test creating a task in a project."""
     # Create project first
@@ -184,12 +237,11 @@ async def test_complete_task_sets_completed_at(client: AsyncClient, auth_headers
     assert blocked.status_code == 400
 
     progress = await client.post(
-        "/api/v1/ai/progress-import/commit",
-        json={"updates": [{"task_id": tid, "progress_pct": 100, "note": "Ready for signoff"}]},
+        f"/api/v1/tasks/{tid}/progress",
+        json={"progress_pct": 100, "note": "Ready for signoff"},
         headers=auth_headers,
     )
-    assert progress.status_code == 200
-    assert progress.json()["count"] == 1
+    assert progress.status_code == 201
 
     res = await client.post(f"/api/v1/tasks/{tid}/signoff", headers=auth_headers)
     assert res.status_code == 200
@@ -250,17 +302,17 @@ async def test_get_progress_history(client: AsyncClient, auth_headers):
     tid = task.json()["id"]
 
     first = await client.post(
-        "/api/v1/ai/progress-import/commit",
-        json={"updates": [{"task_id": tid, "progress_pct": 30, "note": "Started"}]},
+        f"/api/v1/tasks/{tid}/progress",
+        json={"progress_pct": 30, "note": "Started"},
         headers=auth_headers,
     )
     second = await client.post(
-        "/api/v1/ai/progress-import/commit",
-        json={"updates": [{"task_id": tid, "progress_pct": 80, "note": "Almost done"}]},
+        f"/api/v1/tasks/{tid}/progress",
+        json={"progress_pct": 80, "note": "Almost done"},
         headers=auth_headers,
     )
-    assert first.status_code == 200
-    assert second.status_code == 200
+    assert first.status_code == 201
+    assert second.status_code == 201
 
     res = await client.get(f"/api/v1/tasks/{tid}/progress", headers=auth_headers)
     assert res.status_code == 200
@@ -346,8 +398,8 @@ async def test_deleted_task_cannot_accept_progress_import_updates(client: AsyncC
     assert delete_res.status_code == 200
 
     progress_res = await client.post(
-        "/api/v1/ai/progress-import/commit",
-        json={"updates": [{"task_id": tid, "progress_pct": 10, "note": "Should fail"}]},
+        f"/api/v1/tasks/{tid}/progress",
+        json={"progress_pct": 10, "note": "Should fail"},
         headers=auth_headers,
     )
     assert progress_res.status_code == 400

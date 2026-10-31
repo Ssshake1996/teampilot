@@ -42,21 +42,12 @@ PERMISSION_CATALOG = {
             ("personnel.view_detail", "查看人员详情"),
         ],
     },
-    "ai": {
-        "label": "AI 功能",
-        "items": [
-            ("ai.estimate", "AI 推荐/预估"),
-            ("ai.risk", "AI 项目分析"),
-            ("ai.capability", "AI 能力分析"),
-            ("ai.config", "AI 配置管理"),
-            ("ai.prompt", "AI Prompt 配置"),
-        ],
-    },
     "system": {
         "label": "系统设置",
         "items": [
             ("system.role_manage", "角色权限管理"),
             ("system.skill_manage", "技能标签管理"),
+            ("system.connector_manage", "数据连接器管理"),
         ],
     },
 }
@@ -69,11 +60,9 @@ DEFAULT_PERMISSIONS = {
         "task.set_deadline", "task.set_hours",
         "progress.submit", "progress.view",
         "personnel.edit", "personnel.edit_skills", "personnel.view_detail",
-        "ai.estimate", "ai.risk", "ai.capability",
     ],
     "member": [
         "progress.submit", "progress.view",
         "personnel.view_detail",
-        "ai.estimate",
     ],
 }

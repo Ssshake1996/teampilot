@@ -1,0 +1,16 @@
+{
+  "name": "teampilot-dsh-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/dsh-teampilot"],
+  "scripts": {"build": "npm run build -w dsh-teampilot", "test": "npm test -w dsh-teampilot", "dev": "node scripts/run-web.mjs"},
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-typert-generator": "0.2.0-rc.2",
+    "esbuild": "0.25.12",
+    "typescript": "6.0.3",
+    "@types/react": "^19.0.0",
+    "@types/node": "^24.0.0"
+  }
+}

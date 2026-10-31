@@ -10,8 +10,9 @@ from httpx import AsyncClient
 from app.config import settings
 from app.models.project import Project, ProjectStatus
 from app.models.system_setting import SystemSetting
+from app.models.task import Task
 from app.services import report_service
-from app.services.ai.project_automation import daily_brief
+from app.services.inspection_service import _project_snapshot, daily_brief
 
 
 class DummySMTP:
@@ -77,7 +78,7 @@ async def test_weekly_report_includes_all_active_projects(client: AsyncClient, a
 
 
 @pytest.mark.asyncio
-async def test_weekly_report_uses_ai_sections_without_changing_project_table(db_session, test_user):
+async def test_weekly_report_rules_preserve_project_table(db_session, test_user):
     user, _ = test_user
     db_session.add(Project(
         name="AI Weekly Report Project",
@@ -86,46 +87,49 @@ async def test_weekly_report_uses_ai_sections_without_changing_project_table(db_
     ))
     await db_session.commit()
 
-    class WeeklyLLM:
-        async def chat_json(self, messages, temperature=0.2, max_tokens=4096):
-            return {
-                "summary": "AI weekly summary",
-                "risky_projects": ["AI risk"],
-                "progress_fast_top3": ["Fast A"],
-                "progress_slow_top3": ["Slow B"],
-            }
-
-    data = await report_service.generate_weekly_report(db_session, WeeklyLLM())
-    assert data["source"] == "ai"
-    assert data["summary"] == "AI weekly summary"
-    assert data["risky_projects"] == ["AI risk"]
-    assert data["progress_fast_top3"] == ["Fast A"]
-    assert data["progress_slow_top3"] == ["Slow B"]
+    data = await report_service.generate_weekly_report(db_session)
+    assert data["source"] == "rules"
+    assert data["summary"]
+    assert isinstance(data["risky_projects"], list)
+    assert isinstance(data["progress_fast_top3"], list)
+    assert isinstance(data["progress_slow_top3"], list)
     assert data["project_progress_table"][0]["project_name"] == "AI Weekly Report Project"
     assert "members_without_updates" not in data
 
 
 @pytest.mark.asyncio
-async def test_daily_brief_normalizes_ai_report_schema(db_session, test_user):
-    class PartialLLM:
-        async def chat_json(self, messages, temperature=0.2, max_tokens=4096):
-            return {
-                "summary": "AI 巡检摘要",
-                "risky_projects": "项目 A 有风险",
-                "extra_key": "should be ignored",
-            }
-
-    data = await daily_brief(db_session, PartialLLM())
-    assert data == {
-        "summary": "AI 巡检摘要",
-        "risky_projects": ["项目 A 有风险"],
+async def test_daily_brief_rule_schema(db_session, test_user):
+    data = await daily_brief(db_session)
+    assert data["summary"]
+    assert {key: value for key, value in data.items() if key != "summary"} == {
+        "risky_projects": ["今天没有发现明显的项目级风险。"],
         "overdue_blocked_tasks": ["今天没有逾期或明显阻塞的任务。"],
         "progress_fast_top3": ["今天没有足够数据判断进展较快成员。"],
         "progress_slow_top3": ["今天没有足够数据判断进展较慢成员。"],
         "priority_tasks": ["今天没有需要额外优先处理的任务。"],
         "signoff_pending": ["今天没有达到 100% 但待会签的任务。"],
-        "source": "ai",
-        "source_label": "AI 生成",
+        "source": "rules",
+        "source_label": "系统规则巡检",
+    }
+
+
+@pytest.mark.asyncio
+async def test_rule_inspection_includes_tasks_beyond_previous_limit(db_session, test_user):
+    user, _ = test_user
+    project = Project(name="Large inspection project", owner_id=user.id, status=ProjectStatus.ACTIVE)
+    db_session.add(project)
+    await db_session.flush()
+    db_session.add_all([
+        Task(project_id=project.id, creator_id=user.id, title=f"Inspection task {index}")
+        for index in range(35)
+    ])
+    await db_session.commit()
+
+    snapshot = await _project_snapshot(db_session)
+    assert snapshot[0]["task_count"] == 35
+    assert len(snapshot[0]["tasks"]) == 35
+    assert {task["title"] for task in snapshot[0]["tasks"]} == {
+        f"Inspection task {index}" for index in range(35)
     }
 
 
@@ -152,9 +156,9 @@ async def test_report_refresh_and_snapshot(client: AsyncClient, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_report_refresh_returns_ai_timeout_detail(client: AsyncClient, auth_headers, db_session, monkeypatch):
+async def test_report_refresh_ignores_obsolete_model_config(client: AsyncClient, auth_headers, db_session, monkeypatch):
     db_session.add(SystemSetting(
-        key=report_service.AI_CONFIG_KEY,
+        key="ai_config",
         value_json={
             "api_base_url": "http://ai.example.test/v1",
             "api_key_encrypted": "test-key",
@@ -163,17 +167,11 @@ async def test_report_refresh_returns_ai_timeout_detail(client: AsyncClient, aut
     ))
     await db_session.commit()
 
-    class TimeoutLLM:
+    class ForbiddenModelClient:
         def __init__(self, *args, **kwargs):
-            pass
+            raise AssertionError("Report must not invoke a model client")
 
-        async def chat_json(self, messages, **kwargs):
-            raise httpx.ReadTimeout("AI read timed out")
-
-        async def close(self):
-            pass
-
-    monkeypatch.setattr(report_service, "LLMClient", TimeoutLLM)
+    monkeypatch.setattr(httpx, "AsyncClient", ForbiddenModelClient)
 
     res = await client.post(
         "/api/v1/reports/refresh",
@@ -181,12 +179,9 @@ async def test_report_refresh_returns_ai_timeout_detail(client: AsyncClient, aut
         headers=auth_headers,
     )
 
-    assert res.status_code == 504
-    detail = res.json()["detail"]
-    assert detail["message"] == "AI 生成巡检报告失败"
-    assert detail["status_code"] == 504
-    assert detail["error_type"] == "ReadTimeout"
-    assert "AI read timed out" in detail["backend_detail"]
+    assert res.status_code == 200
+    assert res.json()["report"]["source"] == "rules"
+    assert (await client.get("/api/v1/ai/config", headers=auth_headers)).status_code == 404
 
 
 def test_report_schedule_slots():

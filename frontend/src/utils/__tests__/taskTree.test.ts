@@ -3,6 +3,9 @@ import {
   flattenTaskTree,
   getVisibleTaskRows,
   hasTaskChildren,
+  childrenByParent,
+  taskMap,
+  scopePeerForRow,
   moveVisibleRow,
   normalizeTaskTreeForScope,
   orderedSiblingsForTask,
@@ -71,5 +74,37 @@ describe('taskTree helpers', () => {
     const normalized = normalizeTaskTreeForScope(tree, moved!, siblings)
 
     expect(ids(normalized)).toEqual(['a', 'a2', 'a1', 'b', 'b1', 'c'])
+  })
+
+  it('reuses indices to find peers across multiple nested levels', () => {
+    const nested = flattenTaskTree([
+      { id: 'a', children: [{ id: 'a1', children: [{ id: 'a11' }] }] },
+      { id: 'b', children: [{ id: 'b1', children: [{ id: 'b11' }] }] },
+    ])
+    const byId = taskMap(nested)
+    const byParent = childrenByParent(nested)
+    expect(nested.every((row) => !('children' in row))).toBe(true)
+    expect(byParent.get('b1')?.[0]).toBe(byId.get('b11'))
+    expect(scopePeerForRow(nested, byId.get('b11'), byId.get('a'), byId)).toBe(byId.get('b'))
+    expect(scopePeerForRow(nested, byId.get('b11'), byId.get('a1'), byId)).toBeNull()
+    const moved = byId.get('b')!
+    const reordered = moveVisibleRow(getVisibleTaskRows(nested, new Set(['a', 'b'])), 1, 0)
+    expect(ids(normalizeTaskTreeForScope(nested, moved, orderedSiblingsForTask(reordered, moved)))).toEqual([
+      'b', 'b1', 'b11', 'a', 'a1', 'a11',
+    ])
+  })
+
+  it('preserves every task when sorting a large task tree', () => {
+    const largeTree = flattenTaskTree(Array.from({ length: 100 }, (_, i) => ({
+      id: `parent-${i}`,
+      children: Array.from({ length: 49 }, (_, j) => ({ id: `child-${i}-${j}` })),
+    })))
+    const visible = getVisibleTaskRows(largeTree, new Set(largeTree.filter((row) => !row._parentId).map((row) => row.id)))
+    const moved = visible[99]!
+    const reordered = moveVisibleRow(visible, 99, 0)
+    const normalized = normalizeTaskTreeForScope(largeTree, moved, orderedSiblingsForTask(reordered, moved))
+    expect(normalized).toHaveLength(5000)
+    expect(new Set(ids(normalized))).toEqual(new Set(ids(largeTree)))
+    expect(ids(normalized.slice(0, 3))).toEqual(['parent-99', 'child-99-0', 'child-99-1'])
   })
 })

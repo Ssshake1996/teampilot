@@ -26,7 +26,7 @@ export const dataSkillsApi = {
   confirmTaskSkill(taskId: string, skillId: string) {
     return http.post<TaskDataSkill>(`/tasks/${taskId}/data-skills/${skillId}/confirm`)
   },
-  runTaskSkill(taskId: string, skillId: string, data: { params?: Record<string, any>; use_ai?: boolean }) {
+  runTaskSkill(taskId: string, skillId: string, data: { params?: Record<string, any> }) {
     return http.post<SkillRun>(`/tasks/${taskId}/data-skills/${skillId}/run`, data, { timeout: 180000 })
   },
   listRuns(taskId: string) {

@@ -37,7 +37,7 @@ What `deploy.sh` does:
 
 - Installs Docker and Docker Compose when possible
 - Creates `deploy.env` from the example when missing
-- Generates `JWT_SECRET_KEY`, `AI_ENCRYPTION_KEY`, and `ADMIN_PASSWORD` when placeholders are still present
+- Generates `JWT_SECRET_KEY` and `ADMIN_PASSWORD` when placeholders are still present
 - Builds and starts the Compose stack
 - Waits for the backend health check
 
@@ -55,14 +55,15 @@ What `deploy.sh` does:
 Current repository status:
 
 - The project is experimental
-- The repository does not provide a full Alembic revision workflow
-- The backend no longer includes startup-time compatibility patches for legacy columns or legacy task states
+- Database changes are tracked by Alembic, beginning with revision `20261005_01`
+- `AUTO_MIGRATE=true` runs the same upgrade at startup; production can run it separately with writes stopped
 
 That means:
 
-- On clean deployment, tables are created from the current models
-- On breaking schema changes, preferred practice is backup + rebuild or backup + explicit migration script
-- Do not rely on application startup to reshape old production tables
+- Back up the configured database before upgrading; `backend/scripts/backup_database.py` supports local backups
+- Run `python -m alembic upgrade head` from `backend` before starting the upgraded application
+- Keep a single backend worker while WebSocket state remains in process; see `MAINTENANCE.md` for migration limits and recovery
+- Restore a verified backup to roll back database changes; do not rebuild or clear an existing database as part of an ordinary update
 
 ## Server migration
 

@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Warning } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
+import { useMediaQuery } from '@vueuse/core'
 import { projectsApi } from '@/api/projects'
 import { tasksApi } from '@/api/tasks'
-import { aiApi } from '@/api/ai'
+
 import { usersApi } from '@/api/users'
+import { fetchAllPages } from '@/utils/pagination'
+import { taskViewKey, safeTaskReturnPath } from '@/utils/taskViewState'
+import { useProjectUpdates } from '@/composables/useProjectUpdates'
 import TaskDataSkillPanel from '@/components/tasks/TaskDataSkillPanel.vue'
+import TaskAuditTrail from '@/components/tasks/TaskAuditTrail.vue'
 import { useTaskStore } from '@/stores/task'
 import { useAuthStore } from '@/stores/auth'
 import { TaskStatus, TaskPriority, TaskStatusLabel, TaskPriorityLabel, PriorityColor } from '@/types/enums'
@@ -16,18 +21,35 @@ import type { Project, Task, TaskProgress, User } from '@/types/models'
 import type { FormInstance } from 'element-plus'
 
 const route = useRoute()
+const router = useRouter()
 const projectId = route.params.id as string
 const taskStore = useTaskStore()
 const auth = useAuthStore()
 
 const loading = ref(false)
+const boardError = ref('')
+const routeTaskError = ref('')
+const boardUpdatedAt = ref('')
+const boardElement = ref<HTMLElement>()
+const boardStateKey = taskViewKey(auth.user?.id || 'anonymous', projectId, 'board')
+let savedBoard: { activeColumn?: TaskStatus; scrollTop?: number } = {}
+try { savedBoard = JSON.parse(sessionStorage.getItem(boardStateKey) || '{}') || {} } catch { /* Ignore damaged local state. */ }
+function saveBoardView() {
+  try { sessionStorage.setItem(boardStateKey, JSON.stringify({ activeColumn: activeColumn.value,
+    scrollTop: boardElement.value?.closest('.app-content')?.scrollTop || 0 })) } catch { /* Optional continuity. */ }
+}
+onBeforeUnmount(saveBoardView)
+const sourcePath = computed(() => safeTaskReturnPath(route.query.from))
+function returnToSource() { router.push(sourcePath.value || `/projects/${projectId}/tasks`) }
+function goToList() { router.push(`/projects/${projectId}/tasks`) }
 const project = ref<Project | null>(null)
 const users = ref<User[]>([])
+const mobileBoard = useMediaQuery('(max-width: 760px)')
+const activeColumn = ref(Object.values(TaskStatus).includes(savedBoard.activeColumn as TaskStatus) ? savedBoard.activeColumn! : TaskStatus.IN_PROGRESS)
+const columnLimit = ref<Record<string, number>>({ not_started: 100, in_progress: 100, done: 100 })
 const canCreateTask = computed(() => auth.can('task.create'))
 const canSignoffTask = computed(() => auth.can('task.signoff'))
 const canSubmitProgress = computed(() => auth.can('progress.submit'))
-const canUseAiRisk = computed(() => auth.can('ai.risk'))
-const canUseAiEstimate = computed(() => auth.can('ai.estimate'))
 
 // Kanban columns config
 const columns = [
@@ -51,13 +73,14 @@ const columnTasks = ref<Record<string, Task[]>>({
 
 function syncColumnsFromStore() {
   for (const col of columns) {
-    columnTasks.value[col.status] = taskStore.tasksByStatus(col.status)
+    columnTasks.value[col.status] = taskStore.tasksByStatus(col.status).slice(0, columnLimit.value[col.status])
   }
 }
 
 function columnCount(status: TaskStatus): number {
-  return columnTasks.value[status]?.length ?? 0
+  return taskStore.tasksByStatus(status).length
 }
+function showMore(status: TaskStatus) { columnLimit.value[status] = (columnLimit.value[status] || 100) + 100; syncColumnsFromStore() }
 
 // Create Task Dialog
 const createDialogVisible = ref(false)
@@ -71,10 +94,7 @@ const createForm = ref({
   estimated_hours: null as number | null,
   deadline: '',
 })
-const createAiEstimating = ref(false)
-const createAiStatusMsg = ref('')
-const createAiEstimateInfo = ref<any>(null)
-const createAiRecommendations = ref<any[]>([])
+
 
 const createRules = {
   title: [{ required: true, message: '请输入任务标题', trigger: 'blur' }],
@@ -89,47 +109,10 @@ function openCreateDialog() {
     estimated_hours: null,
     deadline: '',
   }
-  createAiStatusMsg.value = ''
-  createAiEstimateInfo.value = null
-  createAiRecommendations.value = []
+
   createDialogVisible.value = true
 }
 
-async function handleCreateAiEstimate() {
-  if (!createForm.value.title.trim()) {
-    ElMessage.warning('请先填写任务标题')
-    return
-  }
-  createAiEstimating.value = true
-  createAiStatusMsg.value = '正在启动 AI...'
-  createAiEstimateInfo.value = null
-  createAiRecommendations.value = []
-  try {
-    const data = await aiApi.estimateTask(
-      projectId,
-      createForm.value.title,
-      '',
-      createForm.value.description,
-      (msg: string) => { createAiStatusMsg.value = msg },
-    )
-    createAiEstimateInfo.value = data
-    createAiRecommendations.value = data.recommended_assignees || []
-    if (data.estimated_hours != null && createForm.value.estimated_hours == null) {
-      createForm.value.estimated_hours = data.estimated_hours
-    }
-    createAiStatusMsg.value = ''
-  } catch {
-    createAiStatusMsg.value = ''
-    ElMessage.error('AI 评估失败')
-  } finally {
-    createAiEstimating.value = false
-  }
-}
-
-function applyCreateRecommendation(rec: any) {
-  createForm.value.assignee_ids = rec.user_id ? [rec.user_id] : []
-  ElMessage.success('已采纳推荐人选')
-}
 
 async function handleCreateTask() {
   if (!createFormRef.value) return
@@ -160,9 +143,12 @@ const drawerVisible = ref(false)
 const selectedTask = ref<Task | null>(null)
 const progressHistory = ref<TaskProgress[]>([])
 const loadingProgress = ref(false)
-const signoffAssistLoading = ref(false)
-const signoffAssistStatus = ref('')
-const signoffAssistResult = ref<any>(null)
+const progressError = ref('')
+const progressUpdatedAt = ref('')
+const submittingProgress = ref(false)
+let progressRequest = 0
+let progressTaskId = ''
+
 const progressForm = ref({
   progress_pct: 0,
   note: '',
@@ -219,10 +205,13 @@ function canSignoff(task: Task): boolean {
   return canSignoffTask.value && needsSignoff(task)
 }
 
-async function openTaskDrawer(task: Task) {
+async function openTaskDrawer(task: Task, updateRoute = true) {
   selectedTask.value = task
-  signoffAssistStatus.value = ''
-  signoffAssistResult.value = null
+  showSubtaskForm.value = false
+  activeColumn.value = task.status
+  routeTaskError.value = ''
+  if (updateRoute && route.query.taskId !== task.id) void router.replace({ query: { ...route.query, taskId: task.id } })
+
   progressForm.value = {
     progress_pct: task.progress_pct || 0,
     note: '',
@@ -236,19 +225,26 @@ async function openTaskDrawer(task: Task) {
 }
 
 async function loadProgressHistory(taskId: string) {
+  const request = ++progressRequest
+  if (progressTaskId !== taskId) { progressHistory.value = []; progressUpdatedAt.value = '' }
+  progressTaskId = taskId
+  progressError.value = ''
+  if (!auth.can('progress.view')) { loadingProgress.value = false; progressError.value = '当前账号没有查看进展记录的权限。'; return }
   loadingProgress.value = true
   try {
     const res = await tasksApi.getProgress(taskId)
+    if (request !== progressRequest || selectedTask.value?.id !== taskId) return
     progressHistory.value = res.data
+    progressUpdatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   } catch {
-    progressHistory.value = []
+    if (request === progressRequest && selectedTask.value?.id === taskId) progressError.value = '进展记录加载失败，请重试。'
   } finally {
-    loadingProgress.value = false
+    if (request === progressRequest) loadingProgress.value = false
   }
 }
 
 async function handleLogProgress() {
-  if (!selectedTask.value) return
+  if (submittingProgress.value || !selectedTask.value) return
   if (selectedTask.value.is_deleted) {
     ElMessage.warning('已删除任务不支持反馈进展')
     return
@@ -257,30 +253,31 @@ async function handleLogProgress() {
     ElMessage.warning('请填写进展说明')
     return
   }
+  const taskId = selectedTask.value.id
+  submittingProgress.value = true
   try {
     const data: { progress_pct: number; note?: string; hours_spent?: number } = {
       progress_pct: progressForm.value.progress_pct,
     }
     if (progressForm.value.note) data.note = progressForm.value.note
     if (progressForm.value.hours_spent !== null) data.hours_spent = progressForm.value.hours_spent
-    await tasksApi.logProgress(selectedTask.value.id, data)
+    await tasksApi.logProgress(taskId, data)
     ElMessage.success('进度已更新')
-    taskStore.updateTaskLocally(selectedTask.value.id, { progress_pct: progressForm.value.progress_pct })
-    selectedTask.value = { ...selectedTask.value, progress_pct: progressForm.value.progress_pct }
-    syncColumnsFromStore()
-    progressForm.value.note = ''
-    progressForm.value.hours_spent = null
-    await loadProgressHistory(selectedTask.value.id)
+    await loadTasks()
+    if (selectedTask.value?.id === taskId) {
+      progressForm.value.note = ''
+      progressForm.value.hours_spent = null
+      progressForm.value.progress_pct = selectedTask.value.progress_pct
+      await loadProgressHistory(taskId)
+    }
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.detail || '更新进度失败')
-  }
+  } finally { submittingProgress.value = false }
 }
 
 async function handleDataSkillProgressAdopted(entry: TaskProgress) {
   if (!selectedTask.value) return
-  taskStore.updateTaskLocally(selectedTask.value.id, { progress_pct: entry.progress_pct })
-  selectedTask.value = { ...selectedTask.value, progress_pct: entry.progress_pct }
-  syncColumnsFromStore()
+  await loadTasks()
   await loadProgressHistory(selectedTask.value.id)
 }
 
@@ -296,32 +293,16 @@ async function handleSignoffTask(task: Task) {
   }
 }
 
-async function handleSignoffAssist() {
-  if (!selectedTask.value) return
-  signoffAssistLoading.value = true
-  signoffAssistStatus.value = '正在生成会签建议...'
-  signoffAssistResult.value = null
-  try {
-    signoffAssistResult.value = await aiApi.signoffAssist(
-      selectedTask.value.id,
-      (msg: string) => { signoffAssistStatus.value = msg },
-    )
-    signoffAssistStatus.value = ''
-  } catch {
-    signoffAssistStatus.value = ''
-    ElMessage.error('会签建议生成失败')
-  } finally {
-    signoffAssistLoading.value = false
-  }
-}
-
 async function loadTasks() {
   loading.value = true
+  boardError.value = ''
   try {
-    await taskStore.fetchTasks(projectId, { page_size: 500 })
+    await taskStore.fetchTasks(projectId, { page_size: 500 }, true)
     syncColumnsFromStore()
+    boardUpdatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    if (selectedTask.value) selectedTask.value = taskStore.tasks.find(task => task.id === selectedTask.value?.id) || null
   } catch {
-    ElMessage.error('加载任务失败')
+    boardError.value = '任务加载失败，请重试。'
   } finally {
     loading.value = false
   }
@@ -329,8 +310,7 @@ async function loadTasks() {
 
 async function fetchUsers() {
   try {
-    const res = await usersApi.list(1, 100)
-    users.value = res.data.items
+    users.value = await fetchAllPages(page => usersApi.list(page, 500))
   } catch {
     // silent
   }
@@ -354,10 +334,16 @@ interface SubtaskItem {
   estimated_hours: number | null
   deadline: string | null
   status: TaskStatus
+  weight: number
+  progress_pct: number
+  is_deleted: boolean
 }
 
 const subtasks = ref<SubtaskItem[]>([])
 const loadingSubtasks = ref(false)
+const subtasksError = ref('')
+let subtasksRequest = 0
+let subtasksTaskId = ''
 const showSubtaskForm = ref(false)
 const creatingSubtask = ref(false)
 
@@ -369,16 +355,24 @@ const subtaskForm = ref({
 })
 
 async function loadSubtasks(taskId: string) {
+  const request = ++subtasksRequest
+  if (subtasksTaskId !== taskId) subtasks.value = []
+  subtasksTaskId = taskId
   loadingSubtasks.value = true
+  subtasksError.value = ''
   try {
     const res = await tasksApi.getSubtasks(taskId)
-    subtasks.value = res.data
+    if (request === subtasksRequest && selectedTask.value?.id === taskId) subtasks.value = res.data
   } catch {
-    subtasks.value = []
+    if (request === subtasksRequest && selectedTask.value?.id === taskId) subtasksError.value = '子任务加载失败，请重试。'
   } finally {
-    loadingSubtasks.value = false
+    if (request === subtasksRequest) loadingSubtasks.value = false
   }
 }
+
+const selectedChildren = computed(() => taskStore.tasks.filter(task => task.parent_task_id === selectedTask.value?.id && !task.is_deleted))
+const selectedTaskHasChildren = computed(() => selectedChildren.value.length > 0)
+const weightedProgressExplanation = computed(() => selectedChildren.value.map(task => `${task.title} ${task.progress_pct}% × 权重 ${Number(task.weight).toLocaleString('zh-CN', { maximumFractionDigits: 6 })}`).join(' + '))
 
 function openSubtaskForm() {
   subtaskForm.value = { title: '', assignee_ids: [], estimated_hours: null, deadline: '' }
@@ -413,83 +407,13 @@ async function handleCreateSubtask() {
   }
 }
 
-// AI Decompose
-interface AIDecomposeItem {
-  title: string
-  description: string
-  recommended_assignee: string | null
-  estimated_hours: number | null
-  reason: string
-  selected: boolean
-}
 
-const decomposeDialogVisible = ref(false)
-const decomposing = ref(false)
-const decomposeResults = ref<AIDecomposeItem[]>([])
-const adoptingSubtasks = ref(false)
 
-async function handleAIDecompose() {
-  if (!selectedTask.value) return
-  decomposing.value = true
-  decomposeDialogVisible.value = true
-  decomposeResults.value = []
-  try {
-    const res = await aiApi.decomposeTask(selectedTask.value.id)
-    const items = (res as any)?.subtasks || (res as any) || []
-    decomposeResults.value = (Array.isArray(items) ? items : []).map((item: any) => ({
-      title: item.title || '',
-      description: item.description || '',
-      recommended_assignee: item.recommended_assignee || null,
-      estimated_hours: item.estimated_hours ?? null,
-      reason: item.reason || '',
-      selected: true,
-    }))
-  } catch {
-    ElMessage.error('AI 分解任务失败，请稍后重试')
-    decomposeDialogVisible.value = false
-  } finally {
-    decomposing.value = false
-  }
-}
 
-const allDecomposeSelected = ref(true)
 
-function toggleSelectAllDecompose(val: boolean) {
-  allDecomposeSelected.value = val
-  decomposeResults.value.forEach(item => {
-    item.selected = val
-  })
-}
 
-function onDecomposeItemChange() {
-  allDecomposeSelected.value = decomposeResults.value.every(item => item.selected)
-}
 
-async function handleAdoptAll() {
-  if (!selectedTask.value) return
-  const selected = decomposeResults.value.filter(item => item.selected)
-  if (selected.length === 0) {
-    ElMessage.warning('请至少选择一个子任务')
-    return
-  }
-  adoptingSubtasks.value = true
-  try {
-    const payload: Partial<Task>[] = selected.map(item => {
-      const sub: Partial<Task> = { title: item.title }
-      if (item.description) sub.description = item.description
-      if (item.estimated_hours !== null) sub.estimated_hours = item.estimated_hours
-      return sub
-    })
-    await tasksApi.batchCreateSubtasks(selectedTask.value.id, payload)
-    ElMessage.success(`成功创建 ${selected.length} 个子任务`)
-    decomposeDialogVisible.value = false
-    await loadSubtasks(selectedTask.value.id)
-  } catch {
-    ElMessage.error('批量创建子任务失败')
-  } finally {
-    adoptingSubtasks.value = false
-  }
-}
+
 
 function subtaskStatusType(status: TaskStatus): string {
   const map: Record<string, string> = {
@@ -500,357 +424,72 @@ function subtaskStatusType(status: TaskStatus): string {
   return map[status] || 'info'
 }
 
-// ========== Feature 2: AI Risk Analysis ==========
 
-interface RiskItem {
-  severity: string
-  type: string
-  title: string
-  description: string
-  affected_tasks: string[]
-  affected_users: string[]
-  suggestion: string
-}
 
-interface RiskAnalysis {
-  overall_health: string
-  summary: string
-  risks: RiskItem[]
-  progress_summary?: {
-    overall_status?: string
-    key_points?: string[]
-    blockers?: string[]
-  }
-  priority_recommendations?: Array<{
-    urgency?: string
-    title: string
-    reason: string
-    affected_tasks?: string[]
-    affected_users?: string[]
-    suggestion?: string
-  }>
-}
 
-interface PriorityInsightItem {
-  id: string
-  title: string
-  reason: string
-  urgency: string
-  assigneeText: string
-  deadline: string | null
-  progressPct: number
-}
 
-const riskDrawerVisible = ref(false)
-const loadingRisk = ref(false)
-const riskAnalysis = ref<RiskAnalysis | null>(null)
 
-const projectOverview = computed(() => {
-  const tasks = taskStore.tasks.filter((task) => !task.is_deleted)
-  const total = tasks.length
-  const done = tasks.filter((task) => task.status === TaskStatus.DONE).length
-  const inProgress = tasks.filter((task) => task.status === TaskStatus.IN_PROGRESS).length
-  const notStarted = tasks.filter((task) => task.status === TaskStatus.NOT_STARTED).length
-  const overdue = tasks.filter((task) => task.status !== TaskStatus.DONE && !!task.deadline && new Date(task.deadline).getTime() < Date.now()).length
-  const signoffPending = tasks.filter((task) => needsSignoff(task)).length
-  const avgProgress = total
-    ? Math.round(tasks.reduce((sum, task) => sum + (task.progress_pct || 0), 0) / total)
-    : 0
-  const completionRate = total ? Math.round((done / total) * 100) : 0
 
-  return {
-    total,
-    done,
-    inProgress,
-    notStarted,
-    overdue,
-    signoffPending,
-    avgProgress,
-    completionRate,
-  }
-})
 
-const projectProgressNarrative = computed(() => {
-  const aiStatus = riskAnalysis.value?.progress_summary?.overall_status?.trim()
-  if (aiStatus) return aiStatus
 
-  const overview = projectOverview.value
-  if (!overview.total) return '当前项目还没有任务数据。'
 
-  return `当前共 ${overview.total} 项任务，已完成 ${overview.done} 项，进行中 ${overview.inProgress} 项，整体平均进度 ${overview.avgProgress}%，完成率 ${overview.completionRate}%。`
-})
 
-const progressHighlights = computed(() => {
-  const aiPoints = riskAnalysis.value?.progress_summary?.key_points?.filter(Boolean) || []
-  if (aiPoints.length) return aiPoints
 
-  const overview = projectOverview.value
-  const points: string[] = []
-  if (overview.inProgress) points.push(`${overview.inProgress} 项任务正在推进`)
-  if (overview.done) points.push(`${overview.done} 项任务已完成`)
-  if (overview.notStarted) points.push(`${overview.notStarted} 项任务尚未开始`)
-  if (overview.signoffPending) points.push(`${overview.signoffPending} 项任务待会签确认`)
 
-  return points.length ? points.slice(0, 4) : ['当前暂无可提炼的进展要点']
-})
 
-const progressBlockers = computed(() => {
-  const aiBlockers = riskAnalysis.value?.progress_summary?.blockers?.filter(Boolean) || []
-  if (aiBlockers.length) return aiBlockers
 
-  const overview = projectOverview.value
-  const blockers: string[] = []
-  if (overview.overdue) blockers.push(`${overview.overdue} 项任务已逾期，需要立即处理`)
-  if (overview.signoffPending) blockers.push(`${overview.signoffPending} 项任务达到 100% 但仍待会签`)
 
-  return blockers.length ? blockers.slice(0, 3) : ['当前没有明显阻塞项']
-})
 
-const aiPriorityRecommendations = computed(() => riskAnalysis.value?.priority_recommendations || [])
 
-function highestRiskLevel(levels: string[]): string {
-  if (levels.includes('high')) return 'high'
-  if (levels.includes('medium')) return 'medium'
-  return levels.includes('low') ? 'low' : 'low'
-}
-
-function urgencyLabel(level: string): string {
-  const map: Record<string, string> = {
-    high: '高优先',
-    medium: '中优先',
-    low: '常规关注',
-  }
-  return map[level] || level
-}
-
-function taskAssigneeText(task: Task): string {
-  return task.assignee_names?.join('、') || task.assignee_name || '未分配'
-}
-
-function buildPriorityInsights(tasks: Task[], risks: RiskItem[]): { actionItems: PriorityInsightItem[]; keyNodes: PriorityInsightItem[] } {
-  const activeTasks = tasks.filter((task) => !task.is_deleted && task.status !== TaskStatus.DONE)
-  const childMap = new Map<string, Task[]>()
-  const riskMap = new Map<string, string[]>()
-  const now = Date.now()
-
-  for (const risk of risks || []) {
-    for (const taskTitle of risk.affected_tasks || []) {
-      const current = riskMap.get(taskTitle) || []
-      current.push(risk.severity)
-      riskMap.set(taskTitle, current)
-    }
-  }
-
-  for (const task of activeTasks) {
-    if (!task.parent_task_id) continue
-    const children = childMap.get(task.parent_task_id) || []
-    children.push(task)
-    childMap.set(task.parent_task_id, children)
-  }
-
-  const scoreTask = (task: Task, asNode: boolean) => {
-    const parts: string[] = []
-    let score = 0
-    const deadlineMs = task.deadline ? new Date(task.deadline).getTime() : null
-    const daysLeft = deadlineMs ? Math.ceil((deadlineMs - now) / 86400000) : null
-    const riskLevel = highestRiskLevel(riskMap.get(task.title) || [])
-
-    if (deadlineMs !== null && deadlineMs < now) {
-      score += 80
-      parts.push('已逾期')
-    } else if (daysLeft !== null && daysLeft <= 2) {
-      score += 45
-      parts.push('临近截止')
-    } else if (daysLeft !== null && daysLeft <= 5) {
-      score += 20
-      parts.push('截止时间较近')
-    }
-
-    if (task.priority === TaskPriority.URGENT) {
-      score += 35
-      parts.push('任务紧急')
-    } else if (task.priority === TaskPriority.HIGH) {
-      score += 25
-      parts.push('优先级高')
-    } else if (task.priority === TaskPriority.MEDIUM) {
-      score += 10
-    }
-
-    if (task.status === TaskStatus.IN_PROGRESS) {
-      score += 20
-      if ((task.progress_pct || 0) < 50) parts.push('进行中但进度偏慢')
-    } else {
-      score += 8
-      parts.push('尚未启动')
-    }
-
-    if (!task.assignee_ids?.length && !task.assignee_name) {
-      score += 20
-      parts.push('尚未明确负责人')
-    }
-
-    if (riskLevel === 'high') {
-      score += 40
-      parts.push('存在高风险')
-    } else if (riskLevel === 'medium') {
-      score += 20
-      parts.push('存在中风险')
-    } else if (riskLevel === 'low') {
-      score += 8
-    }
-
-    if (asNode) {
-      const children = childMap.get(task.id) || []
-      const overdueChildren = children.filter((child) => child.deadline && new Date(child.deadline).getTime() < now).length
-      if (children.length > 0) {
-        score += children.length * 8
-        parts.push(`${children.length} 个子任务待收口`)
-      }
-      if (overdueChildren > 0) {
-        score += overdueChildren * 12
-        parts.push(`${overdueChildren} 个子任务已逾期`)
-      }
-    }
-
-    return {
-      score,
-      urgency: score >= 120 ? 'high' : score >= 70 ? 'medium' : 'low',
-      reason: parts.filter(Boolean).slice(0, 3).join('，') || '建议关注当前推进情况',
-    }
-  }
-
-  const actionItems = activeTasks
-    .filter((task) => !childMap.has(task.id))
-    .map((task) => {
-      const insight = scoreTask(task, false)
-      return {
-        id: task.id,
-        title: task.title,
-        reason: insight.reason,
-        urgency: insight.urgency,
-        assigneeText: taskAssigneeText(task),
-        deadline: task.deadline,
-        progressPct: task.progress_pct || 0,
-        _score: insight.score,
-      }
-    })
-    .sort((a, b) => b._score - a._score)
-    .slice(0, 5)
-    .map(({ _score, ...item }) => item)
-
-  const keyNodes = activeTasks
-    .filter((task) => childMap.has(task.id))
-    .map((task) => {
-      const insight = scoreTask(task, true)
-      return {
-        id: task.id,
-        title: task.title,
-        reason: insight.reason,
-        urgency: insight.urgency,
-        assigneeText: taskAssigneeText(task),
-        deadline: task.deadline,
-        progressPct: task.progress_pct || 0,
-        _score: insight.score,
-      }
-    })
-    .sort((a, b) => b._score - a._score)
-    .slice(0, 4)
-    .map(({ _score, ...item }) => item)
-
-  return { actionItems, keyNodes }
-}
-
-const priorityInsights = computed(() => buildPriorityInsights(taskStore.tasks, riskAnalysis.value?.risks || []))
-
-async function openProjectAnalysis() {
-  riskDrawerVisible.value = true
-  loadingRisk.value = true
-  riskAnalysis.value = null
-  try {
-    const res = await aiApi.analyzeProject(projectId)
-    riskAnalysis.value = res as any
-  } catch {
-    riskAnalysis.value = {
-      overall_health: 'warning',
-      summary: 'AI 当前不可用，已基于任务进展、风险线索和优先级规则生成本地项目分析。',
-      progress_summary: {
-        overall_status: projectProgressNarrative.value,
-        key_points: progressHighlights.value,
-        blockers: progressBlockers.value,
-      },
-      priority_recommendations: [],
-      risks: [],
-    }
-    ElMessage.warning('AI 当前不可用，已展示本地项目分析')
-  } finally {
-    loadingRisk.value = false
-  }
-}
-
-function healthColor(health: string): string {
-  const map: Record<string, string> = {
-    healthy: '#67C23A',
-    warning: '#E6A23C',
-    critical: '#F56C6C',
-  }
-  return map[health] || '#909399'
-}
-
-function healthLabel(health: string): string {
-  const map: Record<string, string> = {
-    healthy: '健康',
-    warning: '警告',
-    critical: '严重',
-  }
-  return map[health] || health
-}
-
-function severityTagType(severity: string): string {
-  const map: Record<string, string> = {
-    high: 'danger',
-    medium: 'warning',
-    low: '',
-  }
-  return map[severity] || 'info'
-}
-
-function severityLabel(severity: string): string {
-  const map: Record<string, string> = {
-    high: '高',
-    medium: '中',
-    low: '低',
-  }
-  return map[severity] || severity
-}
 
 // ========== Feature 3: Subtask count on task cards ==========
 
 function hasSubtasks(task: Task): boolean {
-  return task.parent_task_id === null
+  return taskStore.tasks.some(child => child.parent_task_id === task.id && !child.is_deleted)
 }
 
+async function openTaskFromRoute() {
+  const taskId = typeof route.query.taskId === 'string' ? route.query.taskId : ''
+  if (!taskId || (drawerVisible.value && selectedTask.value?.id === taskId)) return
+  routeTaskError.value = ''
+  try {
+    const task = taskStore.tasks.find(item => item.id === taskId) || (await tasksApi.get(taskId)).data
+    if (route.query.taskId !== taskId) return
+    if (task.project_id !== projectId) { routeTaskError.value = '此任务不属于当前项目。'; return }
+    await openTaskDrawer(task, false)
+  } catch { if (route.query.taskId === taskId) routeTaskError.value = '无法打开此任务，可能已不存在或无访问权限。' }
+}
+function closeTaskRoute() {
+  ++progressRequest; ++subtasksRequest
+  loadingProgress.value = false; loadingSubtasks.value = false
+  selectedTask.value = null
+  if (route.query.taskId) {
+    const { taskId: _taskId, ...query } = route.query
+    void router.replace({ query })
+  }
+}
+watch(() => route.query.taskId, value => { if (!value) drawerVisible.value = false; else void openTaskFromRoute() })
 // ========== Init ==========
 
+useProjectUpdates(async pid => { if (!pid || pid === projectId) await Promise.all([loadTasks(), fetchProject()]) })
 onMounted(async () => {
   await Promise.all([loadTasks(), fetchUsers(), fetchProject()])
+  await nextTick()
+  const content = boardElement.value?.closest('.app-content')
+  if (content && typeof savedBoard.scrollTop === 'number') content.scrollTop = savedBoard.scrollTop
+  await openTaskFromRoute()
 })
 </script>
 
 <template>
-  <div v-loading="loading" class="task-board-view">
+  <div ref="boardElement" v-loading="loading" class="task-board-view">
     <div v-if="project" class="project-summary-card">
       <div class="project-summary-head">
         <h2>{{ project.name }}</h2>
+        <div class="project-people"><span>接口人 <strong>{{ projectContactText() }}</strong></span><span>创建人 <strong>{{ project.owner_name || '-' }}</strong></span></div>
       </div>
-      <div class="project-summary-grid">
-        <div class="project-summary-section project-contact-section">
-          <span class="project-summary-label">接口人</span>
-          <p>{{ projectContactText() }}</p>
-        </div>
-        <div class="project-summary-section project-contact-section">
-          <span class="project-summary-label">创建人</span>
-          <p>{{ project.owner_name || '-' }}</p>
-        </div>
+      <div class="project-summary-tools">
+      <details class="project-description"><summary>项目目标与描述</summary><div class="project-summary-grid">
         <div class="project-summary-section">
           <span class="project-summary-label">项目目标</span>
           <p>{{ project.goal || '暂无项目目标' }}</p>
@@ -859,10 +498,27 @@ onMounted(async () => {
           <span class="project-summary-label">项目描述</span>
           <p>{{ project.description || '暂无项目描述' }}</p>
         </div>
+      </div></details>
+      <div class="board-actions">
+        <el-button v-if="sourcePath" @click="returnToSource">返回来源</el-button>
+        <el-button @click="goToList">任务列表</el-button>
+
+        <el-tooltip v-if="canCreateTask" content="新建任务" placement="top">
+          <el-button type="primary" :icon="Plus" circle aria-label="新建任务" @click="openCreateDialog" />
+        </el-tooltip>
+      </div>
       </div>
     </div>
+    <el-alert v-if="boardError || routeTaskError" type="error" show-icon :closable="false" class="board-error">
+      <template #title>{{ boardError || routeTaskError }}<span v-if="boardError && boardUpdatedAt"> 已保留上次读取的数据（{{ boardUpdatedAt }}）。</span></template>
+      <el-button link type="primary" @click="boardError ? loadTasks() : openTaskFromRoute()">重试</el-button>
+    </el-alert>
+    <p class="board-help">状态按开始时间自动判断；进度达到 100% 后由有权限的人员会签完成。</p>
+    <el-radio-group v-if="mobileBoard" v-model="activeColumn" class="board-status-tabs" aria-label="任务状态">
+      <el-radio-button v-for="col in columns" :key="col.status" :value="col.status">{{ col.label }} {{ columnCount(col.status) }}</el-radio-button>
+    </el-radio-group>
     <div class="board-container">
-      <div v-for="col in columns" :key="col.status" class="board-column">
+      <div v-for="col in columns" v-show="!mobileBoard || activeColumn === col.status" :key="col.status" class="board-column">
         <div class="column-header" :style="{ borderTopColor: columnHeaderColors[col.status] }">
           <span class="column-title">{{ col.label }}</span>
           <el-badge :value="columnCount(col.status)" type="info" class="column-count" />
@@ -884,7 +540,7 @@ onMounted(async () => {
               @click="openTaskDrawer(task)"
             >
               <div class="task-title">
-                <span>{{ task.title }}</span>
+                <button type="button" class="task-open" :aria-label="`查看任务：${task.title}`" @click.stop="openTaskDrawer(task)">{{ task.title }}</button>
                 <el-tag
                   v-if="hasSubtasks(task)"
                   size="small"
@@ -932,36 +588,9 @@ onMounted(async () => {
             </div>
           </template>
         </draggable>
+        <el-button v-if="columnCount(col.status) > (columnTasks[col.status]?.length || 0)" class="load-more" text @click="showMore(col.status)">加载更多 ({{ columnCount(col.status) - (columnTasks[col.status]?.length || 0) }})</el-button>
       </div>
     </div>
-
-    <!-- Floating Create Button -->
-    <el-tooltip v-if="canCreateTask" content="新建任务" placement="left">
-      <el-button
-        class="fab-button"
-        type="primary"
-        :icon="Plus"
-        circle
-        size="large"
-        @click="openCreateDialog"
-      />
-    </el-tooltip>
-
-    <!-- AI Project Analysis Floating Button -->
-    <el-tooltip
-      v-if="canUseAiRisk"
-      content="项目分析：汇总项目进展、风险和优先级建议"
-      placement="left"
-    >
-      <el-button
-        class="fab-button-risk"
-        type="warning"
-        :icon="Warning"
-        circle
-        size="large"
-        @click="openProjectAnalysis"
-      />
-    </el-tooltip>
 
     <!-- Create Task Dialog -->
     <el-dialog
@@ -987,48 +616,7 @@ onMounted(async () => {
             placeholder="请输入任务描述"
           />
         </el-form-item>
-        <el-form-item v-if="canUseAiEstimate" label="AI 评估">
-          <div class="create-ai-wrap">
-            <div class="create-ai-row">
-              <el-button
-                type="warning"
-                :loading="createAiEstimating"
-                :disabled="!createForm.title.trim()"
-                @click="handleCreateAiEstimate"
-              >
-                AI 推荐人选 + 预估工时
-              </el-button>
-              <span v-if="createAiStatusMsg" class="create-ai-status">{{ createAiStatusMsg }}</span>
-            </div>
-            <div v-if="createAiEstimateInfo" class="create-ai-box">
-              <div class="create-ai-head">AI 评估结果</div>
-              <div class="create-ai-estimate">
-                预估工时:
-                <strong>{{ createAiEstimateInfo.estimated_hours ?? '-' }}h</strong>
-                <el-tag
-                  v-if="createAiEstimateInfo.confidence"
-                  :type="createAiEstimateInfo.confidence === 'high' ? 'success' : createAiEstimateInfo.confidence === 'medium' ? 'warning' : 'info'"
-                  size="small"
-                >
-                  {{ createAiEstimateInfo.confidence === 'high' ? '高置信' : createAiEstimateInfo.confidence === 'medium' ? '中置信' : '低置信' }}
-                </el-tag>
-              </div>
-              <div v-if="createAiEstimateInfo.reasoning" class="create-ai-reason">
-                {{ createAiEstimateInfo.reasoning }}
-              </div>
-              <div v-if="createAiRecommendations.length" class="create-ai-recs">
-                <div class="create-ai-recs-title">推荐人选</div>
-                <div v-for="(rec, idx) in createAiRecommendations" :key="idx" class="create-ai-rec">
-                  <span class="create-ai-rank">#{{ idx + 1 }}</span>
-                  <span class="create-ai-name">{{ rec.name }}</span>
-                  <el-tag v-if="rec.score != null" size="small" type="warning">{{ rec.score }}分</el-tag>
-                  <el-button type="primary" size="small" link @click="applyCreateRecommendation(rec)">采纳</el-button>
-                  <div v-if="rec.reason" class="create-ai-rec-reason">{{ rec.reason }}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </el-form-item>
+
         <el-form-item label="优先级">
           <el-select v-model="createForm.priority" style="width: 100%">
             <el-option
@@ -1087,6 +675,7 @@ onMounted(async () => {
     <!-- Task Detail Drawer -->
     <el-drawer
       v-model="drawerVisible"
+      @closed="closeTaskRoute"
       :title="selectedTask?.title || '任务详情'"
       size="560px"
       direction="rtl"
@@ -1123,6 +712,7 @@ onMounted(async () => {
               </el-descriptions-item>
               <el-descriptions-item label="当前进度">
                 <el-progress :percentage="selectedTask.progress_pct" :stroke-width="10" />
+                <details v-if="selectedTaskHasChildren" class="progress-basis"><summary>由子任务加权计算</summary><p>{{ weightedProgressExplanation }}，按权重总和归一后四舍五入。</p><p>直接提交的历史百分比仅为原始记录，不覆盖父任务汇总进度。</p></details>
               </el-descriptions-item>
               <el-descriptions-item v-if="selectedTask.signed_off_at" label="会签时间">
                 {{ formatDateTime(selectedTask.signed_off_at) }}
@@ -1136,15 +726,7 @@ onMounted(async () => {
             </el-descriptions>
             <div v-if="needsSignoff(selectedTask)" class="detail-signoff">
               <el-tag type="warning" effect="plain">进度 100%，等待会签</el-tag>
-              <el-button
-                v-if="canUseAiRisk"
-                type="warning"
-                size="small"
-                :loading="signoffAssistLoading"
-                @click="handleSignoffAssist"
-              >
-                AI 会签建议
-              </el-button>
+
               <el-button
                 v-if="canSignoff(selectedTask)"
                 type="success"
@@ -1154,18 +736,7 @@ onMounted(async () => {
                 会签确认
               </el-button>
             </div>
-            <div v-if="signoffAssistStatus || signoffAssistResult" class="signoff-assist">
-              <span v-if="signoffAssistStatus" class="create-ai-status">{{ signoffAssistStatus }}</span>
-              <template v-if="signoffAssistResult">
-                <el-tag :type="signoffAssistResult.recommendation === 'approve' ? 'success' : 'warning'" size="small">
-                  {{ signoffAssistResult.recommendation === 'approve' ? '建议会签' : '建议暂缓' }}
-                </el-tag>
-                <p>{{ signoffAssistResult.summary }}</p>
-                <ul v-if="Array.isArray(signoffAssistResult.risks) && signoffAssistResult.risks.length">
-                  <li v-for="(risk, idx) in signoffAssistResult.risks" :key="idx">{{ risk }}</li>
-                </ul>
-              </template>
-            </div>
+
           </div>
 
           <!-- Description -->
@@ -1182,6 +753,7 @@ onMounted(async () => {
               @progress-adopted="handleDataSkillProgressAdopted"
             />
           </div>
+          <TaskAuditTrail v-if="auth.can('progress.view')" :task-id="selectedTask.id" :revision="selectedTask.updated_at" />
 
           <!-- Subtasks Section (Feature 1) -->
           <div class="detail-section">
@@ -1189,10 +761,11 @@ onMounted(async () => {
               <h4>子任务</h4>
               <div class="section-header-actions">
                 <el-button v-if="canCreateTask" size="small" @click="openSubtaskForm">手动添加子任务</el-button>
-                <el-button v-if="canUseAiEstimate && canCreateTask" size="small" type="primary" :loading="decomposing" @click="handleAIDecompose">AI 智能分解</el-button>
+
               </div>
             </div>
 
+            <el-alert v-if="subtasksError" type="error" show-icon :closable="false" :title="subtasksError"><el-button link @click="loadSubtasks(selectedTask.id)">重试</el-button></el-alert>
             <!-- Inline Subtask Form -->
             <div v-if="showSubtaskForm" class="subtask-inline-form">
               <el-form :inline="false" size="small" label-width="70px">
@@ -1277,7 +850,7 @@ onMounted(async () => {
                   </template>
                 </el-table-column>
               </el-table>
-              <el-empty v-else description="暂无子任务" :image-size="40" />
+              <el-empty v-else-if="!loadingSubtasks && !subtasksError" description="暂无子任务" :image-size="40" />
             </div>
           </div>
 
@@ -1286,15 +859,15 @@ onMounted(async () => {
               type="info"
               :closable="false"
               show-icon
-              title="这里可以手动提交真实进展；项目管理页顶部的进展更新更适合批量导入群消息。"
+              title="在此提交真实进展与工时。批量整理群消息可在 DSH 的 TeamPilot 对话中提出，写入前需要审阅确认。"
             />
           </div>
 
           <div v-if="canSubmitProgress && !selectedTask.is_deleted" class="detail-section">
             <h4>手动提交</h4>
-            <el-form label-width="80px" size="small">
+            <el-form label-width="80px" size="small" :disabled="submittingProgress">
               <el-form-item label="进度 (%)">
-                <el-slider v-model="progressForm.progress_pct" :min="0" :max="100" show-input />
+                <el-slider v-model="progressForm.progress_pct" :min="0" :max="100" show-input :disabled="selectedTaskHasChildren" /><span v-if="selectedTaskHasChildren" class="field-hint">父任务进度自动计算；此处记录说明与工时。</span>
               </el-form-item>
               <el-form-item label="备注">
                 <el-input
@@ -1313,7 +886,7 @@ onMounted(async () => {
                 />
               </el-form-item>
               <el-form-item>
-                <el-button type="primary" size="default" @click="handleLogProgress">提交进展</el-button>
+                <el-button type="primary" size="default" :loading="submittingProgress" :disabled="submittingProgress" @click="handleLogProgress">提交进展</el-button>
               </el-form-item>
             </el-form>
           </div>
@@ -1338,6 +911,8 @@ onMounted(async () => {
           <!-- Progress History -->
           <div class="detail-section">
             <h4>进度记录</h4>
+            <el-alert v-if="progressError" type="error" :closable="false" show-icon :title="progressError"><el-button v-if="auth.can('progress.view')" link @click="loadProgressHistory(selectedTask.id)">重试</el-button></el-alert>
+            <p v-if="progressUpdatedAt" class="field-hint">{{ progressError ? '上次成功读取' : '读取时间' }} {{ progressUpdatedAt }}</p>
             <div v-loading="loadingProgress">
               <el-timeline v-if="progressHistory.length > 0">
                 <el-timeline-item
@@ -1354,258 +929,25 @@ onMounted(async () => {
                   </div>
                 </el-timeline-item>
               </el-timeline>
-              <el-empty v-else description="暂无进度记录" :image-size="60" />
+              <el-empty v-else-if="!progressError && !loadingProgress" description="暂无进度记录" :image-size="60" />
             </div>
           </div>
         </div>
       </template>
     </el-drawer>
 
-    <!-- AI Decompose Results Dialog -->
-    <el-dialog
-      v-model="decomposeDialogVisible"
-      title="AI 智能分解结果"
-      width="700px"
-      :close-on-click-modal="false"
-    >
-      <div v-loading="decomposing" element-loading-text="AI 正在分析任务...">
-        <template v-if="!decomposing && decomposeResults.length > 0">
-          <div class="decompose-toolbar">
-            <el-checkbox
-              :model-value="allDecomposeSelected"
-              @change="(val: any) => toggleSelectAllDecompose(val as boolean)"
-            >
-              全选
-            </el-checkbox>
-            <span class="decompose-count">共 {{ decomposeResults.length }} 个建议子任务</span>
-          </div>
-          <div class="decompose-list">
-            <div
-              v-for="(item, idx) in decomposeResults"
-              :key="idx"
-              class="decompose-item"
-            >
-              <div class="decompose-item-header">
-                <el-checkbox v-model="item.selected" @change="onDecomposeItemChange" />
-                <span class="decompose-item-title">{{ item.title }}</span>
-                <el-tag v-if="item.estimated_hours != null" size="small" type="info">
-                  {{ item.estimated_hours }}h
-                </el-tag>
-              </div>
-              <div v-if="item.description" class="decompose-item-desc">{{ item.description }}</div>
-              <div class="decompose-item-meta">
-                <span v-if="item.recommended_assignee" class="decompose-meta-label">
-                  建议负责人: <strong>{{ item.recommended_assignee }}</strong>
-                </span>
-              </div>
-              <div v-if="item.reason" class="decompose-item-reason">
-                <el-icon style="vertical-align: middle; margin-right: 4px;"><Warning /></el-icon>
-                {{ item.reason }}
-              </div>
-            </div>
-          </div>
-        </template>
-        <el-empty v-if="!decomposing && decomposeResults.length === 0" description="未能获取分解建议" />
-      </div>
-      <template #footer>
-        <el-button @click="decomposeDialogVisible = false">关闭</el-button>
-        <el-button
-          type="primary"
-          :loading="adoptingSubtasks"
-          :disabled="decomposing || decomposeResults.filter(i => i.selected).length === 0"
-          @click="handleAdoptAll"
-        >
-          全部采纳 ({{ decomposeResults.filter(i => i.selected).length }})
-        </el-button>
-      </template>
-    </el-dialog>
 
-    <!-- AI Project Analysis Drawer -->
-    <el-drawer
-      v-model="riskDrawerVisible"
-      title="项目分析"
-      size="520px"
-      direction="rtl"
-    >
-      <div v-loading="loadingRisk" element-loading-text="AI 正在生成项目分析..." class="risk-drawer-content">
-        <template v-if="!loadingRisk && riskAnalysis">
-          <div class="risk-health-section">
-            <div
-              class="health-badge"
-              :style="{ backgroundColor: healthColor(riskAnalysis.overall_health) }"
-            >
-              {{ healthLabel(riskAnalysis.overall_health) }}
-            </div>
-          </div>
-
-          <div class="risk-summary-section">
-            <h4>AI 综合判断</h4>
-            <p class="risk-summary-text">{{ riskAnalysis.summary }}</p>
-          </div>
-
-          <div class="analysis-progress-section">
-            <h4>项目进展</h4>
-            <div class="analysis-metric-grid">
-              <div class="analysis-metric-card">
-                <span class="analysis-metric-label">任务总数</span>
-                <strong class="analysis-metric-value">{{ projectOverview.total }}</strong>
-              </div>
-              <div class="analysis-metric-card success">
-                <span class="analysis-metric-label">已完成</span>
-                <strong class="analysis-metric-value">{{ projectOverview.done }}</strong>
-              </div>
-              <div class="analysis-metric-card warning">
-                <span class="analysis-metric-label">进行中</span>
-                <strong class="analysis-metric-value">{{ projectOverview.inProgress }}</strong>
-              </div>
-              <div class="analysis-metric-card">
-                <span class="analysis-metric-label">未开始</span>
-                <strong class="analysis-metric-value">{{ projectOverview.notStarted }}</strong>
-              </div>
-              <div class="analysis-metric-card danger">
-                <span class="analysis-metric-label">已逾期</span>
-                <strong class="analysis-metric-value">{{ projectOverview.overdue }}</strong>
-              </div>
-              <div class="analysis-metric-card primary">
-                <span class="analysis-metric-label">整体进度</span>
-                <strong class="analysis-metric-value">{{ projectOverview.avgProgress }}%</strong>
-              </div>
-            </div>
-            <p class="risk-summary-text analysis-progress-text">{{ projectProgressNarrative }}</p>
-            <div class="analysis-notes-grid">
-              <div class="analysis-note-panel">
-                <span class="analysis-note-title">进展要点</span>
-                <ul class="analysis-note-list">
-                  <li v-for="item in progressHighlights" :key="item">{{ item }}</li>
-                </ul>
-              </div>
-              <div class="analysis-note-panel warning">
-                <span class="analysis-note-title">当前阻塞</span>
-                <ul class="analysis-note-list">
-                  <li v-for="item in progressBlockers" :key="item">{{ item }}</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-
-          <div class="priority-list-section">
-            <h4>优先级建议</h4>
-            <div v-if="aiPriorityRecommendations.length" class="priority-cards">
-              <div
-                v-for="item in aiPriorityRecommendations"
-                :key="`${item.title}-${item.reason}`"
-                class="priority-card"
-              >
-                <div class="priority-card-head">
-                  <el-tag :type="(severityTagType(item.urgency || 'medium') as any)" size="small" effect="dark">
-                    {{ urgencyLabel(item.urgency || 'medium') }}
-                  </el-tag>
-                  <span class="priority-card-title">{{ item.title }}</span>
-                </div>
-                <div v-if="item.affected_tasks?.length || item.affected_users?.length" class="priority-card-meta">
-                  <span v-if="item.affected_tasks?.length">任务：{{ item.affected_tasks.join('、') }}</span>
-                  <span v-if="item.affected_users?.length">成员：{{ item.affected_users.join('、') }}</span>
-                </div>
-                <p class="priority-card-reason">{{ item.reason }}</p>
-                <p v-if="item.suggestion" class="priority-card-suggestion">{{ item.suggestion }}</p>
-              </div>
-            </div>
-            <div v-else-if="priorityInsights.actionItems.length" class="priority-cards">
-              <div v-for="item in priorityInsights.actionItems" :key="item.id" class="priority-card">
-                <div class="priority-card-head">
-                  <el-tag :type="(severityTagType(item.urgency) as any)" size="small" effect="dark">
-                    {{ urgencyLabel(item.urgency) }}
-                  </el-tag>
-                  <span class="priority-card-title">{{ item.title }}</span>
-                </div>
-                <div class="priority-card-meta">
-                  <span>{{ item.assigneeText }}</span>
-                  <span>{{ formatDate(item.deadline) }}</span>
-                  <span>{{ item.progressPct }}%</span>
-                </div>
-                <p class="priority-card-reason">{{ item.reason }}</p>
-              </div>
-            </div>
-            <el-empty v-else description="暂无需要优先推进的任务" :image-size="60" />
-          </div>
-
-          <div class="priority-list-section">
-            <h4>关键节点</h4>
-            <div v-if="priorityInsights.keyNodes.length" class="priority-cards">
-              <div v-for="item in priorityInsights.keyNodes" :key="item.id" class="priority-card node-card">
-                <div class="priority-card-head">
-                  <el-tag :type="(severityTagType(item.urgency) as any)" size="small" effect="plain">
-                    {{ urgencyLabel(item.urgency) }}
-                  </el-tag>
-                  <span class="priority-card-title">{{ item.title }}</span>
-                </div>
-                <div class="priority-card-meta">
-                  <span>{{ item.assigneeText }}</span>
-                  <span>{{ formatDate(item.deadline) }}</span>
-                  <span>{{ item.progressPct }}%</span>
-                </div>
-                <p class="priority-card-reason">{{ item.reason }}</p>
-              </div>
-            </div>
-            <el-empty v-else description="暂无需要特别关注的关键节点" :image-size="60" />
-          </div>
-
-          <div class="risk-list-section">
-            <h4>风险明细 ({{ riskAnalysis.risks?.length || 0 }})</h4>
-            <div v-if="riskAnalysis.risks && riskAnalysis.risks.length > 0" class="risk-cards">
-              <el-card
-                v-for="(risk, idx) in riskAnalysis.risks"
-                :key="idx"
-                class="risk-card"
-                shadow="hover"
-              >
-                <div class="risk-card-header">
-                  <el-tag :type="(severityTagType(risk.severity) as any)" size="small" effect="dark">
-                    {{ severityLabel(risk.severity) }}
-                  </el-tag>
-                  <el-tag size="small" effect="plain">{{ risk.type }}</el-tag>
-                  <span class="risk-card-title">{{ risk.title }}</span>
-                </div>
-                <p class="risk-card-desc">{{ risk.description }}</p>
-                <div v-if="risk.affected_tasks && risk.affected_tasks.length > 0" class="risk-card-tags">
-                  <span class="risk-tag-label">受影响任务</span>
-                  <el-tag
-                    v-for="t in risk.affected_tasks"
-                    :key="t"
-                    size="small"
-                    type="info"
-                    class="risk-tag-item"
-                  >
-                    {{ t }}
-                  </el-tag>
-                </div>
-                <div v-if="risk.affected_users && risk.affected_users.length > 0" class="risk-card-tags">
-                  <span class="risk-tag-label">受影响人员</span>
-                  <el-tag
-                    v-for="u in risk.affected_users"
-                    :key="u"
-                    size="small"
-                    type="warning"
-                    class="risk-tag-item"
-                  >
-                    {{ u }}
-                  </el-tag>
-                </div>
-                <div v-if="risk.suggestion" class="risk-suggestion">
-                  <strong>建议:</strong> {{ risk.suggestion }}
-                </div>
-              </el-card>
-            </div>
-            <el-empty v-else description="暂无风险项" :image-size="60" />
-          </div>
-        </template>
-        <el-empty v-if="!loadingRisk && !riskAnalysis" description="暂无项目分析结果" :image-size="80" />
-      </div>
-    </el-drawer>
   </div>
 </template>
 
 <style scoped>
+.board-error { margin: 12px 0; }
+.board-help, .field-hint { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 8px 0; }
+.progress-basis { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.progress-basis summary { cursor: pointer; color: var(--brand); }
+.task-open { padding: 0; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; font-weight: inherit; cursor: pointer; }
+.task-card:focus-within { outline: 2px solid var(--brand); outline-offset: 2px; }
+
 .task-board-view {
   padding: 16px;
   height: calc(100vh - 120px);
@@ -1615,13 +957,13 @@ onMounted(async () => {
 .board-container {
   display: flex;
   gap: 16px;
-  height: 100%;
+  height: min(68vh, 800px);
   overflow-x: auto;
   padding-bottom: 8px;
 }
 
 .board-column {
-  flex: 0 0 280px;
+  flex: 1 0 280px;
   display: flex;
   flex-direction: column;
   background: #f5f7fa;
@@ -1657,7 +999,9 @@ onMounted(async () => {
   padding: 12px;
   margin-bottom: 8px;
   border-left: 4px solid #909399;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  border-top: 1px solid #e5ebed;
+  border-right: 1px solid #e5ebed;
+  border-bottom: 1px solid #e5ebed;
   cursor: pointer;
   transition: box-shadow 0.2s;
 }
@@ -1726,109 +1070,6 @@ onMounted(async () => {
   margin-top: 8px;
 }
 
-.create-ai-wrap {
-  width: 100%;
-}
-
-.create-ai-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.create-ai-status {
-  font-size: 12px;
-  color: #e6a23c;
-  animation: pulse 1.5s infinite;
-}
-
-.create-ai-box {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border: 1px solid #faecd8;
-  border-radius: 6px;
-  background: #fdf6ec;
-}
-
-.create-ai-head {
-  margin-bottom: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #b88230;
-}
-
-.create-ai-estimate {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-  font-size: 12px;
-  color: #303133;
-}
-
-.create-ai-reason {
-  margin-bottom: 8px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #606266;
-}
-
-.create-ai-recs-title {
-  margin-bottom: 4px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #303133;
-}
-
-.create-ai-rec {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 0;
-  border-top: 1px solid #faecd8;
-  flex-wrap: wrap;
-}
-
-.create-ai-rank {
-  font-weight: 700;
-  color: #b88230;
-}
-
-.create-ai-name {
-  font-weight: 500;
-  color: #303133;
-}
-
-.create-ai-rec-reason {
-  width: 100%;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #909399;
-}
-
-/* Floating action buttons */
-.fab-button {
-  position: fixed;
-  right: 40px;
-  bottom: 40px;
-  width: 56px;
-  height: 56px;
-  font-size: 24px;
-  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.4);
-  z-index: 100;
-}
-
-.fab-button-risk {
-  position: fixed;
-  right: 40px;
-  bottom: 110px;
-  width: 56px;
-  height: 56px;
-  font-size: 24px;
-  box-shadow: 0 4px 12px rgba(230, 162, 60, 0.4);
-  z-index: 100;
-}
-
 /* Drawer content */
 .drawer-content {
   padding: 0 8px;
@@ -1851,26 +1092,6 @@ onMounted(async () => {
   gap: 10px;
   margin-top: 12px;
   flex-wrap: wrap;
-}
-
-.signoff-assist {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  border: 1px solid #faecd8;
-  background: #fdf6ec;
-  font-size: 12px;
-  color: #606266;
-}
-
-.signoff-assist p {
-  margin: 6px 0;
-  line-height: 1.5;
-}
-
-.signoff-assist ul {
-  margin: 4px 0 0;
-  padding-left: 18px;
 }
 
 .task-description {
@@ -1960,152 +1181,7 @@ onMounted(async () => {
   white-space: normal;
 }
 
-/* AI Decompose Dialog */
-.decompose-toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #ebeef5;
-}
-
-.decompose-count {
-  font-size: 13px;
-  color: #909399;
-}
-
-.decompose-list {
-  max-height: 450px;
-  overflow-y: auto;
-}
-
-.decompose-item {
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  padding: 12px;
-  margin-bottom: 10px;
-  transition: border-color 0.2s;
-}
-
-.decompose-item:hover {
-  border-color: #409eff;
-}
-
-.decompose-item-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.decompose-item-title {
-  font-weight: 600;
-  font-size: 14px;
-  color: #303133;
-  flex: 1;
-}
-
-.decompose-item-desc {
-  font-size: 13px;
-  color: #606266;
-  line-height: 1.5;
-  margin-bottom: 6px;
-  padding-left: 24px;
-}
-
-.decompose-item-meta {
-  padding-left: 24px;
-  font-size: 12px;
-  color: #909399;
-  margin-bottom: 4px;
-}
-
-.decompose-meta-label strong {
-  color: #303133;
-}
-
-.decompose-item-reason {
-  padding-left: 24px;
-  font-size: 12px;
-  color: #e6a23c;
-  background: #fdf6ec;
-  border-radius: 4px;
-  padding: 6px 8px 6px 24px;
-  margin-top: 6px;
-  line-height: 1.4;
-}
-
 /* Risk Analysis Drawer */
-.risk-drawer-content {
-  padding: 0 8px;
-  min-height: 200px;
-}
-
-.risk-health-section {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 20px;
-}
-
-.health-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
-  color: #fff;
-  font-size: 20px;
-  font-weight: 700;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-}
-
-.risk-summary-section {
-  margin-bottom: 20px;
-}
-
-.risk-summary-section h4 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 8px 0;
-  color: #303133;
-}
-
-.risk-summary-text {
-  font-size: 13px;
-  color: #606266;
-  line-height: 1.6;
-  margin: 0;
-  background: #f5f7fa;
-  border-radius: 6px;
-  padding: 10px 12px;
-}
-
-.analysis-progress-section {
-  margin-bottom: 20px;
-}
-
-.analysis-progress-section h4 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 12px 0;
-  color: #303133;
-}
-
-.analysis-metric-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.analysis-metric-card {
-  padding: 12px;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  background: #fff;
-}
 
 .analysis-metric-card.primary {
   background: #ecf5ff;
@@ -2123,205 +1199,14 @@ onMounted(async () => {
   background: #fef0f0;
 }
 
-.analysis-metric-label {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 12px;
-  color: #909399;
-}
-
-.analysis-metric-value {
-  font-size: 20px;
-  font-weight: 700;
-  color: #303133;
-}
-
-.analysis-progress-text {
-  margin-bottom: 12px;
-}
-
-.analysis-notes-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.analysis-note-panel {
-  padding: 12px;
-  border-radius: 8px;
-  background: #f8fafc;
-  border: 1px solid #ebeef5;
-}
-
 .analysis-note-panel.warning {
   background: #fff7ed;
 }
 
-.analysis-note-title {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #909399;
-}
-
-.analysis-note-list {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 13px;
-  color: #606266;
-  line-height: 1.6;
-}
-
-.analysis-note-list li + li {
-  margin-top: 4px;
-}
-
-.risk-list-section h4 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 12px 0;
-  color: #303133;
-}
-
-.risk-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.risk-card {
-  border-radius: 8px;
-}
-
-.risk-card :deep(.el-card__body) {
-  padding: 14px;
-}
-
-.risk-card-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-
-.risk-card-title {
-  font-weight: 600;
-  font-size: 14px;
-  color: #303133;
-}
-
-.risk-card-desc {
-  font-size: 13px;
-  color: #606266;
-  line-height: 1.5;
-  margin: 0 0 8px 0;
-}
-
-.risk-card-tags {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 6px;
-}
-
-.risk-tag-label {
-  font-size: 12px;
-  color: #909399;
-  margin-right: 4px;
-}
-
-.risk-tag-item {
-  margin: 0;
-}
-
-.risk-suggestion {
-  background: #ecf5ff;
-  border-radius: 4px;
-  padding: 8px 10px;
-  font-size: 13px;
-  color: #409eff;
-  margin-top: 8px;
-  line-height: 1.5;
-}
-
-.risk-suggestion strong {
-  color: #303133;
-}
-
-.priority-list-section {
-  margin: 16px 0;
-}
-
-.priority-list-section h4 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 12px;
-  color: #303133;
-}
-
-.priority-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.priority-card {
-  padding: 12px 14px;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  background: #fff;
-}
-
-.node-card {
-  background: #f8fafc;
-}
-
-.priority-card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-
-.priority-card-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #303133;
-}
-
-.priority-card-meta {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-  font-size: 12px;
-  color: #909399;
-}
-
-.priority-card-reason {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #606266;
-}
-
-.priority-card-suggestion {
-  margin: 8px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #409eff;
-}
-
 .project-summary-card {
   margin-bottom: 16px;
-  padding: 18px 20px;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  background: #fff;
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--border);
 }
 
 .project-summary-head h2 {
@@ -2334,12 +1219,11 @@ onMounted(async () => {
 .project-summary-grid {
   display: grid;
   gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .project-summary-section {
-  padding: 14px 16px;
-  border-radius: 8px;
-  background: #f8fafc;
+  padding: 12px 0;
 }
 
 .project-summary-label {
@@ -2357,9 +1241,23 @@ onMounted(async () => {
   color: #606266;
   white-space: pre-wrap;
 }
-
-.project-contact-section p {
-  font-weight: 600;
-  color: #303133;
+.project-summary-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.project-summary-head h2 { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.project-people { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; line-height: 28px; }
+.project-people strong { color: var(--ink); font-weight: 500; margin-left: 6px; }
+.project-description summary { color: var(--muted); cursor: pointer; font-size: 13px; }
+.project-summary-tools { display: flex; align-items: flex-start; gap: 16px; }
+.project-description { flex: 1; min-width: 0; }
+.board-actions { display: flex; flex-shrink: 0; gap: 8px; }
+.board-actions .el-button + .el-button { margin-left: 0; }
+.load-more { width: 100%; flex-shrink: 0; }
+@media (max-width: 760px) {
+  .project-summary-head { display: block; }
+  .project-summary-grid { grid-template-columns: 1fr; }
+  .board-column { flex: 1 0 100%; min-width: 0; }
+  .task-meta { flex-wrap: wrap; gap: 6px; }
 }
+.board-status-tabs { display: flex; margin-bottom: 12px; }
+.board-status-tabs :deep(.el-radio-button) { flex: 1; }
+.board-status-tabs :deep(.el-radio-button__inner) { width: 100%; padding: 9px 8px; }
 </style>

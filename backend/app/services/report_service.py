@@ -1,3 +1,4 @@
+from app.services.inspection_service import daily_brief
 import asyncio
 import json
 import smtplib
@@ -16,9 +17,6 @@ from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
 from app.services import task_service
-from app.services.ai.errors import AIBackendError
-from app.services.ai.llm_client import LLMClient
-from app.services.ai.project_automation import daily_brief
 from app.services.report_metrics import progress_rankings
 
 
@@ -39,18 +37,7 @@ REPORT_SNAPSHOT_KEYS = {
     "weekly": "report_snapshot_weekly",
 }
 
-AI_CONFIG_KEY = "ai_config"
 
-WEEKLY_AI_FIELDS = [
-    "risky_projects",
-    "overdue_blocked_tasks",
-    "progress_fast_top3",
-    "progress_slow_top3",
-    "priority_tasks",
-    "signoff_pending",
-    "completed_tasks",
-    "progress_updates",
-]
 
 
 def _report_tz() -> ZoneInfo:
@@ -94,27 +81,8 @@ def _stringify_item(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
-def _as_string_list(value: Any, fallback: list[str]) -> list[str]:
-    if value is None:
-        return fallback[:]
-    if isinstance(value, list):
-        rows = [_stringify_item(item).strip() for item in value if _stringify_item(item).strip()]
-        return rows or fallback[:]
-    text = str(value).strip()
-    return [text] if text else fallback[:]
 
 
-def _normalize_weekly_ai_report(raw: dict | None, fallback: dict) -> dict:
-    source = raw or {}
-    report = dict(fallback)
-    report["source"] = "ai"
-    report["source_label"] = "AI 生成"
-    summary = str(source.get("summary") or "").strip()
-    if summary:
-        report["summary"] = summary
-    for key in WEEKLY_AI_FIELDS:
-        report[key] = _as_string_list(source.get(key), fallback.get(key) or [])
-    return report
 
 
 def report_subject(report_type: str, report: dict) -> str:
@@ -200,8 +168,6 @@ def _date_value(value: datetime | date | None) -> date | None:
 
 async def generate_weekly_report(
     db: AsyncSession,
-    llm: LLMClient | None = None,
-    raise_ai_error: bool = False,
 ) -> dict:
     today = _today()
     period_start = today - timedelta(days=6)
@@ -430,47 +396,7 @@ async def generate_weekly_report(
         "progress_updates": progress_updates[:30],
     }
 
-    if not llm:
-        return rule_report
-
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是项目管理办公室的周报助手。只返回 JSON 对象，不要输出 markdown 或解释文字。"
-                "JSON 必须且只能包含这些键：summary, risky_projects, overdue_blocked_tasks, "
-                "progress_fast_top3, progress_slow_top3, priority_tasks, signoff_pending, "
-                "completed_tasks, progress_updates。summary 必须是简洁中文字符串。"
-                "其余字段必须是中文字符串数组；没有结果时也返回一句明确结论，不要返回空数组。"
-                "progress_fast_top3 和 progress_slow_top3 必须各最多 3 条。"
-                "项目进展情况表由系统生成，你不要返回 project_progress_table，也不要增删项目。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps(
-                {
-                    "period_start": period_start.isoformat(),
-                    "period_end": today.isoformat(),
-                    "project_progress_table": project_progress_table,
-                    "rule_findings": {
-                        key: rule_report[key]
-                        for key in WEEKLY_AI_FIELDS
-                    },
-                },
-                ensure_ascii=False,
-                default=str,
-            ),
-        },
-    ]
-    try:
-        ai_report = await llm.chat_json(messages, temperature=0.2, max_tokens=4096)
-        return _normalize_weekly_ai_report(ai_report, rule_report)
-    except Exception as exc:
-        if raise_ai_error:
-            raise AIBackendError("AI 生成周报失败", exc) from exc
-        rule_report["summary"] += " AI 分析失败，当前结果由系统规则生成。"
-        return rule_report
+    return rule_report
 
 
 def _snapshot_key(report_type: str) -> str:
@@ -510,38 +436,17 @@ def _is_schedule_due(report_type: str, now: datetime | None = None) -> bool:
     return current >= _scheduled_time(report_type, current)
 
 
-async def _get_llm(db: AsyncSession) -> LLMClient | None:
-    setting = (
-        await db.execute(select(SystemSetting).where(SystemSetting.key == AI_CONFIG_KEY))
-    ).scalar_one_or_none()
-    config = setting.value_json if setting else {}
-    api_key = (config or {}).get("api_key_encrypted")
-    if not api_key:
-        return None
-    return LLMClient(
-        base_url=(config or {}).get("api_base_url") or "",
-        api_key=api_key,
-        model=(config or {}).get("model_name") or "",
-        max_tokens=int((config or {}).get("max_tokens") or 2048),
-        temperature=float((config or {}).get("temperature") or 0.7),
-    )
 
 
 async def generate_report_payload(
     db: AsyncSession,
     report_type: str,
-    raise_ai_error: bool = False,
 ) -> dict:
-    llm = await _get_llm(db)
-    try:
-        if report_type == "daily":
-            return await daily_brief(db, llm, raise_ai_error=raise_ai_error)
-        if report_type == "weekly":
-            return await generate_weekly_report(db, llm, raise_ai_error=raise_ai_error)
-        raise ValueError(f"Unsupported report type: {report_type}")
-    finally:
-        if llm:
-            await llm.close()
+    if report_type == "daily":
+        return await daily_brief(db)
+    if report_type == "weekly":
+        return await generate_weekly_report(db)
+    raise ValueError(f"Unsupported report type: {report_type}")
 
 
 async def get_report_snapshot(db: AsyncSession, report_type: str) -> dict:
@@ -590,9 +495,8 @@ async def refresh_report_snapshot(
     report_type: str,
     trigger: str = "manual",
     now: datetime | None = None,
-    raise_ai_error: bool = False,
 ) -> dict:
-    report = await generate_report_payload(db, report_type, raise_ai_error=raise_ai_error)
+    report = await generate_report_payload(db, report_type)
     return await save_report_snapshot(db, report_type, report, trigger, now)
 
 

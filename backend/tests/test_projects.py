@@ -121,11 +121,11 @@ async def test_project_status_is_derived_from_tasks(client: AsyncClient, auth_he
     assert active_res.json()["status"] == "active"
 
     progress_res = await client.post(
-        "/api/v1/ai/progress-import/commit",
-        json={"updates": [{"task_id": tid, "progress_pct": 100, "note": "Done"}]},
+        f"/api/v1/tasks/{tid}/progress",
+        json={"progress_pct": 100, "note": "Done"},
         headers=auth_headers,
     )
-    assert progress_res.status_code == 200
+    assert progress_res.status_code == 201
     signoff_res = await client.post(f"/api/v1/tasks/{tid}/signoff", headers=auth_headers)
     assert signoff_res.status_code == 200
 

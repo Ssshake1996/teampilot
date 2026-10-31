@@ -13,6 +13,11 @@ from app.services import user_service
 router = APIRouter(prefix="/users", tags=["用户"])
 
 
+async def require_detail(db, current_user, user_id):
+    if current_user.id != user_id and not await user_has_permission(db, current_user, "personnel.view_detail"):
+        raise HTTPException(status_code=403, detail="Permission required: personnel.view_detail")
+
+
 @router.get("", response_model=dict)
 async def list_users(
     page: int = Query(1, ge=1),
@@ -89,6 +94,7 @@ async def get_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await require_detail(db, current_user, user_id)
     user = await user_service.get_user(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -120,6 +126,7 @@ async def get_user_detail_bundle(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await require_detail(db, current_user, user_id)
     data = await user_service.get_user_detail_bundle(db, user_id)
     if not data:
         raise HTTPException(status_code=404, detail="User not found")
@@ -133,6 +140,7 @@ async def get_workload(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await require_detail(db, current_user, user_id)
     return await user_service.get_user_workload(db, user_id)
 
 
@@ -142,6 +150,7 @@ async def get_user_tasks(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await require_detail(db, current_user, user_id)
     return await user_service.get_user_tasks(db, user_id)
 
 
@@ -151,6 +160,7 @@ async def get_user_skills(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await require_detail(db, current_user, user_id)
     return await user_service.get_user_skills(db, user_id)
 
 

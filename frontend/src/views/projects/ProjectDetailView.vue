@@ -5,6 +5,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { projectsApi } from '@/api/projects'
 import { usersApi } from '@/api/users'
+import { fetchAllPages } from '@/utils/pagination'
+import { useProjectUpdates } from '@/composables/useProjectUpdates'
 import { useAuthStore } from '@/stores/auth'
 import type { Project, ProjectMember, User } from '@/types/models'
 import { ProjectStatus } from '@/types/enums'
@@ -18,8 +20,11 @@ const canManageMembers = computed(() => auth.can('project.member.manage'))
 const project = ref<Project | null>(null)
 const members = ref<ProjectMember[]>([])
 const allUsers = ref<User[]>([])
-const activeTab = ref('board')
+const activeTab = ref('members')
+useProjectUpdates(async pid => { if (!pid || pid === projectId) await Promise.all([fetchProject(), fetchMembers()]) })
 const loading = ref(false)
+const projectError = ref('')
+const membersError = ref('')
 
 // Add member dialog
 const addMemberVisible = ref(false)
@@ -51,29 +56,30 @@ const roleLabel: Record<string, string> = {
 
 async function fetchProject() {
   loading.value = true
+  projectError.value = ''
   try {
     const res = await projectsApi.get(projectId)
     project.value = res.data
   } catch {
-    ElMessage.error('加载项目信息失败')
+    projectError.value = '加载项目信息失败，请重试。'
   } finally {
     loading.value = false
   }
 }
 
 async function fetchMembers() {
+  membersError.value = ''
   try {
     const res = await projectsApi.getMembers(projectId)
     members.value = res.data
   } catch {
-    ElMessage.error('加载成员列表失败')
+    membersError.value = '加载成员列表失败，请重试。'
   }
 }
 
 async function fetchUsers() {
   try {
-    const res = await usersApi.list(1, 100)
-    allUsers.value = res.data.items
+    allUsers.value = await fetchAllPages(page => usersApi.list(page, 500))
   } catch {
     ElMessage.error('加载用户列表失败')
   }
@@ -137,6 +143,7 @@ onMounted(async () => {
 
 <template>
   <div v-loading="loading" class="project-detail-view">
+    <el-alert v-if="projectError" type="error" :closable="false" show-icon :title="projectError"><el-button link @click="fetchProject">重试</el-button></el-alert>
     <template v-if="project">
       <!-- Project Header -->
       <div class="project-header">
@@ -160,6 +167,8 @@ onMounted(async () => {
             <strong>{{ project.contact_names?.join('、') || project.owner_name || '-' }}</strong>
             <span>项目成员数</span>
             <strong>{{ project.member_count }}</strong>
+            <span>任务完成率</span>
+            <strong>{{ project.completed_count }}/{{ project.task_count }}（已完成任务 / 全部任务）</strong>
           </div>
         </div>
         <div class="project-section">
@@ -174,21 +183,8 @@ onMounted(async () => {
 
       <!-- Tabs -->
       <el-tabs v-model="activeTab" @tab-click="handleTabClick">
-        <el-tab-pane label="看板" name="board">
-          <div class="tab-placeholder">
-            <el-button type="primary" @click="router.push(`/projects/${projectId}/board`)">
-              进入看板视图
-            </el-button>
-          </div>
-        </el-tab-pane>
-
-        <el-tab-pane label="列表" name="list">
-          <div class="tab-placeholder">
-            <el-button type="primary" @click="router.push(`/projects/${projectId}/tasks`)">
-              进入列表视图
-            </el-button>
-          </div>
-        </el-tab-pane>
+        <el-tab-pane label="看板" name="board" />
+        <el-tab-pane label="列表" name="list" />
 
         <el-tab-pane label="成员" name="members">
           <div class="members-section">
@@ -199,6 +195,7 @@ onMounted(async () => {
               </el-button>
             </div>
 
+            <el-alert v-if="membersError" type="error" :closable="false" :title="membersError"><el-button link @click="fetchMembers">重试</el-button></el-alert>
             <el-table :data="members" stripe style="width: 100%">
               <el-table-column prop="full_name" label="姓名" min-width="150" />
               <el-table-column prop="role_in_project" label="角色" width="120">
@@ -225,7 +222,7 @@ onMounted(async () => {
               </el-table-column>
             </el-table>
 
-            <el-empty v-if="members.length === 0" description="暂无成员" />
+            <el-empty v-if="members.length === 0 && !membersError" description="暂无成员" />
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -256,8 +253,9 @@ onMounted(async () => {
         </el-form-item>
         <el-form-item label="角色">
           <el-select v-model="addMemberForm.role" style="width: 100%">
-            <el-option label="管理员" value="admin" />
+            <el-option label="接口人" value="lead" />
             <el-option label="成员" value="member" />
+            <el-option label="观察者" value="observer" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -271,7 +269,7 @@ onMounted(async () => {
 
 <style scoped>
 .project-detail-view {
-  padding: 20px;
+  padding: 0;
 }
 
 .project-header {
@@ -279,31 +277,36 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .header-left {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .header-left h2 {
   margin: 0;
   font-size: 22px;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .project-overview {
   display: grid;
   gap: 12px;
   margin: 0 0 24px 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .project-section {
-  padding: 16px 18px;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  background: #fff;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .project-section h3 {
@@ -358,4 +361,5 @@ onMounted(async () => {
 .owner-label {
   color: #c0c4cc;
 }
+@media (max-width: 900px) { .project-overview { grid-template-columns: 1fr; gap: 0; } }
 </style>

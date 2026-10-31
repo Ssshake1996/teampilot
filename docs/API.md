@@ -54,11 +54,11 @@ id, username, full_name, role, department, bio, avatar_url, is_active, created_a
 | 技能 | `/api/v1/skills` | 技能标签管理 |
 | 能力 | `/api/v1/capabilities` | 能力档案 |
 | 仪表盘 | `/api/v1/dashboard` | 统计、四象限、项目进度 |
-| AI | `/api/v1/ai` | 推荐、分析、风险、配置 |
+| DSH | `/api/v1/integrations/dsh` | 有界上下文、草稿、审批、幂等提交 |
 | 报告 | `/api/v1/reports` | 巡检报告缓存、刷新、周报生成、邮件发送 |
 | 数据 Skill | `/api/v1/data-connectors`, `/api/v1/tasks/{task_id}/data-skills` | 内部平台 API 连接器、任务数据采集 Skill、执行快照和采纳进展 |
 | 权限 | `/api/v1/permissions` | 角色权限管理 |
-| WebSocket | `/ws/{token}` | 实时事件推送 |
+| WebSocket | `/ws` | 建连后用首条认证消息发送 Token，不放 URL |
 
 权限接口补充：
 
@@ -90,7 +90,7 @@ curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/signoff \
 
 ### 数据连接器
 
-连接器由系统设置中的“数据连接器”维护，需要 `ai.config` 权限。
+连接器由系统设置中的“数据连接器”维护，需要 `system.connector_manage` 权限。
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/data-connectors \
@@ -151,7 +151,7 @@ curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/data-skills/$SKILL_ID/c
 curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/data-skills/$SKILL_ID/run \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"params":{},"use_ai":true}'
+  -d '{"params":{}}'
 
 # 4. 采纳执行结果为任务进展
 curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/data-skills/runs/$RUN_ID/adopt \
@@ -160,85 +160,37 @@ curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/data-skills/runs/$RUN_I
   -d '{}'
 ```
 
-## AI 接口 (SSE 流式)
+## DSH 集成
 
-AI 接口使用 Server-Sent Events 流式返回:
+旧 `/api/v1/ai` 路由已删除。自然语言分析在 DSH 原生 Agent 中进行，TeamPilot 不调用模型。
+前缀为 `/api/v1/integrations/dsh`，每个接口都使用真实业务用户 JWT。
 
-```bash
-curl -N http://localhost:8000/api/v1/ai/estimate-task \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"project_id":"xxx","title":"任务标题","goal":"任务目标","description":"描述"}'
+| 方法 | 路径 | 行为 |
+| --- | --- | --- |
+| GET | `/projects/{id}/context?page=1&page_size=50` | 有界任务页和整个项目 revision；最大页长 100，显式返回 truncated |
+| POST | `/drafts` | `{payload: ...}`，严格区分 project_plan/task_create/progress/task_update |
+| GET | `/drafts` | 当前作者最近 50 份草稿，不返回确认秘密 |
+| GET | `/drafts/{id}` | 当前作者草稿和前后值预览 |
+| POST | `/drafts/{id}/approve` | 用户界面审阅后发送 payload_hash；确认 Token 仅交给插件 Host |
+| POST | `/drafts/{id}/commit` | Host 发送 confirmation_token；重新检查 RBAC/revision，单事务幂等写入 |
+| POST | `/drafts/{id}/cancel` | 撤销未提交草稿和确认凭据 |
 
-# 返回:
-# event: status
-# data: {"message": "正在分析团队成员技能..."}
-#
-# event: result  
-# data: {"estimated_hours": 8, "recommended_assignees": [...]}
-```
+草稿有效期一小时，批准有效期五分钟。作者不匹配返回 404，未经批准返回 403，项目已改变或批准过期返回 409，非法字段返回 422。Agent 无 approve 工具，也不能接收确认 Token。原生工具提交还需 DSH 自身审批。
 
-### 群消息进展导入
-
-项目管理页汇总栏右侧的“进展更新”按钮调用以下两步接口。默认识别范围是所有未归档项目中的未完成任务，适合一段群消息同时包含多个项目进展。
-
-1. AI 识别预览：
-
-```bash
-curl -N http://localhost:8000/api/v1/ai/progress-import/preview \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"text":"张三\n2026-04-16 18:00\n项目A任务完成到80%，项目B任务已完成"}'
-```
-
-返回 SSE `result`，包含 `updates` 和 `unmatched`。`updates` 中会给出匹配项目、匹配任务、进度百分比、进展说明和置信度。
-
-2. 确认同步：
-
-```bash
-curl -X POST http://localhost:8000/api/v1/ai/progress-import/commit \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"updates":[{"task_id":"xxx","progress_pct":80,"note":"任务A完成到80%","person_name":"张三","reported_at":"2026-04-16 18:00"}]}'
-```
-
-确认后会写入 `task_events` 的进度事件，并触发前端刷新。进度达到 100% 的任务仍需会签后才会标记为已完成。
-
-### AI 项目搭建与管理助手
-
-项目管理页还提供以下 AI 入口，用于减少计划搭建和日常巡检成本：
-
-- `POST /api/v1/ai/project-plan/preview`：根据自然语言目标生成项目计划、任务树、负责人建议、工时和日期。
-- `POST /api/v1/ai/project-plan/commit`：确认后创建项目和任务树。
-- `POST /api/v1/ai/daily-brief`：跨未归档项目生成巡检报告，包含风险、逾期/阻塞、进展快慢 TOP3、优先推进和待会签候选。
-- `POST /api/v1/ai/signoff-assist`：根据任务进展历史和子任务给出会签建议。
-- `POST /api/v1/ai/project-retrospective`：根据项目任务树和进展历史生成项目复盘。
-
-示例：
-
-```bash
-curl -N http://localhost:8000/api/v1/ai/project-plan/preview \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"两周内搭建内部项目进度管理系统，包含人员、权限、任务、AI进展识别"}'
-
-curl -N http://localhost:8000/api/v1/ai/daily-brief \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
+新增任务复用现有权重重分配及祖先重新打开规则；进度达到 100% 仍不会自动会签。
+安装与完整流程见 [插件说明](../plugins/packages/dsh-teampilot/README.md)。
 
 ## 报告与邮件发送
 
 项目管理页的“巡检报告”支持日报和周报。打开弹窗和切换类型只读取缓存；只有点击“刷新”才重新生成。
 
-- 日报：每天 07:00 自动生成一次；手动刷新时优先使用 AI 生成。
-- 周报：每周五 12:30 自动生成一次；手动刷新时优先使用 AI 分析；项目进展情况表由系统生成，覆盖所有未归档项目。
+- 日报：每天 07:00 自动生成一次；手动刷新使用确定性规则。
+- 周报：每周五 12:30 自动生成一次；手动刷新使用确定性规则，项目进展情况表覆盖所有未归档项目。
 - 读取缓存：调用 `GET /api/v1/reports/snapshot?report_type=daily|weekly`。
-- 手动刷新：调用 `POST /api/v1/reports/refresh`。前端不设置请求超时，等待后端返回；如果后端访问 AI 超时或失败，会返回 504/502 和结构化错误详情。
+- 手动刷新：调用 `POST /api/v1/reports/refresh`，不调用模型。
 - 邮件发送：调用 `POST /api/v1/reports/send`。
 
-日报和周报返回格式固定。后端会规范化 AI 输出，确保包含：
+日报和周报返回格式固定，确定性规则输出包含：
 
 ```text
 summary, risky_projects, overdue_blocked_tasks,
@@ -247,7 +199,7 @@ priority_tasks, signoff_pending,
 source, source_label
 ```
 
-其中 `summary` 是字符串，列表字段都是字符串数组；AI 缺字段或返回类型不一致时，后端会补齐默认结论。
+其中 `summary` 是字符串，列表字段都是字符串数组。
 
 周报额外包含：
 
@@ -271,17 +223,6 @@ curl -X POST http://localhost:8000/api/v1/reports/refresh \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"report_type":"daily"}'
-```
-
-AI 超时或失败时，`detail` 会包含：
-
-```json
-{
-  "message": "AI 生成巡检报告失败",
-  "status_code": 504,
-  "error_type": "ReadTimeout",
-  "backend_detail": "AI read timed out"
-}
 ```
 
 发送接口示例：

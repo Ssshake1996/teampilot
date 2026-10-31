@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { aiApi } from '@/api/ai'
+
 import { skillsApi } from '@/api/skills'
 import { dataSkillsApi } from '@/api/dataSkills'
 import http from '@/api/index'
@@ -9,91 +9,24 @@ import { useAuthStore } from '@/stores/auth'
 import type { DataConnector, Skill } from '@/types/models'
 
 const authStore = useAuthStore()
-const activeTab = ref('ai-config')
+const activeTab = ref(
+  authStore.can('system.role_manage') ? 'permissions'
+    : authStore.can('system.skill_manage') ? 'skill-management'
+      : authStore.can('system.connector_manage') ? 'data-connectors' : '',
+)
 
-// ==================== AI Config ====================
-const aiConfig = ref({
-  api_base_url: '',
-  api_key: '',
-  model_name: '',
-  temperature: 0.7,
-  max_tokens: 2048,
-})
-const aiConfigLoading = ref(false)
-const savingConfig = ref(false)
-const testingConnection = ref(false)
-const showApiKey = ref(false)
-const apiKeyPlaceholder = ref('sk-...')
 
-async function loadAiConfig() {
-  aiConfigLoading.value = true
-  try {
-    const res = await aiApi.getConfig()
-    const data = res.data as any
-    aiConfig.value = {
-      api_base_url: data.api_base_url || '',
-      api_key: '',  // API Key 不回显，需要用户重新输入才会更新
-      model_name: data.model_name || '',
-      temperature: data.temperature ?? 0.7,
-      max_tokens: data.max_tokens ?? 2048,
-    }
-    // 显示脱敏的 key 作为 placeholder 提示
-    apiKeyPlaceholder.value = data.api_key_masked || 'sk-...'
-  } catch {
-    // Config may not exist yet
-  } finally {
-    aiConfigLoading.value = false
-  }
-}
 
-async function saveAiConfig() {
-  savingConfig.value = true
-  try {
-    await aiApi.updateConfig(aiConfig.value)
-    ElMessage.success('AI 配置已保存')
-  } catch {
-    ElMessage.error('保存失败，请检查配置')
-  } finally {
-    savingConfig.value = false
-  }
-}
 
-async function testConnection() {
-  testingConnection.value = true
-  try {
-    const res = await aiApi.testConnection()
-    const result = res.data as {
-      success: boolean
-      message?: string
-      status_code?: number | null
-      error_type?: string | null
-      backend_detail?: string | null
-    }
-    if (result.success) {
-      ElMessage.success(result.message || '连接成功')
-    } else {
-      await ElMessageBox.alert(
-        [
-          `消息: ${result.message || '连接失败'}`,
-          `状态码: ${result.status_code ?? '-'}`,
-          `错误类型: ${result.error_type || '-'}`,
-          `后端返回: ${result.backend_detail || '-'}`,
-        ].join('\n'),
-        '测试连接失败',
-        { confirmButtonText: '知道了' },
-      )
-    }
-  } catch (err: any) {
-    ElMessage.error(err?.response?.data?.detail || err?.message || '连接测试失败，请检查配置是否正确')
-  } finally {
-    testingConnection.value = false
-  }
-}
+
+
 
 // ==================== RBAC Permission Management ====================
 const permCatalog = ref<Record<string, { label: string; items: [string, string][] }>>({})
 const rolesData = ref<Record<string, { permissions: string[]; builtin: boolean }>>({})
 const permsLoading = ref(false)
+const permsError = ref('')
+const permsUpdatedAt = ref('')
 const savingRole = ref('')
 const activeRole = ref('admin')
 const builtinLabels: Record<string, string> = { admin: '管理员', manager: '经理', member: '成员' }
@@ -110,6 +43,7 @@ function isBuiltin(r: string) { return rolesData.value[r]?.builtin ?? false }
 
 async function loadPermissions() {
   permsLoading.value = true
+  permsError.value = ''
   try {
     const [catRes, rolesRes] = await Promise.all([
       http.get('/permissions/catalog'),
@@ -117,7 +51,8 @@ async function loadPermissions() {
     ])
     permCatalog.value = catRes.data
     rolesData.value = rolesRes.data
-  } catch {}
+    permsUpdatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  } catch { permsError.value = '权限配置加载失败，已有配置可能不是最新数据。请重试。' }
   finally { permsLoading.value = false }
 }
 
@@ -144,15 +79,17 @@ async function saveRolePerms(role: string) {
 }
 
 async function handleAddRole() {
+  if (addingRole.value) return
   if (!newRoleName.value.trim()) { ElMessage.warning('请输入角色名称'); return }
   addingRole.value = true
+  const name = newRoleName.value.trim()
   try {
-    await http.post('/permissions/roles', { name: newRoleName.value.trim(), copy_from: newRoleCopyFrom.value })
+    await http.post('/permissions/roles', { name, copy_from: newRoleCopyFrom.value })
     ElMessage.success('角色已创建')
     addRoleDialogVisible.value = false
     newRoleName.value = ''; newRoleCopyFrom.value = ''
     await loadPermissions()
-    activeRole.value = newRoleName.value.trim() || activeRole.value
+    activeRole.value = name
   } catch (e: any) { ElMessage.error(e.response?.data?.detail || '创建失败') }
   finally { addingRole.value = false }
 }
@@ -170,6 +107,9 @@ async function handleDeleteRole(role: string) {
 // ==================== Skill Management ====================
 const skillList = ref<Skill[]>([])
 const skillsLoading = ref(false)
+const skillsError = ref('')
+const skillsUpdatedAt = ref('')
+const skillSaving = ref(false)
 const categoryFilter = ref('')
 const categories = ref<string[]>([])
 
@@ -183,6 +123,7 @@ const skillForm = ref({
 
 async function loadSkills() {
   skillsLoading.value = true
+  skillsError.value = ''
   try {
     const res = await skillsApi.list(categoryFilter.value || undefined)
     skillList.value = res.data
@@ -192,6 +133,9 @@ async function loadSkills() {
       if (s.category) catSet.add(s.category)
     })
     categories.value = Array.from(catSet).sort()
+    skillsUpdatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  } catch {
+    skillsError.value = '技能列表加载失败，已保留已有数据。'
   } finally {
     skillsLoading.value = false
   }
@@ -214,10 +158,12 @@ function openEditSkill(skill: Skill) {
 }
 
 async function saveSkill() {
+  if (skillSaving.value) return
   if (!skillForm.value.name.trim()) {
     ElMessage.warning('请输入技能名称')
     return
   }
+  skillSaving.value = true
   try {
     const payload = {
       name: skillForm.value.name.trim(),
@@ -235,7 +181,7 @@ async function saveSkill() {
     loadSkills()
   } catch {
     ElMessage.error('保存失败')
-  }
+  } finally { skillSaving.value = false }
 }
 
 async function deleteSkill(skill: Skill) {
@@ -260,6 +206,8 @@ function handleCategoryFilterChange() {
 // ==================== Data Connector Management ====================
 const connectorList = ref<DataConnector[]>([])
 const connectorsLoading = ref(false)
+const connectorsError = ref('')
+const connectorsUpdatedAt = ref('')
 const connectorDialogVisible = ref(false)
 const editingConnector = ref<DataConnector | null>(null)
 const connectorSaving = ref(false)
@@ -278,11 +226,13 @@ const connectorForm = ref({
 
 async function loadConnectors() {
   connectorsLoading.value = true
+  connectorsError.value = ''
   try {
     const res = await dataSkillsApi.listConnectors()
     connectorList.value = res.data
+    connectorsUpdatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   } catch {
-    connectorList.value = []
+    connectorsError.value = '连接器列表加载失败，已保留已有数据。'
   } finally {
     connectorsLoading.value = false
   }
@@ -391,53 +341,20 @@ async function deleteConnector(connector: DataConnector) {
   }
 }
 
-// ==================== AI Prompt Config ====================
-const prompts = ref<{ key: string; label: string; value: string; default: string; is_custom: boolean }[]>([])
-const promptsLoading = ref(false)
-const savingPromptKey = ref('')
 
-async function loadPrompts() {
-  promptsLoading.value = true
-  try {
-    const res = await aiApi.getPrompts()
-    prompts.value = res.data
-  } catch { /* not configured */ }
-  finally { promptsLoading.value = false }
-}
 
-async function savePrompt(p: any) {
-  savingPromptKey.value = p.key
-  try {
-    await aiApi.updatePrompt(p.key, p.value)
-    p.is_custom = !!p.value.trim()
-    ElMessage.success(`"${p.label}" 已保存`)
-  } catch { ElMessage.error('保存失败') }
-  finally { savingPromptKey.value = '' }
-}
 
-function resetPrompt(p: any) {
-  p.value = ''
-  savePrompt(p)
-}
 
 // ==================== Tab Change ====================
 function handleTabChange(name: string | number) {
   const tab = String(name)
-  if (tab === 'ai-config') {
-    loadAiConfig()
-  } else if (tab === 'permissions') {
-    loadPermissions()
-  } else if (tab === 'skill-management') {
-    loadSkills()
-  } else if (tab === 'data-connectors') {
-    loadConnectors()
-  } else if (tab === 'ai-prompts') {
-    loadPrompts()
-  }
+  if (tab === 'permissions' && authStore.can('system.role_manage')) loadPermissions()
+  else if (tab === 'skill-management' && authStore.can('system.skill_manage')) loadSkills()
+  else if (tab === 'data-connectors' && authStore.can('system.connector_manage')) loadConnectors()
 }
 
 onMounted(() => {
-  loadAiConfig()
+  handleTabChange(activeTab.value)
 })
 </script>
 
@@ -445,79 +362,13 @@ onMounted(() => {
   <div class="settings-view">
     <h2 class="page-title">系统设置</h2>
 
-    <el-tabs v-model="activeTab" @tab-change="handleTabChange">
-      <!-- AI Config Tab -->
-      <el-tab-pane label="AI配置" name="ai-config">
-        <el-card v-loading="aiConfigLoading">
-          <el-form label-width="120px" class="config-form">
-            <el-form-item label="API 地址">
-              <el-input
-                v-model="aiConfig.api_base_url"
-                placeholder="https://api.openai.com/v1"
-              />
-            </el-form-item>
-            <el-form-item label="API Key">
-              <el-input
-                v-model="aiConfig.api_key"
-                :type="showApiKey ? 'text' : 'password'"
-                :placeholder="apiKeyPlaceholder"
-              >
-                <template #suffix>
-                  <span
-                    class="api-key-toggle"
-                    @click="showApiKey = !showApiKey"
-                    style="cursor:pointer; color:#909399; font-size:12px"
-                  >
-                    {{ showApiKey ? '隐藏' : '显示' }}
-                  </span>
-                </template>
-              </el-input>
-              <div style="font-size:12px; color:#909399; margin-top:4px">
-                留空表示不修改已保存的 Key
-              </div>
-            </el-form-item>
-            <el-form-item label="模型名称">
-              <el-input
-                v-model="aiConfig.model_name"
-                placeholder="gpt-4"
-              />
-            </el-form-item>
-            <el-form-item label="Temperature">
-              <div class="slider-wrapper">
-                <el-slider
-                  v-model="aiConfig.temperature"
-                  :min="0"
-                  :max="1"
-                  :step="0.1"
-                  show-stops
-                />
-                <span class="slider-value">{{ aiConfig.temperature }}</span>
-              </div>
-            </el-form-item>
-            <el-form-item label="Max Tokens">
-              <el-input-number
-                v-model="aiConfig.max_tokens"
-                :min="1"
-                :max="128000"
-                :step="256"
-              />
-            </el-form-item>
-            <el-form-item>
-              <div class="config-actions">
-                <el-button type="primary" :loading="savingConfig" @click="saveAiConfig">
-                  保存配置
-                </el-button>
-                <el-button :loading="testingConnection" @click="testConnection">
-                  测试连接
-                </el-button>
-              </div>
-            </el-form-item>
-          </el-form>
-        </el-card>
-      </el-tab-pane>
+    <el-empty v-if="!activeTab" description="暂无系统设置权限" />
+    <el-tabs v-else v-model="activeTab" @tab-change="handleTabChange">
 
       <!-- User Management Tab -->
-      <el-tab-pane label="权限管理" name="permissions">
+      <el-tab-pane v-if="authStore.can('system.role_manage')" label="权限管理" name="permissions">
+        <p v-if="permsUpdatedAt" class="settings-data-status">上次更新 {{ permsUpdatedAt }}</p>
+        <el-alert v-if="permsError" :title="permsError" type="error" :closable="false" show-icon><el-button text @click="loadPermissions">重试</el-button></el-alert>
         <el-card v-loading="permsLoading">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
             <span style="color:#909399;font-size:13px">配置各角色权限。管理员默认全部权限。支持自定义角色。</span>
@@ -569,7 +420,9 @@ onMounted(() => {
       </el-tab-pane>
 
       <!-- Skill Management Tab -->
-      <el-tab-pane label="技能管理" name="skill-management">
+      <el-tab-pane v-if="authStore.can('system.skill_manage')" label="技能管理" name="skill-management">
+        <p v-if="skillsUpdatedAt" class="settings-data-status">上次更新 {{ skillsUpdatedAt }}</p>
+        <el-alert v-if="skillsError" :title="skillsError" type="error" :closable="false" show-icon><el-button text @click="loadSkills">重试</el-button></el-alert>
         <el-card v-loading="skillsLoading">
           <div class="skill-toolbar">
             <el-select
@@ -642,12 +495,14 @@ onMounted(() => {
           </el-form>
           <template #footer>
             <el-button @click="skillDialogVisible = false">取消</el-button>
-            <el-button type="primary" @click="saveSkill">确定</el-button>
+            <el-button type="primary" :loading="skillSaving" @click="saveSkill">确定</el-button>
           </template>
         </el-dialog>
       </el-tab-pane>
 
-      <el-tab-pane label="数据连接器" name="data-connectors">
+      <el-tab-pane v-if="authStore.can('system.connector_manage')" label="数据连接器" name="data-connectors">
+        <p v-if="connectorsUpdatedAt" class="settings-data-status">上次更新 {{ connectorsUpdatedAt }}</p>
+        <el-alert v-if="connectorsError" :title="connectorsError" type="error" :closable="false" show-icon><el-button text @click="loadConnectors">重试</el-button></el-alert>
         <el-card v-loading="connectorsLoading">
           <div class="connector-toolbar">
             <span class="connector-hint">内部平台 API 白名单，任务数据 Skill 只能调用这里配置的平台。</span>
@@ -755,38 +610,6 @@ onMounted(() => {
         </el-dialog>
       </el-tab-pane>
 
-      <!-- AI Prompt Config Tab -->
-      <el-tab-pane label="AI Prompt" name="ai-prompts">
-        <el-card v-loading="promptsLoading">
-          <div style="margin-bottom:12px;color:#909399;font-size:13px">
-            自定义各 AI 功能的 System Prompt。留空则使用系统默认值。
-          </div>
-          <el-collapse v-if="prompts.length">
-            <el-collapse-item v-for="p in prompts" :key="p.key" :name="p.key">
-              <template #title>
-                <span style="font-weight:600">{{ p.label }}</span>
-                <el-tag v-if="p.is_custom" type="warning" size="small" style="margin-left:8px">已自定义</el-tag>
-                <el-tag v-else type="info" size="small" effect="plain" style="margin-left:8px">默认</el-tag>
-              </template>
-              <div style="margin-bottom:8px">
-                <el-input
-                  v-model="p.value"
-                  type="textarea"
-                  :rows="8"
-                  :placeholder="p.default"
-                  style="font-family:monospace;font-size:13px"
-                />
-              </div>
-              <div style="display:flex;gap:8px">
-                <el-button type="primary" size="small" :loading="savingPromptKey === p.key" @click="savePrompt(p)">保存</el-button>
-                <el-button size="small" @click="resetPrompt(p)">恢复默认</el-button>
-                <el-button size="small" type="info" link @click="p.value = p.default">查看默认值</el-button>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
-          <el-empty v-else description="请先配置 AI 连接" />
-        </el-card>
-      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -795,6 +618,7 @@ onMounted(() => {
 .settings-view {
   padding: 0;
 }
+.settings-data-status { font-size: 12px; color: var(--muted); margin: 8px 0; }
 
 .page-title {
   margin: 0 0 20px 0;
@@ -803,54 +627,13 @@ onMounted(() => {
   color: #303133;
 }
 
-.config-form {
-  max-width: 600px;
-}
-
-.slider-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  width: 100%;
-}
-
-.slider-wrapper .el-slider {
-  flex: 1;
-}
-
-.slider-value {
-  width: 36px;
-  text-align: right;
-  font-size: 14px;
-  color: #606266;
-  flex-shrink: 0;
-}
-
-.api-key-toggle {
-  cursor: pointer;
-  color: #909399;
-}
-
-.api-key-toggle:hover {
-  color: #409eff;
-}
-
-.config-actions {
-  display: flex;
-  gap: 12px;
-}
-
-.pagination-wrapper {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
-}
-
 .skill-toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .connector-toolbar {

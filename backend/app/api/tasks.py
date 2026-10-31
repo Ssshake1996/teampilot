@@ -1,20 +1,30 @@
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
 
 from app.database import get_db
 from app.dependencies import get_current_user, require_permission, user_has_permission
-from app.models.task import TaskStatus
+from app.models.task import TaskStatus, TaskPriority
 from app.models.user import User
+from app.models.task_event import TaskEvent, TaskEventType
 from app.schemas.task import (
     TaskAssign, TaskCreate, TaskOut, TaskProgressCreate, TaskProgressOut,
     TaskReorder, TaskUpdate,
 )
 from app.services import task_service
-from app.websocket.events import emit_task_event, emit_progress_event
+from app.websocket.events import queue_project_event
 
 router = APIRouter(tags=["任务"])
+
+
+async def create_validated_task(db, project_id, data, creator_id):
+    try:
+        return await task_service.create_task(db, project_id, data, creator_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 async def require_task_update_permissions(db: AsyncSession, user: User, data: TaskUpdate) -> None:
@@ -46,10 +56,13 @@ async def list_tasks(
     user_id: uuid.UUID | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
+    priority: TaskPriority | None = None,
+    sort_by: Literal["created_at", "title", "status", "priority", "assignee_name", "deadline", "progress_pct"] | None = None,
+    sort_order: Literal["asc", "desc"] = "desc",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    items, total = await task_service.list_tasks(db, project_id, status, user_id, page, page_size)
+    items, total = await task_service.list_tasks(db, project_id, status, user_id, page, page_size, priority, sort_by, sort_order)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -60,9 +73,8 @@ async def create_task(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("task.create")),
 ):
-    task = await task_service.create_task(db, project_id, data, current_user.id)
+    task = await create_validated_task(db, project_id, data, current_user.id)
     await db.refresh(task)
-    await emit_task_event("task.created", {"task_id": str(task.id), "project_id": str(project_id)})
     return await task_service.task_to_out(db, task)
 
 
@@ -73,6 +85,7 @@ async def reorder_tasks(
     current_user: User = Depends(require_permission("task.edit")),
 ):
     await task_service.reorder_tasks(db, [i.model_dump() for i in items])
+    queue_project_event(db)
     return {"message": "Reordered"}
 
 
@@ -102,7 +115,6 @@ async def update_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    await emit_task_event("task.updated", {"task_id": str(task_id)})
     return await task_service.task_to_out(db, task)
 
 
@@ -115,7 +127,6 @@ async def delete_task(
     ok = await task_service.delete_task(db, task_id, current_user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="Task not found")
-    await emit_task_event("task.deleted", {"task_id": str(task_id)})
     return {"message": "Task deleted"}
 
 
@@ -131,7 +142,6 @@ async def restore_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    await emit_task_event("task.restored", {"task_id": str(task_id)})
     return await task_service.task_to_out(db, task)
 
 
@@ -147,7 +157,6 @@ async def signoff_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    await emit_task_event("task.signed_off", {"task_id": str(task_id), "signed_off_by": str(current_user.id)})
     return await task_service.task_to_out(db, task)
 
 
@@ -161,10 +170,6 @@ async def assign_task(
     task = await task_service.assign_task(db, task_id, data.assignee_ids)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    await emit_task_event("task.assigned", {
-        "task_id": str(task_id),
-        "assignee_ids": [str(item) for item in data.assignee_ids],
-    })
     return await task_service.task_to_out(db, task)
 
 
@@ -181,7 +186,6 @@ async def log_progress(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await emit_progress_event({"task_id": str(task_id), "progress_pct": data.progress_pct})
     return {
         "id": entry.id, "task_id": entry.task_id, "user_id": entry.actor_id,
         "user_name": current_user.full_name, "progress_pct": entry.progress_pct,
@@ -209,6 +213,22 @@ async def get_subtasks(
     return await task_service.get_subtasks(db, task_id)
 
 
+@router.get("/tasks/{task_id}/audit")
+async def get_task_audit(
+    task_id: uuid.UUID,
+    page: int = Query(1, ge=1),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission("progress.view")),
+):
+    if not await task_service.get_task(db, task_id, include_deleted=True):
+        raise HTTPException(status_code=404, detail="Task not found")
+    filters = [TaskEvent.task_id == task_id, TaskEvent.event_type.in_([TaskEventType.SIGNOFF, TaskEventType.REOPEN])]
+    total = (await db.execute(select(func.count(TaskEvent.id)).where(*filters))).scalar()
+    rows = (await db.execute(select(TaskEvent, User.full_name).join(User, TaskEvent.actor_id == User.id)
+        .where(*filters).order_by(TaskEvent.created_at.desc(), TaskEvent.id.desc()).offset((page - 1) * 50).limit(50))).all()
+    return {"items": [{"id": event.id, "event_type": event.event_type.value, "user_name": name, "created_at": event.created_at} for event, name in rows], "total": total, "page": page, "page_size": 50}
+
+
 @router.post("/tasks/{task_id}/subtasks", status_code=201)
 async def create_subtask(
     task_id: uuid.UUID,
@@ -221,9 +241,8 @@ async def create_subtask(
     if not parent:
         raise HTTPException(status_code=404, detail="Parent task not found")
     data.parent_task_id = task_id
-    task = await task_service.create_task(db, parent.project_id, data, current_user.id)
+    task = await create_validated_task(db, parent.project_id, data, current_user.id)
     await db.refresh(task)
-    await emit_task_event("task.created", {"task_id": str(task.id), "parent_task_id": str(task_id)})
     return await task_service.task_to_out(db, task)
 
 
@@ -234,14 +253,14 @@ async def batch_create_subtasks(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("task.create")),
 ):
-    """Batch create subtasks (used after AI decomposition)."""
+    """Batch create subtasks through the existing business rules."""
     parent = await task_service.get_task(db, task_id)
     if not parent:
         raise HTTPException(status_code=404, detail="Parent task not found")
     created = []
     for s in subtasks:
         s.parent_task_id = task_id
-        task = await task_service.create_task(db, parent.project_id, s, current_user.id)
+        task = await create_validated_task(db, parent.project_id, s, current_user.id)
         await db.refresh(task)
         created.append(await task_service.task_to_out(db, task))
     return created

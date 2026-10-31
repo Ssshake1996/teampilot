@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { tasksApi } from '@/api/tasks'
 import type { Task } from '@/types/models'
 import { TaskStatus } from '@/types/enums'
+import { fetchAllPages } from '@/utils/pagination'
 
 export const useTaskStore = defineStore('task', () => {
   const tasks = ref<Task[]>([])
@@ -14,12 +15,17 @@ export const useTaskStore = defineStore('task', () => {
       .filter((t) => t.status === status && !t.is_deleted)
       .sort((a, b) => a.sort_order - b.sort_order)
 
-  async function fetchTasks(projectId: string, params?: Record<string, any>) {
+  async function fetchTasks(projectId: string, params?: Record<string, any>, all = false) {
     loading.value = true
     try {
-      const res = await tasksApi.list(projectId, params)
-      tasks.value = res.data.items
-      total.value = res.data.total
+      if (all) {
+        tasks.value = await fetchAllPages(page => tasksApi.list(projectId, { ...params, page }))
+        total.value = tasks.value.length
+      } else {
+        const res = await tasksApi.list(projectId, params)
+        tasks.value = res.data.items
+        total.value = res.data.total
+      }
     } finally {
       loading.value = false
     }

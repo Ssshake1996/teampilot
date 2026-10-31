@@ -1,4 +1,6 @@
 import asyncio
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -12,40 +14,17 @@ from app.websocket.manager import manager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from sqlalchemy import func, inspect, select, text
+    from sqlalchemy import func, select
 
-    from app.database import async_session, engine
-    from app.models import Base
-    from app.models.task import Task
+    from app.database import async_session
     from app.models.user import User, UserRole
-    from app.services.task_service import normalize_sibling_weights
+    from app.migrations import upgrade_database
     from app.utils.security import hash_password
 
-    # Auto-create tables on startup; explicit compatibility patches cover local
-    # SQLite/PostgreSQL deployments where Alembic is not configured yet.
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-        def ensure_task_weight_column(sync_conn):
-            columns = {column["name"] for column in inspect(sync_conn).get_columns("tasks")}
-            if "weight" not in columns:
-                sync_conn.execute(
-                    text("ALTER TABLE tasks ADD COLUMN weight NUMERIC(10, 6) NOT NULL DEFAULT 1")
-                )
-
-        await conn.run_sync(ensure_task_weight_column)
+    if settings.AUTO_MIGRATE:
+        await asyncio.to_thread(upgrade_database)
 
     async with async_session() as session:
-        parent_ids = (
-            await session.execute(
-                select(Task.parent_task_id)
-                .where(Task.parent_task_id.isnot(None), Task.is_deleted == False)
-                .distinct()
-            )
-        ).scalars().all()
-        for parent_id in parent_ids:
-            await normalize_sibling_weights(session, parent_id)
-
         count = (await session.execute(select(func.count(User.id)))).scalar()
         if count == 0:
             users = [
@@ -81,7 +60,7 @@ async def lifespan(app: FastAPI):
             await session.commit()
             print(f"[OK] Bootstrap admin created: {settings.ADMIN_USERNAME}")
             if settings.SEED_DEMO_USERS:
-                print("[OK] Demo users created: zhangsan/123456, lisi/123456, wangwu/123456")
+                print("[OK] Development demo accounts created")
         await session.commit()
 
     from app.services.report_service import report_scheduler_loop
@@ -100,7 +79,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Project Task Progress Management System",
     description="Project Task Progress Management System API",
-    version="0.1.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -115,23 +94,50 @@ app.add_middleware(
 app.include_router(api_router)
 
 
-@app.websocket("/ws/{token}")
-async def websocket_endpoint(websocket: WebSocket, token: str):
-    payload = decode_token(token)
-    if not payload:
-        await websocket.close(code=4001)
-        return
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    from sqlalchemy import select
+    from app.database import async_session
+    from app.models.user import User
 
-    user_id = payload.get("sub")
-    if not user_id:
-        await websocket.close(code=4001)
+    origin = websocket.headers.get("origin")
+    allowed = set(settings.CORS_ORIGINS)
+    for item in settings.CORS_ORIGINS:
+        if "://localhost:" in item:
+            allowed.add(item.replace("://localhost:", "://127.0.0.1:"))
+        if "://127.0.0.1:" in item:
+            allowed.add(item.replace("://127.0.0.1:", "://localhost:"))
+    if origin and origin not in allowed:
+        await websocket.close(code=4003)
         return
-
-    await manager.connect(websocket, user_id)
+    await websocket.accept()
     try:
-        while True:
-            await websocket.receive_text()
+        auth = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+        token = auth.get("token") if isinstance(auth, dict) else None
+        if not isinstance(token, str):
+            raise ValueError("Invalid token format")
+        payload = decode_token(token)
+        if not payload or payload.get("type") != "access":
+            raise ValueError("Invalid access token")
+        user_id = str(uuid.UUID(payload["sub"]))
+        async with async_session() as session:
+            active = (await session.execute(select(User.is_active).where(User.id == uuid.UUID(user_id)))).scalar()
+        if not active:
+            raise ValueError("Inactive account")
+    except (ValueError, KeyError, asyncio.TimeoutError, WebSocketDisconnect):
+        await websocket.close(code=4001)
+        return
+    await manager.connect(websocket, user_id, accepted=True)
+    await websocket.send_json({"type": "connection.ready", "data": {}})
+    try:
+        async with asyncio.timeout(max(1, payload["exp"] - time.time())):
+            while True:
+                await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    except TimeoutError:
+        await websocket.close(code=4001)
+    finally:
         manager.disconnect(websocket, user_id)
 
 

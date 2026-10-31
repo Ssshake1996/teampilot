@@ -1,162 +1,60 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
 import { computed } from 'vue'
+import { DataAnalysis, FolderOpened, User, Setting, ArrowDown } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 
+defineProps<{ collapsed?: boolean }>()
+const emit = defineEmits<{ navigate: [] }>()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-
-const activeMenu = computed(() => {
-  const path = route.path
-  if (path.startsWith('/projects')) return '/projects'
-  if (path.startsWith('/personnel')) return '/personnel'
-  if (path.startsWith('/settings')) return '/settings'
-  return '/dashboard'
-})
-
-const roleNames: Record<string, string> = {
-  admin: '系统管理员',
-  manager: '项目经理',
-  member: '成员',
-}
-const roleLabel = computed(() => roleNames[auth.user?.role || 'member'] || '成员')
-
-function handleLogout() {
-  auth.logout()
-  router.push('/login')
-}
+const links = [
+  { path: '/dashboard', label: '仪表盘', icon: DataAnalysis },
+  { path: '/projects', label: '项目管理', icon: FolderOpened },
+  { path: '/personnel', label: '人员管理', icon: User },
+  { path: '/settings', label: '系统设置', icon: Setting },
+]
+const roleLabel = computed(() => ({ admin: '系统管理员', manager: '项目经理', member: '成员' })[auth.user?.role || 'member'])
+function logout() { auth.logout(); router.push('/login') }
 </script>
 
 <template>
-  <div class="sidebar">
-    <div class="sidebar-logo">
-      <div class="brand-block">
-        <h2>TeamPilot</h2>
-        <span class="brand-role">{{ roleLabel }}</span>
-      </div>
-      <el-dropdown trigger="click" class="sidebar-user">
-        <button class="sidebar-user-btn" type="button">
-          <el-avatar :size="28">{{ auth.user?.full_name?.[0] || 'U' }}</el-avatar>
-          <span class="sidebar-user-text">
-            <span class="sidebar-user-name">{{ auth.user?.full_name || '用户' }}</span>
-            <span class="sidebar-user-action">账号操作</span>
-          </span>
-        </button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item @click="handleLogout">退出登录</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-    </div>
-    <el-menu :default-active="activeMenu" router class="sidebar-menu">
-      <el-menu-item index="/dashboard">
-        <el-icon><i class="el-icon-data-analysis" /></el-icon>
-        <span>仪表盘</span>
-      </el-menu-item>
-      <el-menu-item index="/projects">
-        <el-icon><i class="el-icon-folder" /></el-icon>
-        <span>项目管理</span>
-      </el-menu-item>
-      <el-menu-item index="/personnel">
-        <el-icon><i class="el-icon-user" /></el-icon>
-        <span>人员管理</span>
-      </el-menu-item>
-      <el-menu-item index="/settings">
-        <el-icon><i class="el-icon-setting" /></el-icon>
-        <span>系统设置</span>
-      </el-menu-item>
-    </el-menu>
-  </div>
+  <aside class="sidebar" :class="{ collapsed }">
+    <RouterLink to="/dashboard" class="sidebar-brand" @click="emit('navigate')"><span class="brand-mark">T</span><strong v-if="!collapsed">TeamPilot</strong></RouterLink>
+    <nav class="sidebar-menu" aria-label="主导航">
+      <el-tooltip v-for="link in links" :key="link.path" :content="link.label" :disabled="!collapsed" placement="right">
+        <RouterLink :to="link.path" :aria-label="link.label" class="nav-link" :class="{ active: route.path.startsWith(link.path) }" @click="emit('navigate')">
+          <el-icon :size="19"><component :is="link.icon" /></el-icon><span v-if="!collapsed">{{ link.label }}</span>
+        </RouterLink>
+      </el-tooltip>
+    </nav>
+    <el-dropdown trigger="click" class="sidebar-user">
+      <button class="sidebar-user-btn" type="button" aria-label="账号菜单">
+        <el-avatar :size="30">{{ auth.user?.full_name?.[0] || 'U' }}</el-avatar>
+        <span v-if="!collapsed" class="sidebar-user-text"><strong>{{ auth.user?.full_name || '用户' }}</strong><small>{{ roleLabel }}</small></span>
+        <el-icon v-if="!collapsed"><ArrowDown /></el-icon>
+      </button>
+      <template #dropdown><el-dropdown-menu><el-dropdown-item @click="logout">退出登录</el-dropdown-item></el-dropdown-menu></template>
+    </el-dropdown>
+  </aside>
 </template>
 
 <style scoped>
-.sidebar {
-  width: 220px;
-  height: 100vh;
-  background: #304156;
-  color: #fff;
-  display: flex;
-  flex-direction: column;
-}
-.sidebar-logo {
-  min-height: 118px;
-  padding: 14px 14px 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  gap: 12px;
-  background: #263445;
-}
-.brand-block {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 0 0;
-}
-.sidebar-logo h2 {
-  font-size: 18px;
-  color: #409eff;
-  margin: 0;
-  line-height: 1.2;
-}
-.brand-role {
-  font-size: 12px;
-  line-height: 1.2;
-  color: #bfcbd9;
-}
-.sidebar-user {
-  width: 100%;
-}
-.sidebar-user-btn {
-  width: 100%;
-  height: 46px;
-  border: none;
-  border-radius: 6px;
-  background: #304156;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 10px;
-  cursor: pointer;
-}
-.sidebar-user-btn:hover {
-  background: #263445;
-}
-.sidebar-user-text {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  line-height: 1.25;
-}
-.sidebar-user-name {
-  max-width: 128px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  color: #fff;
-}
-.sidebar-user-action {
-  font-size: 11px;
-  color: #bfcbd9;
-}
-.sidebar-menu {
-  flex: 1;
-  border-right: none;
-  background: #304156;
-}
-.sidebar-menu :deep(.el-menu-item) {
-  color: #bfcbd9;
-}
-.sidebar-menu :deep(.el-menu-item:hover),
-.sidebar-menu :deep(.el-menu-item.is-active) {
-  color: #fff;
-  background: #263445;
-}
+.sidebar { width: 216px; flex: 0 0 216px; height: 100%; background: #fff; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.sidebar.collapsed { width: 68px; flex-basis: 68px; }
+.sidebar-brand { height: 72px; display: flex; align-items: center; gap: 10px; padding: 0 20px; font-size: 19px; color: #203a3e; white-space: nowrap; }
+.brand-mark { background: var(--brand); color: white; width: 28px; height: 28px; flex: 0 0 28px; border-radius: 6px; display: grid; place-items: center; font-size: 17px; font-weight: 700; }
+.sidebar-menu { padding: 8px 10px; flex: 1; }
+.nav-link { height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 14px; margin-bottom: 6px; border-radius: 6px; font-size: 14px; color: #59666b; }
+.nav-link:hover { background: #f3f6f7; }
+.nav-link.active { background: #e7f3f1; color: #167267; font-weight: 600; }
+.sidebar-user { border-top: 1px solid var(--border); padding: 14px 12px; }
+.sidebar-user-btn { display: flex; align-items: center; gap: 10px; border: 0; background: transparent; cursor: pointer; width: 100%; text-align: left; color: var(--ink); }
+.sidebar-user-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sidebar-user-text strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-user-text small { font-size: 11px; color: var(--muted); }
+.collapsed .sidebar-brand { padding: 0 20px; }
+.collapsed .nav-link { padding: 0; justify-content: center; }
+.collapsed .sidebar-user-btn { justify-content: center; }
 </style>

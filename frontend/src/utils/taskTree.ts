@@ -10,8 +10,9 @@ export function flattenTaskTree(roots: FlatTaskRow[]): FlatTaskRow[] {
   const list: FlatTaskRow[] = []
   const walk = (items: FlatTaskRow[], depth: number, parentId: string | null) => {
     for (const item of items) {
-      list.push({ ...item, _depth: depth, _parentId: parentId })
-      if (item.children?.length) walk(item.children, depth + 1, item.id)
+      const { children, ...row } = item
+      list.push({ ...row, _depth: depth, _parentId: parentId })
+      if (children?.length) walk(children, depth + 1, item.id)
     }
   }
   walk(roots, 0, null)
@@ -22,8 +23,7 @@ export function taskMap(tree: FlatTaskRow[]) {
   return new Map(tree.map((task) => [task.id, task]))
 }
 
-export function ancestorAtDepth(tree: FlatTaskRow[], task: FlatTaskRow, depth: number) {
-  const byId = taskMap(tree)
+export function ancestorAtDepth(tree: FlatTaskRow[], task: FlatTaskRow, depth: number, byId = taskMap(tree)) {
   let current: FlatTaskRow | undefined = task
   while (current && (current._depth || 0) > depth) {
     current = byId.get(current._parentId || '')
@@ -35,9 +35,9 @@ export function sameTaskSortScope(a: FlatTaskRow | null | undefined, b: FlatTask
   return (a?._parentId || null) === (b?._parentId || null)
 }
 
-export function scopePeerForRow(tree: FlatTaskRow[], row: FlatTaskRow | null | undefined, scopeTask: FlatTaskRow | null | undefined) {
+export function scopePeerForRow(tree: FlatTaskRow[], row: FlatTaskRow | null | undefined, scopeTask: FlatTaskRow | null | undefined, byId = taskMap(tree)) {
   if (!row || !scopeTask || (row._depth || 0) < (scopeTask._depth || 0)) return null
-  const peer = ancestorAtDepth(tree, row, scopeTask._depth || 0)
+  const peer = ancestorAtDepth(tree, row, scopeTask._depth || 0, byId)
   return peer && sameTaskSortScope(peer, scopeTask) ? peer : null
 }
 
@@ -56,8 +56,7 @@ export function hasTaskChildren(tree: FlatTaskRow[], taskId: string) {
   return tree.some((row) => row._parentId === taskId)
 }
 
-export function descendantRows(tree: FlatTaskRow[], task: FlatTaskRow) {
-  const byParent = childrenByParent(tree)
+export function descendantRows(tree: FlatTaskRow[], task: FlatTaskRow, byParent = childrenByParent(tree)) {
   const rows: FlatTaskRow[] = []
 
   function appendChildren(parentId: string) {
@@ -91,11 +90,12 @@ export function getVisibleTaskRows(tree: FlatTaskRow[], collapsedIds: Set<string
 }
 
 export function orderedSiblingsForTask(tree: FlatTaskRow[], moved: FlatTaskRow) {
+  const byId = taskMap(tree)
   const ordered: FlatTaskRow[] = []
   const seen = new Set<string>()
 
   for (const row of tree) {
-    const peer = scopePeerForRow(tree, row, moved)
+    const peer = scopePeerForRow(tree, row, moved, byId)
     if (!peer) continue
     if (peer.id === moved.id && row.id !== moved.id) continue
     if (seen.has(peer.id)) continue
@@ -107,16 +107,18 @@ export function orderedSiblingsForTask(tree: FlatTaskRow[], moved: FlatTaskRow) 
 }
 
 export function normalizeTaskTreeForScope(tree: FlatTaskRow[], moved: FlatTaskRow, orderedSiblings: FlatTaskRow[]) {
+  const byId = taskMap(tree)
+  const byParent = childrenByParent(tree)
   const siblingIds = new Set(orderedSiblings.map((task) => task.id))
   const result: FlatTaskRow[] = []
   let emittedScope = false
 
   for (const row of tree) {
-    const peer = scopePeerForRow(tree, row, moved)
+    const peer = scopePeerForRow(tree, row, moved, byId)
     if (peer && siblingIds.has(peer.id)) {
       if (!emittedScope) {
         for (const sibling of orderedSiblings) {
-          result.push(sibling, ...descendantRows(tree, sibling))
+          result.push(sibling, ...descendantRows(tree, sibling, byParent))
         }
         emittedScope = true
       }

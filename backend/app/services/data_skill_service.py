@@ -19,7 +19,6 @@ from app.models.data_skill import (
 )
 from app.models.task import Task
 from app.schemas.data_skill import DataConnectorCreate, DataConnectorUpdate, TaskDataSkillUpdate
-from app.services.ai.llm_client import LLMClient
 from app.services import task_service
 
 
@@ -85,14 +84,6 @@ def _safe_json(value: Any, default: Any) -> Any:
     return default
 
 
-def _connector_payload(connector: DataConnector) -> dict:
-    return {
-        "id": str(connector.id),
-        "name": connector.name,
-        "key": connector.key,
-        "description": connector.description,
-        "base_url": connector.base_url,
-    }
 
 
 def _choose_connector(
@@ -111,50 +102,6 @@ def _choose_connector(
     return None
 
 
-async def _generate_skill_with_ai(
-    llm: LLMClient,
-    task: Task,
-    natural_language: str,
-    connectors: list[DataConnector],
-) -> dict:
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是任务数据 Skill 生成器。把用户的白话数据采集说明转成可执行 JSON。"
-                "只允许选择输入里的 connector，不要编造接口。只返回 JSON，不要 Markdown。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps(
-                {
-                    "task": {
-                        "title": task.title,
-                        "description": task.description,
-                    },
-                    "connectors": [_connector_payload(item) for item in connectors],
-                    "description": natural_language,
-                    "expected_schema": {
-                        "connector_key": "连接器 key",
-                        "method": "GET|POST",
-                        "path": "/api/example/{param}",
-                        "params": {
-                            "param": {
-                                "from": "task.text",
-                                "fallback": "ask_user",
-                            }
-                        },
-                        "progress_strategy": "infer_from_response",
-                        "analysis_prompt": "分析返回数据并给出进度、风险、会签建议",
-                    },
-                },
-                ensure_ascii=False,
-            ),
-        },
-    ]
-    result = await llm.chat_json(messages, max_tokens=1200, temperature=0.1)
-    return result if isinstance(result, dict) else {}
 
 
 def _generate_skill_by_rules(
@@ -193,21 +140,13 @@ async def generate_task_data_skill(
     natural_language: str,
     user_id: uuid.UUID,
     connector_id: uuid.UUID | None = None,
-    llm: LLMClient | None = None,
 ) -> TaskDataSkill:
     task = await task_service.get_task(db, task_id)
     if not task:
         raise ValueError("Task not found.")
     connectors = (await db.execute(select(DataConnector).where(DataConnector.is_enabled == True))).scalars().all()
     chosen = _choose_connector(natural_language, connectors, connector_id)
-    skill_json = None
-    if llm:
-        try:
-            skill_json = await _generate_skill_with_ai(llm, task, natural_language, connectors)
-        except Exception:
-            skill_json = None
-    if not skill_json:
-        skill_json = _generate_skill_by_rules(task, natural_language, connectors, connector_id)
+    skill_json = _generate_skill_by_rules(task, natural_language, connectors, connector_id)
     connector_key = skill_json.get("connector_key")
     if connector_key:
         chosen = next((item for item in connectors if item.key == connector_key), chosen)
@@ -511,47 +450,6 @@ def _rule_note(metrics: dict, skill: TaskDataSkill) -> str:
     return "；".join(parts)
 
 
-async def _analyze_response_with_ai(
-    llm: LLMClient,
-    skill: TaskDataSkill,
-    task: Task,
-    response_data: Any,
-    metrics: dict,
-) -> dict:
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是任务数据验证分析器。根据任务、Skill 说明、接口返回和规则指标，"
-                "输出进度建议、风险和是否建议会签。只返回 JSON，不要 Markdown。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps(
-                {
-                    "task": {
-                        "title": task.title,
-                        "goal": task.goal,
-                        "description": task.description,
-                    },
-                    "natural_language": skill.natural_language,
-                    "skill_json": skill.skill_json,
-                    "response_data": response_data,
-                    "rule_metrics": metrics,
-                    "expected_schema": {
-                        "suggested_progress_pct": 80,
-                        "suggested_note": "简短进展说明",
-                        "risk_summary": "风险说明",
-                        "signoff_allowed": False,
-                    },
-                },
-                ensure_ascii=False,
-            ),
-        },
-    ]
-    result = await llm.chat_json(messages, max_tokens=1200, temperature=0.1)
-    return result if isinstance(result, dict) else {}
 
 
 async def run_task_data_skill(
@@ -559,7 +457,6 @@ async def run_task_data_skill(
     skill_id: uuid.UUID,
     user_id: uuid.UUID,
     provided_params: dict | None = None,
-    llm: LLMClient | None = None,
 ) -> SkillRun:
     skill = await get_task_data_skill(db, skill_id)
     if not skill:
@@ -621,16 +518,9 @@ async def run_task_data_skill(
             )
 
         metrics = infer_metrics(response_data)
-        ai_analysis = {}
-        if llm:
-            try:
-                ai_analysis = await _analyze_response_with_ai(llm, skill, task, response_data, metrics)
-            except Exception as exc:
-                ai_analysis = {"error": str(exc)}
-
-        suggested_progress = ai_analysis.get("suggested_progress_pct") or metrics.get("suggested_progress_pct")
+        suggested_progress = metrics.get("suggested_progress_pct")
         suggested_progress = int(suggested_progress) if suggested_progress is not None else None
-        suggested_note = ai_analysis.get("suggested_note") or _rule_note(metrics, skill)
+        suggested_note = _rule_note(metrics, skill)
         run = SkillRun(
             task_data_skill_id=skill.id,
             task_id=task.id,
@@ -639,7 +529,7 @@ async def run_task_data_skill(
             request_json=request_snapshot,
             response_json={"status_code": response.status_code, "data": response_data},
             metrics_json=metrics,
-            ai_analysis_json=ai_analysis,
+            ai_analysis_json={},
             suggested_progress_pct=suggested_progress,
             suggested_note=suggested_note,
         )

@@ -117,7 +117,6 @@ async function runSkill() {
   try {
     const res = await dataSkillsApi.runTaskSkill(props.task.id, selectedSkill.value.id, {
       params,
-      use_ai: true,
     })
     runs.value = [res.data, ...runs.value.filter((item) => item.id !== res.data.id)]
     if (res.data.status === 'success') {
@@ -181,7 +180,7 @@ watch(() => props.task.id, () => {
             :value="connector.id"
           />
         </el-select>
-        <el-button type="primary" :loading="generating" @click="generateSkill">AI 生成 Skill</el-button>
+        <el-button type="primary" :loading="generating" @click="generateSkill">生成采集草稿</el-button>
       </div>
     </div>
 

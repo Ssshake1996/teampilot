@@ -28,10 +28,14 @@ class TeamWorkload(BaseModel):
     in_progress_tasks: int
     completed_tasks: int
     overdue_tasks: int
+    fallback_task_count: int = 0
+    fallback_hours: float = 0.0
 
 
 class RecentActivity(BaseModel):
     id: uuid.UUID
+    task_id: uuid.UUID
+    project_id: uuid.UUID
     user_name: str
     task_title: str
     project_name: str

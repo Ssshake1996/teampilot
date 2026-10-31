@@ -8,8 +8,9 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[str, set[WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket, user_id: str):
-        await websocket.accept()
+    async def connect(self, websocket: WebSocket, user_id: str, accepted: bool = False):
+        if not accepted:
+            await websocket.accept()
         if user_id not in self.active_connections:
             self.active_connections[user_id] = set()
         self.active_connections[user_id].add(websocket)
@@ -23,11 +24,11 @@ class ConnectionManager:
         logger.info(f"User {user_id} disconnected. Total connections: {self._total()}")
 
     async def send_to_user(self, user_id: str, data: dict):
-        for ws in self.active_connections.get(user_id, set()):
+        for ws in list(self.active_connections.get(user_id, set())):
             try:
                 await ws.send_json(data)
             except Exception:
-                pass
+                self.disconnect(ws, user_id)
 
     async def broadcast(self, data: dict):
         for user_id in list(self.active_connections.keys()):

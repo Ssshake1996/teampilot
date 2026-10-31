@@ -1,30 +1,53 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { View, Edit, Delete } from '@element-plus/icons-vue'
 import { projectsApi } from '@/api/projects'
 import { tasksApi } from '@/api/tasks'
 import { usersApi } from '@/api/users'
+import { fetchAllPages } from '@/utils/pagination'
+import { useAuthStore } from '@/stores/auth'
+import { parseTaskListState, taskViewKey } from '@/utils/taskViewState'
+import { useProjectUpdates } from '@/composables/useProjectUpdates'
 import { TaskStatus, TaskPriority, TaskStatusLabel, TaskPriorityLabel } from '@/types/enums'
 import type { Project, Task, User } from '@/types/models'
 
 const route = useRoute()
 const router = useRouter()
 const projectId = route.params.id as string
+const auth = useAuthStore()
+const stateKey = taskViewKey(auth.user?.id || 'anonymous', projectId)
+let savedState = parseTaskListState(null)
+try { savedState = parseTaskListState(sessionStorage.getItem(stateKey)) } catch { /* Storage may be unavailable. */ }
+const viewElement = ref<HTMLElement>()
+const listError = ref('')
+const updatedAt = ref('')
+let listRequest = 0
+const sortBy = ref(savedState.sortBy)
+const sortOrder = ref<'asc' | 'desc'>(savedState.sortOrder)
+function saveView() {
+  try {
+    sessionStorage.setItem(stateKey, JSON.stringify({ page: currentPage.value, pageSize: pageSize.value,
+      status: filterStatus.value, assignee: filterAssignee.value, priority: filterPriority.value,
+      sortBy: sortBy.value, sortOrder: sortOrder.value,
+      scrollTop: viewElement.value?.closest('.app-content')?.scrollTop || 0 }))
+  } catch { /* Navigation still works when storage is disabled. */ }
+}
+onBeforeUnmount(saveView)
 
 const project = ref<Project | null>(null)
 const tasks = ref<Task[]>([])
 const total = ref(0)
 const loading = ref(false)
 const users = ref<User[]>([])
-const currentPage = ref(1)
-const pageSize = ref(20)
+const currentPage = ref(savedState.page)
+const pageSize = ref(savedState.pageSize)
 
 // Filters
-const filterStatus = ref<string>('')
-const filterAssignee = ref<string>('')
-const filterPriority = ref<string>('')
+const filterStatus = ref(savedState.status)
+const filterAssignee = ref(savedState.assignee)
+const filterPriority = ref(savedState.priority)
 
 const statusOptions = [
   { label: '全部状态', value: '' },
@@ -79,33 +102,37 @@ function isOverdue(task: Task): boolean {
 }
 
 async function fetchTasks() {
+  const request = ++listRequest
   loading.value = true
+  listError.value = ''
   try {
     const params: Record<string, any> = {
       page: currentPage.value,
       page_size: pageSize.value,
+      sort_by: sortBy.value, sort_order: sortOrder.value,
     }
     if (filterStatus.value) params.status = filterStatus.value
     if (filterAssignee.value) params.user_id = filterAssignee.value
-    // Priority filter is applied client-side since the API may not support it
+    if (filterPriority.value) params.priority = filterPriority.value
     const res = await tasksApi.list(projectId, params)
-    let items = res.data.items
-    if (filterPriority.value) {
-      items = items.filter((t) => t.priority === filterPriority.value)
-    }
-    tasks.value = items
+    if (request !== listRequest) return
+    tasks.value = res.data.items
     total.value = res.data.total
+    updatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    if (currentPage.value > Math.max(1, Math.ceil(total.value / pageSize.value))) {
+      currentPage.value = Math.max(1, Math.ceil(total.value / pageSize.value))
+      await fetchTasks()
+    }
   } catch {
-    ElMessage.error('加载任务列表失败')
+    if (request === listRequest) listError.value = '加载任务列表失败，请重试。'
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
 async function fetchUsers() {
   try {
-    const res = await usersApi.list(1, 100)
-    users.value = res.data.items
+    users.value = await fetchAllPages(page => usersApi.list(page, 500))
   } catch {
     // silent
   }
@@ -136,8 +163,15 @@ function handleSizeChange(size: number) {
   fetchTasks()
 }
 
-function goToBoard() {
-  router.push(`/projects/${projectId}/board`)
+function goToBoard(task?: Task) {
+  saveView()
+  router.push({ path: `/projects/${projectId}/board`, query: { from: route.fullPath, ...(task ? { taskId: task.id } : {}) } })
+}
+function handleSort({ prop, order }: { prop?: string; order?: string | null }) {
+  sortBy.value = order && prop ? prop : 'created_at'
+  sortOrder.value = order === 'ascending' ? 'asc' : 'desc'
+  currentPage.value = 1
+  void fetchTasks()
 }
 
 async function handleDeleteTask(task: Task) {
@@ -160,13 +194,17 @@ async function handleRestoreTask(task: Task) {
   }
 }
 
+useProjectUpdates(async pid => { if (!pid || pid === projectId) await Promise.all([fetchTasks(), fetchProject()]) })
 onMounted(async () => {
   await Promise.all([fetchTasks(), fetchUsers(), fetchProject()])
+  await nextTick()
+  const content = viewElement.value?.closest('.app-content')
+  if (content) content.scrollTop = savedState.scrollTop
 })
 </script>
 
 <template>
-  <div class="task-list-view">
+  <div ref="viewElement" class="task-list-view">
     <div v-if="project" class="project-summary-card">
       <div class="project-summary-head">
         <h2>{{ project.name }}</h2>
@@ -184,7 +222,7 @@ onMounted(async () => {
     </div>
     <div class="page-header">
       <h2>任务列表</h2>
-      <el-button @click="goToBoard">看板视图</el-button>
+      <el-button @click="goToBoard()">看板视图</el-button>
     </div>
 
     <!-- Filter Bar -->
@@ -237,24 +275,30 @@ onMounted(async () => {
       </el-select>
     </div>
 
+    <el-alert v-if="listError" type="error" :closable="false" show-icon class="list-error">
+      <template #title>{{ listError }}<span v-if="tasks.length"> 当前保留上次读取的数据。</span></template>
+      <el-button link type="primary" @click="fetchTasks">重试</el-button>
+    </el-alert>
+    <p class="data-note">排序覆盖全部匹配任务。<span v-if="updatedAt">上次读取 {{ updatedAt }}</span></p>
     <!-- Task Table -->
     <el-table
       v-loading="loading"
       :data="tasks"
       stripe
       style="width: 100%"
-      :default-sort="{ prop: 'created_at', order: 'descending' }"
+      :default-sort="{ prop: sortBy, order: sortOrder === 'asc' ? 'ascending' : 'descending' }"
+      @sort-change="handleSort"
     >
-      <el-table-column prop="title" label="任务标题" min-width="200" sortable>
+      <el-table-column prop="title" label="任务标题" min-width="200" sortable="custom">
         <template #default="{ row }">
           <div class="task-main-cell">
-            <span class="task-title-cell" :class="{ deleted: row.is_deleted }">{{ row.title }}</span>
+            <button type="button" class="task-title-cell task-link" :class="{ deleted: row.is_deleted }" @click="goToBoard(row)">{{ row.title }}</button>
             <span v-if="row.description" class="task-desc-cell">{{ row.description }}</span>
           </div>
         </template>
       </el-table-column>
 
-      <el-table-column prop="status" label="状态" width="110" sortable>
+      <el-table-column prop="status" label="状态" width="110" sortable="custom">
         <template #default="{ row }">
           <el-tag :type="(displayStatusType(row) as any)" size="small">
             {{ displayStatusLabel(row) }}
@@ -262,7 +306,7 @@ onMounted(async () => {
         </template>
       </el-table-column>
 
-      <el-table-column prop="priority" label="优先级" width="100" sortable>
+      <el-table-column prop="priority" label="优先级" width="100" sortable="custom">
         <template #default="{ row }">
           <el-tag :type="(priorityTagType(row.priority) as any)" size="small" effect="light">
             {{ TaskPriorityLabel[row.priority as TaskPriority] || row.priority }}
@@ -270,13 +314,13 @@ onMounted(async () => {
         </template>
       </el-table-column>
 
-      <el-table-column prop="assignee_name" label="负责人" width="120" sortable>
+      <el-table-column prop="assignee_name" label="负责人" width="120" sortable="custom">
         <template #default="{ row }">
           {{ row.assignee_names?.join('、') || row.assignee_name || '未指派' }}
         </template>
       </el-table-column>
 
-      <el-table-column prop="deadline" label="截止日期" width="120" sortable>
+      <el-table-column prop="deadline" label="截止日期" width="120" sortable="custom">
         <template #default="{ row }">
           <span :class="{ overdue: isOverdue(row) }">
             {{ formatDate(row.deadline) }}
@@ -284,7 +328,7 @@ onMounted(async () => {
         </template>
       </el-table-column>
 
-      <el-table-column prop="progress_pct" label="进度" width="150" sortable>
+      <el-table-column prop="progress_pct" label="进度" width="150" sortable="custom">
         <template #default="{ row }">
           <el-progress
             :percentage="row.progress_pct || 0"
@@ -301,13 +345,13 @@ onMounted(async () => {
             :icon="View"
             size="small"
             link
-            @click="router.push(`/projects/${projectId}/board`)"
+            @click="goToBoard(row)"
           >
             查看
           </el-button>
           <el-popconfirm
             title="确定要删除此任务吗？"
-            v-if="!row.is_deleted"
+            v-if="!row.is_deleted && auth.can('task.delete')"
             @confirm="handleDeleteTask(row)"
           >
             <template #reference>
@@ -322,7 +366,7 @@ onMounted(async () => {
             </template>
           </el-popconfirm>
           <el-button
-            v-else
+            v-else-if="row.is_deleted && auth.can('task.delete')"
             type="success"
             :icon="Edit"
             size="small"
@@ -352,8 +396,13 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.task-link { border: 0; background: transparent; color: var(--brand); text-align: left; cursor: pointer; padding: 2px 0; font: inherit; }
+.list-error { margin-bottom: 12px; }
+.data-note { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.data-note span { margin-left: 12px; }
+
 .task-list-view {
-  padding: 20px;
+  padding: 0;
 }
 
 .project-summary-card {

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import delete, func, select, union
+from sqlalchemy import case, delete, func, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.assignment import Assignment, AssignmentKind
@@ -14,7 +14,10 @@ from app.services.task_service import (
     effective_task_status,
     get_project_task_progress_map,
     get_task_assignee_map,
+    effective_status_sql,
+    latest_progress_entries,
 )
+from app.websocket.events import queue_project_event
 
 
 async def get_project_member_count(db: AsyncSession, project_id: uuid.UUID) -> int:
@@ -98,49 +101,47 @@ async def sync_project_status(db: AsyncSession, project: Project) -> ProjectStat
     return status
 
 
+async def projects_to_out(db: AsyncSession, projects: list[Project]) -> list[dict]:
+    if not projects:
+        return []
+    ids = [p.id for p in projects]
+    status_expr = effective_status_sql()
+    stats = (await db.execute(select(
+        Task.project_id, func.count(Task.id),
+        func.sum(case((Task.status == TaskStatus.DONE, 1), else_=0)),
+        func.sum(case((status_expr == TaskStatus.NOT_STARTED.name, 1), else_=0)),
+    ).where(Task.project_id.in_(ids), Task.is_deleted == False).group_by(Task.project_id))).all()
+    stats_by_id = {pid: (total, done, pending) for pid, total, done, pending in stats}
+    members = union(
+        select(Assignment.project_id, Assignment.user_id).where(
+            Assignment.project_id.in_(ids), Assignment.kind == AssignmentKind.PROJECT_MEMBER),
+        select(Assignment.project_id, Assignment.user_id).join(Task, Assignment.task_id == Task.id).where(
+            Assignment.project_id.in_(ids), Assignment.kind == AssignmentKind.TASK_ASSIGNEE, Task.is_deleted == False),
+    ).subquery()
+    member_counts = dict((await db.execute(select(members.c.project_id, func.count()).group_by(members.c.project_id))).all())
+    names = dict((await db.execute(select(User.id, User.full_name).where(User.id.in_({p.owner_id for p in projects})))).all())
+    contact_map = await get_project_contact_map(db, ids)
+    items = []
+    for project in projects:
+        total, done, pending = stats_by_id.get(project.id, (0, 0, 0))
+        status = ProjectStatus.ARCHIVED if project.status == ProjectStatus.ARCHIVED else (
+            ProjectStatus.PLANNING if not total or pending == total else
+            ProjectStatus.COMPLETED if done == total else ProjectStatus.ACTIVE
+        )
+        owner_name = names.get(project.owner_id)
+        contacts = contact_map.get(project.id) or ([{"user_id": project.owner_id, "full_name": owner_name}] if owner_name else [])
+        items.append({
+            **{key: getattr(project, key) for key in ("id", "name", "goal", "description", "owner_id", "start_date", "end_date", "created_at")},
+            "status": status, "owner_name": owner_name,
+            "contact_user_ids": [item["user_id"] for item in contacts],
+            "contact_names": [item["full_name"] for item in contacts if item["full_name"]],
+            "task_count": total, "completed_count": done, "member_count": member_counts.get(project.id, 0),
+        })
+    return items
+
+
 async def project_to_out(db: AsyncSession, project: Project) -> dict:
-    task_count = (
-        await db.execute(
-            select(func.count(Task.id)).where(
-                Task.project_id == project.id,
-                Task.is_deleted == False,
-            )
-        )
-    ).scalar() or 0
-    done_count = (
-        await db.execute(
-            select(func.count(Task.id)).where(
-                Task.project_id == project.id,
-                Task.status == TaskStatus.DONE,
-                Task.is_deleted == False,
-            )
-        )
-    ).scalar() or 0
-    member_count = await get_project_member_count(db, project.id)
-    status = await sync_project_status(db, project)
-    owner_name = (
-        await db.execute(select(User.full_name).where(User.id == project.owner_id))
-    ).scalar()
-    contacts = (await get_project_contact_map(db, [project.id])).get(project.id, [])
-    if not contacts and owner_name:
-        contacts = [{"user_id": project.owner_id, "full_name": owner_name}]
-    return {
-        "id": project.id,
-        "name": project.name,
-        "goal": project.goal,
-        "description": project.description,
-        "status": status,
-        "owner_id": project.owner_id,
-        "owner_name": owner_name,
-        "contact_user_ids": [item["user_id"] for item in contacts],
-        "contact_names": [item["full_name"] for item in contacts if item["full_name"]],
-        "start_date": project.start_date,
-        "end_date": project.end_date,
-        "created_at": project.created_at,
-        "task_count": task_count,
-        "completed_count": done_count,
-        "member_count": member_count,
-    }
+    return (await projects_to_out(db, [project]))[0]
 
 
 async def list_projects(
@@ -162,10 +163,7 @@ async def list_projects(
         )
     ).scalars().all()
 
-    items = []
-    for project in projects:
-        items.append(await project_to_out(db, project))
-    return items, total
+    return await projects_to_out(db, projects), total
 
 
 async def create_project(db: AsyncSession, data: ProjectCreate, owner_id: uuid.UUID) -> Project:
@@ -179,31 +177,35 @@ async def create_project(db: AsyncSession, data: ProjectCreate, owner_id: uuid.U
         role=ProjectRole.LEAD.value,
     ))
     await db.flush()
+    queue_project_event(db, project.id)
     return project
 
 
-async def get_project(db: AsyncSession, project_id: uuid.UUID) -> Project | None:
-    return (
-        await db.execute(select(Project).where(Project.id == project_id))
-    ).scalar_one_or_none()
+async def get_project(db: AsyncSession, project_id: uuid.UUID, *, lock: bool = False) -> Project | None:
+    query = select(Project).where(Project.id == project_id)
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    return (await db.execute(query)).scalar_one_or_none()
 
 
 async def update_project(db: AsyncSession, project_id: uuid.UUID, data: ProjectUpdate) -> Project | None:
-    project = await get_project(db, project_id)
+    project = await get_project(db, project_id, lock=True)
     if not project:
         return None
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(project, field, value)
     await db.flush()
     await db.refresh(project)
+    queue_project_event(db, project.id)
     return project
 
 
 async def delete_project(db: AsyncSession, project_id: uuid.UUID) -> bool:
-    project = await get_project(db, project_id)
+    project = await get_project(db, project_id, lock=True)
     if not project:
         return False
     project.status = ProjectStatus.ARCHIVED
+    queue_project_event(db, project.id)
     await db.flush()
     return True
 
@@ -261,6 +263,7 @@ async def add_project_member(
     user_id: uuid.UUID,
     role: str,
 ) -> None:
+    await get_project(db, project_id, lock=True)
     existing = (
         await db.execute(
             select(Assignment).where(
@@ -280,9 +283,11 @@ async def add_project_member(
             role=role,
         ))
     await db.flush()
+    queue_project_event(db, project_id)
 
 
 async def remove_project_member(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    await get_project(db, project_id, lock=True)
     await db.execute(
         delete(Assignment).where(
             Assignment.project_id == project_id,
@@ -291,6 +296,7 @@ async def remove_project_member(db: AsyncSession, project_id: uuid.UUID, user_id
         )
     )
     await db.flush()
+    queue_project_event(db, project_id)
 
 
 async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list[dict]:
@@ -303,9 +309,10 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
         )
     ).scalars().all()
     assignee_map = await get_task_assignee_map(db, tasks)
+    latest = await latest_progress_entries(db, project_id)
     computed_progress_map = {
         str(task_id): progress
-        for task_id, progress in (await get_project_task_progress_map(db, project_id)).items()
+        for task_id, progress in (await get_project_task_progress_map(db, project_id, tasks, latest)).items()
     }
 
     all_tasks: dict[str, dict] = {}
@@ -349,25 +356,7 @@ async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list
         if task.parent_task_id:
             children_map.setdefault(str(task.parent_task_id), []).append(task_dict)
 
-    progress_map: dict[str, int] = {}
-    note_map: dict[str, str] = {}
-    progress_rows = (
-        await db.execute(
-            select(TaskEvent.task_id, TaskEvent.progress_pct, TaskEvent.note)
-            .join(Task, TaskEvent.task_id == Task.id)
-            .where(Task.project_id == project_id)
-            .where(
-                TaskEvent.event_type == TaskEventType.PROGRESS,
-                TaskEvent.progress_pct.isnot(None),
-            )
-            .order_by(TaskEvent.created_at.desc())
-        )
-    ).all()
-    for task_id, progress_pct, note in progress_rows:
-        task_id_str = str(task_id)
-        if task_id_str not in progress_map:
-            progress_map[task_id_str] = progress_pct
-            note_map[task_id_str] = note or ""
+    note_map = {str(task_id): entry.note or "" for task_id, entry in latest.items()}
 
     roots = []
     for task_id, task_dict in all_tasks.items():

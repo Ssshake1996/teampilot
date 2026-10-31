@@ -18,7 +18,6 @@ from app.models import Base
 from app.models.assignment import Assignment, AssignmentKind
 from app.models.project import Project, ProjectRole, ProjectStatus
 from app.models.skill import Skill, UserSkill
-from app.models.system_setting import SystemSetting
 from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User, UserRole
@@ -403,19 +402,6 @@ async def seed() -> None:
                         parent_task=parent,
                         sort_order=sort_order,
                     )
-
-        db.add(
-            SystemSetting(
-                key="ai_config",
-                value_json={
-                    "api_base_url": "https://coding.dashscope.aliyuncs.com/v1",
-                    "api_key_encrypted": "",
-                    "model_name": "qwen3.5-plus",
-                    "max_tokens": 4096,
-                    "temperature": 0.7,
-                },
-            )
-        )
 
         await db.commit()
         print(f"[OK] Seeded admin/admin123 and {len(users)} demo users")

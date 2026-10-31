@@ -54,12 +54,14 @@ async def test_task_data_skill_run_and_adopt(client: AsyncClient, auth_headers, 
     assert confirmed.json()["status"] == "confirmed"
 
     original_request = httpx.AsyncClient.request
+    business_calls = []
 
     async def fake_request(self, method, url, **kwargs):
         if not str(url).startswith("http://internal.test"):
             return await original_request(self, method, url, **kwargs)
         assert method == "GET"
         assert str(url) == "http://internal.test/api/test/feature/FEAT-1024/summary"
+        business_calls.append(str(url))
         return Response(
             200,
             json={
@@ -73,15 +75,40 @@ async def test_task_data_skill_run_and_adopt(client: AsyncClient, auth_headers, 
 
     monkeypatch.setattr("httpx.AsyncClient.request", fake_request)
 
+    other_task = await client.post(
+        f"/api/v1/projects/{project_id}/tasks",
+        json={"title": "Unrelated task"},
+        headers=auth_headers,
+    )
+    other_task_id = other_task.json()["id"]
+    wrong_scope = await client.post(
+        f"/api/v1/tasks/{other_task_id}/data-skills/{skill_id}/run",
+        json={"params": {}},
+        headers=auth_headers,
+    )
+    assert wrong_scope.status_code == 404
+    assert business_calls == []
+
     run = await client.post(
         f"/api/v1/tasks/{task_id}/data-skills/{skill_id}/run",
-        json={"params": {}, "use_ai": False},
+        json={"params": {}},
         headers=auth_headers,
     )
     assert run.status_code == 201
     run_data = run.json()
     assert run_data["status"] == "success"
     assert run_data["suggested_progress_pct"] == 80
+    assert len(business_calls) == 1
+
+    wrong_adoption = await client.post(
+        f"/api/v1/tasks/{other_task_id}/data-skills/runs/{run_data['id']}/adopt",
+        json={},
+        headers=auth_headers,
+    )
+    assert wrong_adoption.status_code == 404
+    assert (await client.get(
+        f"/api/v1/tasks/{task_id}/progress", headers=auth_headers,
+    )).json() == []
 
     adopted = await client.post(
         f"/api/v1/tasks/{task_id}/data-skills/runs/{run_data['id']}/adopt",
@@ -177,12 +204,12 @@ async def test_task_data_skill_supports_dynamic_token_auth(client: AsyncClient, 
 
     first_run = await client.post(
         f"/api/v1/tasks/{task_id}/data-skills/{skill_id}/run",
-        json={"params": {}, "use_ai": False},
+        json={"params": {}},
         headers=auth_headers,
     )
     second_run = await client.post(
         f"/api/v1/tasks/{task_id}/data-skills/{skill_id}/run",
-        json={"params": {}, "use_ai": False},
+        json={"params": {}},
         headers=auth_headers,
     )
 

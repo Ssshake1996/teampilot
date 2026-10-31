@@ -146,10 +146,6 @@ if grep -q "^JWT_SECRET_KEY=change-me-to-a-random-64-char-hex-string-in-producti
     log_info "  JWT secret auto-generated."
 fi
 
-if grep -q "^AI_ENCRYPTION_KEY=change-me-to-a-random-64-char-hex-string-for-ai-secrets$" "$DEPLOY_ENV"; then
-    set_env_value "AI_ENCRYPTION_KEY" "$(random_hex)"
-    log_info "  AI encryption key auto-generated."
-fi
 
 if grep -q "^ADMIN_PASSWORD=change-me-to-a-random-admin-password-in-production$" "$DEPLOY_ENV"; then
     set_env_value "ADMIN_PASSWORD" "$(random_password)"

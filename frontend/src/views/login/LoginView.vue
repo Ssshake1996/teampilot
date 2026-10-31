@@ -5,14 +5,15 @@ import { useAuthStore } from '@/stores/auth'
 import { authApi } from '@/api/auth'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
+import { User, Lock, UserFilled } from '@element-plus/icons-vue'
+import { readRememberedAccount, saveRememberedAccount } from '@/utils/rememberedAccount'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
 const isRegister = ref(false)
 const loading = ref(false)
-const rememberPassword = ref(false)
-const rememberedLoginKey = 'teampilot.rememberedLogin'
+const rememberAccount = ref(false)
 
 const loginFormRef = ref<FormInstance>()
 const registerFormRef = ref<FormInstance>()
@@ -35,27 +36,12 @@ const loginRules = reactive<FormRules>({
 })
 
 function loadRememberedLogin() {
-  try {
-    const raw = localStorage.getItem(rememberedLoginKey)
-    if (!raw) return
-    const saved = JSON.parse(raw) as { username?: string; password?: string }
-    loginForm.username = saved.username || ''
-    loginForm.password = saved.password || ''
-    rememberPassword.value = Boolean(saved.username && saved.password)
-  } catch {
-    localStorage.removeItem(rememberedLoginKey)
-  }
+  loginForm.username = readRememberedAccount(localStorage)
+  rememberAccount.value = Boolean(loginForm.username)
 }
 
 function syncRememberedLogin() {
-  if (rememberPassword.value) {
-    localStorage.setItem(rememberedLoginKey, JSON.stringify({
-      username: loginForm.username,
-      password: loginForm.password,
-    }))
-  } else {
-    localStorage.removeItem(rememberedLoginKey)
-  }
+  saveRememberedAccount(localStorage, loginForm.username, rememberAccount.value)
 }
 
 const registerRules = reactive<FormRules>({
@@ -138,8 +124,9 @@ onMounted(loadRememberedLogin)
   <div class="login-page">
     <div class="login-card">
       <div class="login-header">
+        <div class="login-brand">TeamPilot</div>
         <h1 class="login-title">项目任务进度管理</h1>
-        <p class="login-subtitle">{{ isRegister ? '创建新账号' : '欢迎回来，请登录您的账号' }}</p>
+        <p class="login-subtitle">{{ isRegister ? '创建账号' : '账号登录' }}</p>
       </div>
 
       <!-- Login Form -->
@@ -155,7 +142,8 @@ onMounted(loadRememberedLogin)
           <el-input
             v-model="loginForm.username"
             placeholder="用户名"
-            prefix-icon="User"
+            :prefix-icon="User"
+            autocomplete="username"
           />
         </el-form-item>
         <el-form-item prop="password">
@@ -163,12 +151,13 @@ onMounted(loadRememberedLogin)
             v-model="loginForm.password"
             type="password"
             placeholder="密码"
-            prefix-icon="Lock"
+            :prefix-icon="Lock"
+            autocomplete="current-password"
             show-password
           />
         </el-form-item>
         <div class="login-options">
-          <el-checkbox v-model="rememberPassword">记住密码</el-checkbox>
+          <el-checkbox v-model="rememberAccount">记住账号</el-checkbox>
         </div>
         <el-form-item>
           <el-button
@@ -195,14 +184,14 @@ onMounted(loadRememberedLogin)
           <el-input
             v-model="registerForm.username"
             placeholder="用户名"
-            prefix-icon="User"
+            :prefix-icon="User"
           />
         </el-form-item>
         <el-form-item prop="full_name">
           <el-input
             v-model="registerForm.full_name"
             placeholder="姓名"
-            prefix-icon="UserFilled"
+            :prefix-icon="UserFilled"
           />
         </el-form-item>
         <el-form-item prop="password">
@@ -210,7 +199,7 @@ onMounted(loadRememberedLogin)
             v-model="registerForm.password"
             type="password"
             placeholder="密码"
-            prefix-icon="Lock"
+            :prefix-icon="Lock"
             show-password
           />
         </el-form-item>
@@ -219,7 +208,7 @@ onMounted(loadRememberedLogin)
             v-model="registerForm.confirmPassword"
             type="password"
             placeholder="确认密码"
-            prefix-icon="Lock"
+            :prefix-icon="Lock"
             show-password
           />
         </el-form-item>
@@ -253,21 +242,24 @@ onMounted(loadRememberedLogin)
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #edf2f4;
+  padding: 24px 16px;
 }
 
 .login-card {
-  width: 420px;
+  width: min(420px, 100%);
   padding: 40px 36px 32px;
   background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  border: 1px solid #dce5e8;
+  box-shadow: 0 8px 30px rgba(24, 47, 54, 0.06);
 }
 
 .login-header {
   text-align: center;
   margin-bottom: 32px;
 }
+.login-brand { color: var(--brand); font-size: 26px; font-weight: 700; margin-bottom: 16px; }
 
 .login-title {
   font-size: 24px;

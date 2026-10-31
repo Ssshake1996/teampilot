@@ -1,9 +1,9 @@
 import http from './index'
 import type { Task, TaskProgress, PaginatedResponse } from '@/types/models'
-import type { TaskStatus } from '@/types/enums'
+import type { TaskStatus, TaskPriority } from '@/types/enums'
 
 export const tasksApi = {
-  list(projectId: string, params?: { status?: TaskStatus; user_id?: string; page?: number; page_size?: number }) {
+  list(projectId: string, params?: { status?: TaskStatus; priority?: TaskPriority; user_id?: string; page?: number; page_size?: number; sort_by?: string; sort_order?: 'asc' | 'desc' }) {
     return http.get<PaginatedResponse<Task>>(`/projects/${projectId}/tasks`, { params })
   },
   create(projectId: string, data: Partial<Task>) {

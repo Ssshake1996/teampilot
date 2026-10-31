@@ -118,7 +118,6 @@ export interface SkillRun {
   request_json: Record<string, any>
   response_json: Record<string, any>
   metrics_json: Record<string, any>
-  ai_analysis_json: Record<string, any>
   suggested_progress_pct: number | null
   suggested_note: string | null
   error_message: string | null
@@ -135,16 +134,8 @@ export interface UserSkill {
 export interface CapabilityProfile {
   user_id: string
   summary: string | null
-  ai_analysis: {
-    strengths: string[]
-    growth_areas: string[]
-    recommended_task_types: string[]
-    summary: string
-    overall_rating: number
-  } | null
   performance_score: number | null
   on_time_rate: number | null
-  last_analyzed_at: string | null
 }
 
 export interface OverviewStats {
@@ -163,10 +154,14 @@ export interface TeamWorkload {
   in_progress_tasks: number
   completed_tasks: number
   overdue_tasks: number
+  fallback_task_count: number
+  fallback_hours: number
 }
 
 export interface RecentActivity {
   id: string
+  task_id: string
+  project_id: string
   user_name: string
   task_title: string
   project_name: string

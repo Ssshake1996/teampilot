@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.assignment import Assignment, AssignmentKind
@@ -9,7 +9,7 @@ from app.models.project import Project, ProjectStatus
 from app.models.task import Task, TaskStatus
 from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
-from app.services.task_service import effective_task_status
+from app.services.task_service import effective_task_status, effective_status_sql
 
 
 # Only count tasks from non-archived projects
@@ -25,7 +25,7 @@ async def get_overview(db: AsyncSession) -> dict:
 
     base = select(func.count(Task.id)).join(Project, Task.project_id == Project.id).where(Project.status != ProjectStatus.ARCHIVED, Task.is_deleted == False)
     total = (await db.execute(base)).scalar()
-    in_progress = (await db.execute(base.where(Task.status == TaskStatus.IN_PROGRESS))).scalar()
+    in_progress = (await db.execute(base.where(effective_status_sql(now) == TaskStatus.IN_PROGRESS.name))).scalar()
     overdue = (await db.execute(base.where(Task.status != TaskStatus.DONE, Task.deadline < now))).scalar()
     done = (await db.execute(base.where(Task.status == TaskStatus.DONE))).scalar()
     rate = round((done / total * 100) if total > 0 else 0, 1)
@@ -93,6 +93,8 @@ async def get_team_workload(db: AsyncSession) -> list[dict]:
             "completed_tasks": 0,
             "overdue_tasks": 0,
             "workload_hours": 0.0,
+            "fallback_task_count": 0,
+            "fallback_hours": 0.0,
         }
         for user in users
     }
@@ -126,7 +128,11 @@ async def get_team_workload(db: AsyncSession) -> list[dict]:
             continue
 
         item["assigned_tasks"] += 1
-        item["workload_hours"] += task_workload_hours(task)
+        hours = task_workload_hours(task)
+        item["workload_hours"] += hours
+        if task.estimated_hours is None or float(task.estimated_hours) <= 0:
+            item["fallback_task_count"] += 1
+            item["fallback_hours"] += hours
         if status == TaskStatus.IN_PROGRESS:
             item["in_progress_tasks"] += 1
         if task.deadline and task.deadline.replace(tzinfo=None) < now:
@@ -134,18 +140,20 @@ async def get_team_workload(db: AsyncSession) -> list[dict]:
 
     for item in result_by_user.values():
         item["workload_hours"] = round(item["workload_hours"], 1)
+        item["fallback_hours"] = round(item["fallback_hours"], 1)
 
     return list(result_by_user.values())
 
 
 async def get_recent_activity(db: AsyncSession, limit: int = 20) -> list[dict]:
     result = await db.execute(
-        select(TaskEvent, User.full_name, Task.title, Project.name)
+        select(TaskEvent, User.full_name, Task.title, Project.name, Task.project_id)
         .join(User, TaskEvent.actor_id == User.id)
         .join(Task, TaskEvent.task_id == Task.id)
         .join(Project, Task.project_id == Project.id)
         .where(
             Project.status != ProjectStatus.ARCHIVED,
+            Task.is_deleted == False,
             TaskEvent.event_type == TaskEventType.PROGRESS,
         )
         .order_by(TaskEvent.created_at.desc())
@@ -154,11 +162,12 @@ async def get_recent_activity(db: AsyncSession, limit: int = 20) -> list[dict]:
     rows = result.all()
     return [
         {
-            "id": tp.id, "user_name": uname, "task_title": ttitle,
+            "id": tp.id, "task_id": tp.task_id, "project_id": project_id,
+            "user_name": uname, "task_title": ttitle,
             "project_name": pname, "progress_pct": tp.progress_pct,
             "note": tp.note, "created_at": tp.created_at,
         }
-        for tp, uname, ttitle, pname in rows
+        for tp, uname, ttitle, pname, project_id in rows
     ]
 
 
@@ -205,7 +214,7 @@ async def get_my_tasks_quadrant(db: AsyncSession, user_id) -> dict:
         is_soon = dl is not None and dl <= soon
 
         item = {
-            "id": str(t.id), "title": t.title, "status": t.status.value,
+            "id": str(t.id), "title": t.title, "status": effective_task_status(t).value,
             "priority": t.priority.value, "project_name": pname,
             "project_id": str(t.project_id),
             "deadline": t.deadline.isoformat() if t.deadline else None,
@@ -231,25 +240,23 @@ async def get_project_progress(db: AsyncSession) -> list[dict]:
         select(Project).where(Project.status != ProjectStatus.ARCHIVED).order_by(Project.created_at.desc())
     )
     projects = result.scalars().all()
+    stats = (await db.execute(select(
+        Task.project_id, func.count(Task.id),
+        func.sum(case((Task.status == TaskStatus.DONE, 1), else_=0)),
+        func.sum(case((effective_status_sql() == TaskStatus.IN_PROGRESS.name, 1), else_=0)),
+        func.sum(case(((Task.status != TaskStatus.DONE) & (Task.deadline < datetime.utcnow()), 1), else_=0)),
+    ).where(Task.is_deleted == False).group_by(Task.project_id))).all()
+    stats_by_id = {pid: values for pid, *values in stats}
 
     items = []
     for p in projects:
-        total = (await db.execute(
-            select(func.count(Task.id)).where(Task.project_id == p.id, Task.is_deleted == False)
-        )).scalar()
-        done = (await db.execute(
-            select(func.count(Task.id)).where(Task.project_id == p.id, Task.status == TaskStatus.DONE, Task.is_deleted == False)
-        )).scalar()
-        in_prog = (await db.execute(
-            select(func.count(Task.id)).where(Task.project_id == p.id, Task.status == TaskStatus.IN_PROGRESS, Task.is_deleted == False)
-        )).scalar()
-        now = datetime.utcnow()
-        overdue = (await db.execute(
-            select(func.count(Task.id)).where(Task.project_id == p.id, Task.status != TaskStatus.DONE, Task.is_deleted == False, Task.deadline < now)
-        )).scalar()
+        total, done, in_prog, overdue = stats_by_id.get(p.id, (0, 0, 0, 0))
+        status = ProjectStatus.PLANNING if not total or (done == 0 and in_prog == 0) else (
+            ProjectStatus.COMPLETED if done == total else ProjectStatus.ACTIVE
+        )
 
         items.append({
-            "id": str(p.id), "name": p.name, "status": p.status.value,
+            "id": str(p.id), "name": p.name, "status": status.value,
             "start_date": p.start_date.isoformat() if p.start_date else None,
             "end_date": p.end_date.isoformat() if p.end_date else None,
             "total_tasks": total, "done_tasks": done, "in_progress_tasks": in_prog,
