@@ -46,3 +46,6 @@ plugins/
 
 # Local exported chat history
 claude_conversations.md
+
+# Machine-local assistant permissions and command history
+.claude/

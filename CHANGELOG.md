@@ -7,6 +7,7 @@
 - Preserve existing business records and legacy draft history during database upgrades; retired integrations are no longer exposed at runtime.
 - Remove plugin instructions and UI links while keeping the published 0.3.0 release history below unchanged.
 - Align frontend and backend version metadata at `0.4.0`; publish source and production Web assets without a plugin package.
+- Exclude machine-local assistant settings from tracked source and release archives.
 
 ## 0.3.0 — 2026-10-31
 
