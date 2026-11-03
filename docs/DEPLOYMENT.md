@@ -65,6 +65,14 @@ That means:
 - Keep a single backend worker while WebSocket state remains in process; see `MAINTENANCE.md` for migration limits and recovery
 - Restore a verified backup to roll back database changes; do not rebuild or clear an existing database as part of an ordinary update
 
+## Model provider encryption keys
+
+Model provider API keys and custom headers are encrypted before being saved in `system_settings`. Set `MODEL_PROVIDER_ENCRYPTION_KEY` to a Fernet key if your deployment manages secrets centrally. Without that variable, local development creates and reuses `backend/.model-provider.key`; the Compose deployment stores the generated key in the persistent `provider_secrets` volume using `MODEL_PROVIDER_KEY_FILE=/app/provider-secrets/.model-provider.key`.
+
+Back up the database and encryption key together. Retain the same key when rebuilding containers or moving servers. Losing or changing the key prevents existing credentials from being decrypted; the application reports the error rather than clearing or silently replacing them. Keep the key out of Git, source archives and container images. A Fernet key can be generated with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and stored directly in your secret manager.
+
+Model configuration uses existing `system_settings`; it does not convert business API connectors into model providers or delete task data. Provider URLs can target a local gateway, so configure the address as reachable from the backend container.
+
 ## Server migration
 
 Export on the old server:
@@ -83,7 +91,7 @@ Recommended sequence:
 
 1. Stop application writes or open a maintenance window
 2. Export the current PostgreSQL data
-3. Copy the backup file and finalized `deploy.env` to the new server
+3. Copy the backup file, finalized `deploy.env` and model provider encryption key (or its `provider_secrets` volume backup) to the new server
 4. Run `bash deploy.sh` on the new server
 5. Import the backup
 6. Verify `http://127.0.0.1:${BACKEND_PORT}/health`

@@ -34,7 +34,7 @@ async def require_scoped_skill(db, task_id, skill_id):
 @router.get("/data-connectors", response_model=list[DataConnectorOut])
 async def list_connectors(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("system.connector_manage")),
+    current_user: User = Depends(require_permission("system.model_manage")),
 ):
     return await data_skill_service.list_connectors(db)
 
@@ -43,7 +43,7 @@ async def list_connectors(
 async def create_connector(
     data: DataConnectorCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("system.connector_manage")),
+    current_user: User = Depends(require_permission("system.model_manage")),
 ):
     return await data_skill_service.create_connector(db, data)
 
@@ -53,7 +53,7 @@ async def update_connector(
     connector_id: uuid.UUID,
     data: DataConnectorUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("system.connector_manage")),
+    current_user: User = Depends(require_permission("system.model_manage")),
 ):
     connector = await data_skill_service.update_connector(db, connector_id, data)
     if not connector:
@@ -65,7 +65,7 @@ async def update_connector(
 async def delete_connector(
     connector_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("system.connector_manage")),
+    current_user: User = Depends(require_permission("system.model_manage")),
 ):
     ok = await data_skill_service.delete_connector(db, connector_id)
     if not ok:

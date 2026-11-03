@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 — 2026-11-03
+
+- Replace the settings Data Connectors tab with model provider configuration, using provider presets, protocol-specific authentication, custom headers, model discovery/manual selection and inference connection tests.
+- Support OpenAI Chat Completions, OpenAI Responses and Anthropic Messages; preserve gateway URL prefixes.
+- Encrypt provider credentials and keep saved secrets out of API responses. Preserve existing business data and delegated settings permissions.
+- Persist the generated encryption key in the `provider_secrets` Compose volume, or configure `MODEL_PROVIDER_ENCRYPTION_KEY`; back up the key with the database when moving servers.
+- Align frontend and backend version metadata at `0.5.0` and publish source and production Web assets with SHA-256 checksums.
+
 ## 0.4.0 — 2026-10-31
 
 - Remove the native DSH plugin, its runtime/build dependencies, dedicated business-query and draft-approval endpoints, and plugin release checks.

@@ -49,3 +49,7 @@ claude_conversations.md
 
 # Machine-local assistant permissions and command history
 .claude/
+
+# Local model provider encryption key (back up separately from source)
+.model-provider.key
+.playwright-cli/

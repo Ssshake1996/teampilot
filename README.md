@@ -1,6 +1,6 @@
 # TeamPilot
 
-最近发布版本：[**0.4.0**](https://github.com/Ssshake1996/teampilot/releases/tag/v0.4.0)。提供源码和 Web 构建包，变更见 [CHANGELOG.md](CHANGELOG.md)。
+最近发布版本：[**0.5.0**](https://github.com/Ssshake1996/teampilot/releases/tag/v0.5.0)。提供源码和 Web 构建包，变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 TeamPilot 是一个面向中小团队的独立项目与任务进度管理系统，包含项目管理、任务看板、人员管理、进展汇总、巡检报告和内部平台数据采集。
 
@@ -12,6 +12,7 @@ TeamPilot 是一个面向中小团队的独立项目与任务进度管理系统�
 - 任务数据 Skill：支持用白话描述内部平台 API，生成可执行 Skill，采集外部证据后采纳为任务进展
 - 人员管理：成员列表、个人介绍、技能维度和工作量统计
 - 权限控制：登录认证、角色权限、菜单和接口校验
+- 模型配置：供应商预设与自定义接入，支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages，提供模型获取与调用测试
 - 报告发送：巡检报告支持日报 07:00、周报周五 12:30 自动更新，手动刷新和 SMTP 邮件发送
 
 ## 技术栈

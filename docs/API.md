@@ -56,6 +56,7 @@ id, username, full_name, role, department, bio, avatar_url, is_active, created_a
 | 仪表盘 | `/api/v1/dashboard` | 统计、四象限、项目进度 |
 | 报告 | `/api/v1/reports` | 巡检报告缓存、刷新、周报生成、邮件发送 |
 | 数据 Skill | `/api/v1/data-connectors`, `/api/v1/tasks/{task_id}/data-skills` | 内部平台 API 连接器、任务数据采集 Skill、执行快照和采纳进展 |
+| 模型配置 | `/api/v1/model-providers` | 供应商管理、三种模型协议、模型获取与实际调用测试 |
 | 权限 | `/api/v1/permissions` | 角色权限管理 |
 | WebSocket | `/ws` | 建连后用首条认证消息发送 Token，不放 URL |
 
@@ -87,9 +88,25 @@ curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/signoff \
 
 任务数据 Skill 用于从公司内部平台 API 采集任务完成证据。用户在任务详情里描述数据来源，系统按确定性规则生成 Skill 草稿，测试执行后确认，后续可重复执行。执行结果只有在“采纳进展”后才会写入 `task_events`。
 
-### 数据连接器
+### 模型供应商配置
 
-连接器由系统设置中的“数据连接器”维护，需要 `system.connector_manage` 权限。
+所有接口都需要 `system.model_manage` 权限。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/api/v1/model-providers/catalog` | 协议与供应商预设 |
+| GET / POST | `/api/v1/model-providers` | 列出 / 新增供应商 |
+| PATCH / DELETE | `/api/v1/model-providers/{id}` | 编辑 / 删除供应商 |
+| POST | `/api/v1/model-providers/models` | 用当前表单获取模型列表 |
+| POST | `/api/v1/model-providers/test` | 向当前默认模型发送简短推理请求 |
+
+配置字段包括 `key`、`name`、`protocol`、`base_url`、`api_key`、`headers`、`model_ids`、`default_model`、`is_enabled`、`timeout_seconds` 和 `verify_tls`。协议值为 `openai-completions`、`openai-responses`、`anthropic-messages`。HTTPS 证书校验默认开启。
+
+`api_key` 不回传，输出使用 `has_api_key`。编辑时省略或留空保留原密钥，`clear_api_key=true` 显式清除；自定义请求头的已保存值返回 `__KEEP_SECRET__`，提交相同标记保留同名原值，移除该键后保存则删除它。探测请求可带已有供应商的 `id`，在不回传原密钥的情况下复用凭据。模型列表探测成功不会被当作推理测试成功；推理测试可能产生少量供应商费用。探测接口不保存配置。
+
+### 原业务数据连接器
+
+原业务连接器接口保留供已有任务数据 Skill 使用，需要 `system.model_manage` 权限；旧角色中的 `system.connector_manage` 自动映射为该权限。系统设置中的管理入口现为模型供应商配置，模型配置不会被当作业务取数连接器使用。
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/data-connectors \

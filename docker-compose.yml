@@ -19,6 +19,10 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: deploy.env
+    environment:
+      MODEL_PROVIDER_KEY_FILE: /app/provider-secrets/.model-provider.key
+    volumes:
+      - provider_secrets:/app/provider-secrets
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
@@ -37,3 +41,4 @@ services:
 
 volumes:
   pgdata:
+  provider_secrets:

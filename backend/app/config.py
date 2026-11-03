@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     SMTP_USE_SSL: bool = False
     REPORT_DEFAULT_RECIPIENTS: str = ""
     REPORT_TIMEZONE: str = "Asia/Shanghai"
+    MODEL_PROVIDER_ENCRYPTION_KEY: str = ""
+    MODEL_PROVIDER_KEY_FILE: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

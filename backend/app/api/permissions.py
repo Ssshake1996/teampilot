@@ -7,7 +7,7 @@ from app.database import get_db
 from app.dependencies import get_current_user, get_role_permissions as get_effective_role_permissions, require_permission
 from app.models.system_setting import SystemSetting
 from app.models.user import User
-from app.permissions import BUILTIN_ROLES, DEFAULT_PERMISSIONS, PERMISSION_CATALOG, ROLE_PERMISSIONS_KEY
+from app.permissions import BUILTIN_ROLES, DEFAULT_PERMISSIONS, PERMISSION_CATALOG, ROLE_PERMISSIONS_KEY, normalize_permissions
 
 router = APIRouter(prefix="/permissions", tags=["权限管理"])
 
@@ -18,7 +18,7 @@ async def _get_role_map(db: AsyncSession) -> dict[str, list[str]]:
     ).scalar_one_or_none()
     if not setting or not isinstance(setting.value_json, dict):
         return {}
-    return {str(role): list(permissions or []) for role, permissions in setting.value_json.items()}
+    return {str(role): normalize_permissions(list(permissions or [])) for role, permissions in setting.value_json.items()}
 
 
 async def _save_role_map(db: AsyncSession, role_map: dict[str, list[str]]) -> None:
@@ -86,7 +86,7 @@ async def update_role_permissions(
         raise HTTPException(status_code=400, detail="Role name cannot be empty")
 
     role_map = await _get_role_map(db)
-    role_map[role] = data.permissions
+    role_map[role] = normalize_permissions(data.permissions)
     await _save_role_map(db, role_map)
     return {"message": f"Role '{role}' saved"}
 

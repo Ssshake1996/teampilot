@@ -47,10 +47,18 @@ PERMISSION_CATALOG = {
         "items": [
             ("system.role_manage", "角色权限管理"),
             ("system.skill_manage", "技能标签管理"),
-            ("system.connector_manage", "数据连接器管理"),
+            ("system.model_manage", "模型配置管理"),
         ],
     },
 }
+
+
+def normalize_permissions(permissions: list[str]) -> list[str]:
+    """Keep existing delegated settings access after the feature rename."""
+    return list(dict.fromkeys(
+        "system.model_manage" if permission == "system.connector_manage" else permission
+        for permission in permissions
+    ))
 
 DEFAULT_PERMISSIONS = {
     "admin": [permission for category in PERMISSION_CATALOG.values() for permission, _ in category["items"]],
