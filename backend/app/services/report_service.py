@@ -5,9 +5,11 @@ import smtplib
 from datetime import date, datetime, time, timedelta
 from email.message import EmailMessage
 from typing import Any
+import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, select
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -16,6 +18,7 @@ from app.models.system_setting import SystemSetting
 from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
+from app.models.team_planning import ReportVersion
 from app.services import task_service
 from app.services.report_metrics import progress_rankings
 
@@ -24,12 +27,15 @@ REPORT_SECTIONS = [
     ("project_progress_table", "项目进展情况表"),
     ("risky_projects", "风险项目"),
     ("overdue_blocked_tasks", "逾期 / 阻塞任务"),
-    ("progress_fast_top3", "进展快 TOP3"),
-    ("progress_slow_top3", "进展慢 TOP3"),
+    ("progress_fast_top3", "本期已验收成果"),
+    ("progress_slow_top3", "需支持事项"),
     ("priority_tasks", "优先推进任务"),
     ("signoff_pending", "待会签任务"),
     ("completed_tasks", "已会签完成"),
     ("progress_updates", "进展记录"),
+    ("commitments", "本周承诺"),
+    ("deviations", "承诺偏差"),
+    ("next_steps", "下一步与改进行动"),
 ]
 
 REPORT_SNAPSHOT_KEYS = {
@@ -168,15 +174,16 @@ def _date_value(value: datetime | date | None) -> date | None:
 
 async def generate_weekly_report(
     db: AsyncSession,
+    project_ids=None,
 ) -> dict:
     today = _today()
-    period_start = today - timedelta(days=6)
+    period_start = today - timedelta(days=today.weekday())
     start_dt = datetime.combine(period_start, time.min)
     end_dt = datetime.combine(today, time.max)
     projects = (
         await db.execute(
             select(Project)
-            .where(Project.status != ProjectStatus.ARCHIVED)
+            .where(Project.status != ProjectStatus.ARCHIVED, *([Project.id.in_(project_ids)] if project_ids is not None else []))
             .order_by(Project.created_at.desc())
         )
     ).scalars().all()
@@ -203,6 +210,7 @@ async def generate_weekly_report(
         project_overdue = 0
         project_signoff = 0
         project_priority = 0
+        week_deliveries = 0
         task_items: list[dict] = []
 
         for task in tasks:
@@ -210,6 +218,8 @@ async def generate_weekly_report(
             progress_pct = await task_service.get_task_progress_pct(db, task)
             if status == TaskStatus.DONE:
                 done_tasks += 1
+                if task.signed_off_at and period_start <= task.signed_off_at.date() <= today:
+                    week_deliveries += 1
             elif status == TaskStatus.IN_PROGRESS:
                 in_progress_tasks += 1
             assignees = "、".join(
@@ -283,7 +293,8 @@ async def generate_weekly_report(
             "project_name": project.name,
             "status": project.status.value,
             "progress_pct": progress_pct,
-            "weekly_progress": f"{week_update_count} 条进展",
+            "weekly_progress": f"本周验收交付 {week_deliveries} 项；{week_update_count} 条进展记录（不计个人评分）",
+            "weekly_delivered_count": week_deliveries,
             "task_completion": f"{done_tasks}/{total_tasks}",
             "overdue_tasks": project_overdue,
             "risk_level": risk_level,
@@ -305,6 +316,7 @@ async def generate_weekly_report(
             .where(
                 Project.status != ProjectStatus.ARCHIVED,
                 TaskEvent.event_type == TaskEventType.PROGRESS,
+                *([Project.id.in_(project_ids)] if project_ids is not None else []),
                 TaskEvent.created_at >= start_dt,
                 TaskEvent.created_at <= end_dt,
             )
@@ -327,6 +339,7 @@ async def generate_weekly_report(
             .where(
                 Project.status != ProjectStatus.ARCHIVED,
                 TaskEvent.event_type == TaskEventType.SIGNOFF,
+                *([Project.id.in_(project_ids)] if project_ids is not None else []),
                 TaskEvent.created_at >= start_dt,
                 TaskEvent.created_at <= end_dt,
             )
@@ -396,6 +409,20 @@ async def generate_weekly_report(
         "progress_updates": progress_updates[:30],
     }
 
+    from app.services.task_management_service import list_open_issues
+    from app.services.team_planning_service import weekly_outcomes
+    active_project_ids = [project.id for project in projects]
+    issues = await list_open_issues(db, active_project_ids)
+    if issues:
+        lines = [f"{item['project_name']} / {item['task_title']}：{item['title']}；处理人 {item['owner_name']}；下一步 {item['next_action']}" + ("（已超期，需项目负责人协调）" if item['is_overdue'] else "") for item in issues]
+        rule_report["overdue_blocked_tasks"] = lines + [line for line in rule_report["overdue_blocked_tasks"] if "没有发现" not in line]
+        rule_report["progress_slow_top3"] = lines + [line for line in rule_report["progress_slow_top3"] if "暂无明确" not in line]
+        rule_report["risky_projects"] = list(dict.fromkeys([f"{item['project_name']}：存在未解除阻塞" for item in issues] + [line for line in rule_report["risky_projects"] if "没有发现" not in line]))
+    rule_report["support_needed"] = rule_report["progress_slow_top3"]
+    rule_report["delivered"] = rule_report["progress_fast_top3"]
+    rule_report["project_ids"] = [str(project.id) for project in projects]
+    outcomes = await weekly_outcomes(db, period_start, today, active_project_ids)
+    rule_report.update({key: value for key, value in outcomes.items() if key != "delivered"})
     return rule_report
 
 
@@ -441,19 +468,38 @@ def _is_schedule_due(report_type: str, now: datetime | None = None) -> bool:
 async def generate_report_payload(
     db: AsyncSession,
     report_type: str,
+    project_ids=None,
 ) -> dict:
     if report_type == "daily":
-        return await daily_brief(db)
+        return await daily_brief(db, project_ids=project_ids)
     if report_type == "weekly":
-        return await generate_weekly_report(db)
+        return await generate_weekly_report(db, project_ids=project_ids)
     raise ValueError(f"Unsupported report type: {report_type}")
 
 
-async def get_report_snapshot(db: AsyncSession, report_type: str) -> dict:
+def _audience_id(user: User | None):
+    return user.id if user and user.role != "admin" else None
+
+
+def _audience_key(report_type: str, user: User | None):
+    key = _snapshot_key(report_type)
+    return key + ":" + str(user.id) if _audience_id(user) else key
+
+
+async def _scope_allowed(db: AsyncSession, report: dict, user: User | None) -> bool:
+    if user is None or user.role == "admin":
+        return True
+    from app.services.project_access_service import get_visible_project_ids
+    visible = {str(value) for value in await get_visible_project_ids(db, user)}
+    ids = report.get("project_ids")
+    return isinstance(ids, list) and set(ids).issubset(visible)
+
+
+async def get_report_snapshot(db: AsyncSession, report_type: str, user: User | None = None) -> dict:
     setting = (
-        await db.execute(select(SystemSetting).where(SystemSetting.key == _snapshot_key(report_type)))
+        await db.execute(select(SystemSetting).where(SystemSetting.key == _audience_key(report_type, user)))
     ).scalar_one_or_none()
-    if not setting or not setting.value_json:
+    if not setting or not setting.value_json or not await _scope_allowed(db, setting.value_json.get("report") or {}, user):
         return {
             "report_type": report_type,
             "report": None,
@@ -470,22 +516,36 @@ async def save_report_snapshot(
     report: dict,
     trigger: str,
     now: datetime | None = None,
+    user: User | None = None,
 ) -> dict:
     current = now or _now()
     payload = {
         "report_type": report_type,
-        "report": report,
+        "report": jsonable_encoder(report),
         "generated_at": current.isoformat(timespec="seconds"),
         "schedule_key": _schedule_key(report_type, current),
         "trigger": trigger,
     }
     setting = (
-        await db.execute(select(SystemSetting).where(SystemSetting.key == _snapshot_key(report_type)))
+        await db.execute(select(SystemSetting).where(SystemSetting.key == _audience_key(report_type, user)))
     ).scalar_one_or_none()
+    if setting and setting.value_json.get("report") and not setting.value_json.get("history_id"):
+        legacy = setting.value_json
+        try:
+            legacy_time = datetime.fromisoformat(legacy.get("generated_at", ""))
+        except (ValueError, TypeError):
+            legacy_time = current
+        db.add(ReportVersion(report_type=report_type, report_json=legacy["report"], generated_at=legacy_time,
+                             audience_user_id=_audience_id(user)))
+    version = ReportVersion(report_type=report_type, report_json=payload["report"], generated_at=current,
+                            audience_user_id=_audience_id(user))
+    db.add(version)
+    await db.flush()
+    payload["history_id"] = str(version.id)
     if setting:
-        setting.value_json = payload
+        setting.value_json = dict(payload)
     else:
-        db.add(SystemSetting(key=_snapshot_key(report_type), value_json=payload))
+        db.add(SystemSetting(key=_audience_key(report_type, user), value_json=dict(payload)))
     await db.flush()
     return payload
 
@@ -495,9 +555,30 @@ async def refresh_report_snapshot(
     report_type: str,
     trigger: str = "manual",
     now: datetime | None = None,
+    user: User | None = None,
 ) -> dict:
-    report = await generate_report_payload(db, report_type)
-    return await save_report_snapshot(db, report_type, report, trigger, now)
+    from app.services.project_access_service import get_visible_project_ids
+    project_ids = await get_visible_project_ids(db, user) if user else None
+    report = await generate_report_payload(db, report_type, project_ids=project_ids)
+    return await save_report_snapshot(db, report_type, report, trigger, now, user=user)
+
+
+async def report_history(db: AsyncSession, report_type: str, user: User) -> list[dict]:
+    query = select(ReportVersion).where(ReportVersion.report_type == report_type)
+    if user.role != "admin":
+        query = query.where(ReportVersion.audience_user_id == user.id)
+    rows = (await db.execute(query.order_by(ReportVersion.generated_at.desc(), ReportVersion.id.desc()).limit(100))).scalars().all()
+    return [{"id": row.id, "report_type": row.report_type, "generated_at": row.generated_at,
+             "summary": row.report_json.get("summary", "")} for row in rows if await _scope_allowed(db, row.report_json, user)]
+
+
+async def report_history_item(db: AsyncSession, version_id: uuid.UUID, user: User) -> dict | None:
+    row = await db.get(ReportVersion, version_id)
+    if row is None or (user.role != "admin" and row.audience_user_id != user.id):
+        return None
+    if not await _scope_allowed(db, row.report_json, user):
+        return None
+    return {"id": row.id, "report_type": row.report_type, "generated_at": row.generated_at, "report": row.report_json}
 
 
 async def refresh_due_report(db: AsyncSession, report_type: str, now: datetime | None = None) -> bool:

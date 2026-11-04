@@ -7,6 +7,7 @@ import draggable from 'vuedraggable'
 import { useMediaQuery } from '@vueuse/core'
 import { projectsApi } from '@/api/projects'
 import { tasksApi } from '@/api/tasks'
+import { managementError } from '@/utils/management'
 
 import { usersApi } from '@/api/users'
 import { fetchAllPages } from '@/utils/pagination'
@@ -288,8 +289,8 @@ async function handleSignoffTask(task: Task) {
     if (selectedTask.value?.id === task.id) selectedTask.value = res.data
     syncColumnsFromStore()
     ElMessage.success('任务已会签完成')
-  } catch {
-    ElMessage.error('会签失败，请确认进度已达到 100%')
+  } catch (err: unknown) {
+    ElMessage.error(managementError(err, '会签失败，请检查交付验收要求'))
   }
 }
 
@@ -682,6 +683,7 @@ onMounted(async () => {
     >
       <template v-if="selectedTask">
         <div class="drawer-content">
+          <el-button v-if="!selectedTask.is_deleted" type="primary" plain @click="router.push({ path: '/management', query: { project_id: selectedTask.project_id, task_id: selectedTask.id, tab: 'tasks' } })">责任分工、阻塞与交付验收</el-button>
           <!-- Basic Info -->
           <div class="detail-section">
             <h4>基本信息</h4>

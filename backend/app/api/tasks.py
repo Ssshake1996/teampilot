@@ -110,7 +110,7 @@ async def update_task(
 ):
     await require_task_update_permissions(db, current_user, data)
     try:
-        task = await task_service.update_task(db, task_id, data)
+        task = await task_service.update_task(db, task_id, data, current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not task:
@@ -167,7 +167,10 @@ async def assign_task(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("task.assign")),
 ):
-    task = await task_service.assign_task(db, task_id, data.assignee_ids)
+    try:
+        task = await task_service.assign_task(db, task_id, data.assignee_ids, current_user.id, data.change_reason)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return await task_service.task_to_out(db, task)

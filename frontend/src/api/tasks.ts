@@ -12,7 +12,7 @@ export const tasksApi = {
   get(taskId: string) {
     return http.get<Task>(`/tasks/${taskId}`)
   },
-  update(taskId: string, data: Partial<Task>) {
+  update(taskId: string, data: Partial<Task> & { change_reason?: string }) {
     return http.patch<Task>(`/tasks/${taskId}`, data)
   },
   delete(taskId: string) {
@@ -24,9 +24,10 @@ export const tasksApi = {
   signoff(taskId: string) {
     return http.post<Task>(`/tasks/${taskId}/signoff`)
   },
-  assign(taskId: string, assigneeIds: string[]) {
+  assign(taskId: string, assigneeIds: string[], changeReason?: string) {
     return http.patch<Task>(`/tasks/${taskId}/assign`, {
       assignee_ids: assigneeIds,
+      ...(changeReason ? { change_reason: changeReason } : {}),
     })
   },
   logProgress(taskId: string, data: { progress_pct: number; note?: string; hours_spent?: number }) {

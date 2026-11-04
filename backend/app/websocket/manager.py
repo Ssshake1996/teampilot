@@ -31,6 +31,18 @@ class ConnectionManager:
                 self.disconnect(ws, user_id)
 
     async def broadcast(self, data: dict):
+        project_id = data.get("data", {}).get("project_id")
+        if project_id and self.active_connections:
+            import uuid
+            from app.database import async_session
+            from app.models.user import User
+            from app.services.project_access_service import get_visible_project_ids
+            async with async_session() as db:
+                for user_id in list(self.active_connections):
+                    user = await db.get(User, uuid.UUID(user_id))
+                    if user and user.is_active and uuid.UUID(str(project_id)) in await get_visible_project_ids(db, user):
+                        await self.send_to_user(user_id, data)
+            return
         for user_id in list(self.active_connections.keys()):
             await self.send_to_user(user_id, data)
 

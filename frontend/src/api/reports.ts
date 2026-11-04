@@ -12,7 +12,7 @@ export const reportsApi = {
   weeklyReport() {
     return http.get('/reports/weekly', { timeout: 0 })
   },
-  sendReport(data: { report_type: ReportType; recipients: string[]; report?: Record<string, any>; subject?: string }) {
+  sendReport(data: { report_type: ReportType; recipients: string[]; report?: Record<string, any>; history_id?: string; subject?: string }) {
     return http.post('/reports/send', data)
   },
 }

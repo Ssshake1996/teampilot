@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
 import { computed } from 'vue'
-import { DataAnalysis, FolderOpened, User, Setting, ArrowDown } from '@element-plus/icons-vue'
+import { DataAnalysis, FolderOpened, User, Setting, ArrowDown, Connection } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 
 defineProps<{ collapsed?: boolean }>()
@@ -12,6 +12,7 @@ const auth = useAuthStore()
 const links = [
   { path: '/dashboard', label: '仪表盘', icon: DataAnalysis },
   { path: '/projects', label: '项目管理', icon: FolderOpened },
+  { path: '/management', label: '团队协作', icon: Connection },
   { path: '/personnel', label: '人员管理', icon: User },
   { path: '/settings', label: '系统设置', icon: Setting },
 ]

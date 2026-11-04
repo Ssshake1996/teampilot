@@ -9,6 +9,7 @@ from app.models.user import User
 from app.schemas.user import UserOut, UserUpdate, UserWorkload
 from app.schemas.skill import UserSkillUpdate, UserSkillOut
 from app.services import user_service
+from app.services.project_access_service import get_visible_project_ids
 
 router = APIRouter(prefix="/users", tags=["用户"])
 
@@ -53,7 +54,8 @@ async def users_overview(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    data = await user_service.get_users_overview(db, page, page_size, search, department)
+    data = await user_service.get_users_overview(db, page, page_size, search, department,
+        project_ids=await get_visible_project_ids(db, current_user))
     data["items"] = [
         {
             **item,
@@ -85,7 +87,10 @@ async def deactivate_user(
 ):
     if current_user.id == user_id:
         raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
-    return await user_service.deactivate_user(db, user_id)
+    try:
+        return await user_service.deactivate_user(db, user_id)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
 
 
 @router.get("/{user_id}", response_model=UserOut)
@@ -127,7 +132,7 @@ async def get_user_detail_bundle(
     current_user: User = Depends(get_current_user),
 ):
     await require_detail(db, current_user, user_id)
-    data = await user_service.get_user_detail_bundle(db, user_id)
+    data = await user_service.get_user_detail_bundle(db, user_id, await get_visible_project_ids(db, current_user))
     if not data:
         raise HTTPException(status_code=404, detail="User not found")
     data["user"] = UserOut.model_validate(data["user"])
@@ -141,7 +146,7 @@ async def get_workload(
     current_user: User = Depends(get_current_user),
 ):
     await require_detail(db, current_user, user_id)
-    return await user_service.get_user_workload(db, user_id)
+    return await user_service.get_user_workload(db, user_id, await get_visible_project_ids(db, current_user))
 
 
 @router.get("/{user_id}/tasks")
@@ -151,7 +156,7 @@ async def get_user_tasks(
     current_user: User = Depends(get_current_user),
 ):
     await require_detail(db, current_user, user_id)
-    return await user_service.get_user_tasks(db, user_id)
+    return await user_service.get_user_tasks(db, user_id, await get_visible_project_ids(db, current_user))
 
 
 @router.get("/{user_id}/skills", response_model=list[UserSkillOut])

@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import case, select, func
+from sqlalchemy import case, select, func, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.assignment import Assignment, AssignmentKind
@@ -63,6 +63,13 @@ async def deactivate_user(db: AsyncSession, user_id: uuid.UUID) -> dict:
     user = await get_user(db, user_id)
     if not user:
         raise ValueError("User not found")
+    from app.services.project_access_service import require_completed_handover
+    from app.models.project import ProjectStatus
+    await require_completed_handover(db, user_id)
+    owned = (await db.execute(select(Project.id).where(Project.owner_id == user_id,
+        Project.status != ProjectStatus.ARCHIVED).limit(1))).first()
+    if owned:
+        raise ValueError("该成员仍是未归档项目负责人，请先移交项目负责人")
     user.is_active = False
     await db.flush()
     return {"message": f"User {user.full_name} deactivated"}
@@ -83,7 +90,7 @@ async def update_user(db: AsyncSession, user_id: uuid.UUID, data: UserUpdate) ->
     return user
 
 
-async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
+async def get_user_workload(db: AsyncSession, user_id: uuid.UUID, project_ids: list[uuid.UUID] | None = None) -> dict:
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)
@@ -96,6 +103,7 @@ async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
             Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
             Task.status != TaskStatus.DONE,
             Task.is_deleted == False,
+            Task.project_id.in_(project_ids) if project_ids is not None else true(),
         )
     )
     total = total_q.scalar()
@@ -108,6 +116,7 @@ async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
             Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
             Task.status == TaskStatus.IN_PROGRESS,
             Task.is_deleted == False,
+            Task.project_id.in_(project_ids) if project_ids is not None else true(),
         )
     )
     in_progress = in_progress_q.scalar()
@@ -119,6 +128,7 @@ async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
             Task.status != TaskStatus.DONE,
             Task.is_deleted == False,
             Task.deadline < now,
+            Task.project_id.in_(project_ids) if project_ids is not None else true(),
         )
     )
     overdue = overdue_q.scalar()
@@ -131,6 +141,7 @@ async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
             Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
             Task.status != TaskStatus.DONE,
             Task.is_deleted == False,
+            Task.project_id.in_(project_ids) if project_ids is not None else true(),
         )
     )
     est_hours = float(est_q.scalar())
@@ -142,6 +153,7 @@ async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
             Assignment.user_id == user_id,
             Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
             Task.is_deleted == False,
+            Task.project_id.in_(project_ids) if project_ids is not None else true(),
         )
     )
     act_hours = float(act_q.scalar())
@@ -154,6 +166,7 @@ async def get_user_workload(db: AsyncSession, user_id: uuid.UUID) -> dict:
             Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
             Task.status == TaskStatus.DONE,
             Task.is_deleted == False,
+            Task.project_id.in_(project_ids) if project_ids is not None else true(),
         )
     )
     completed = completed_q.scalar()
@@ -190,7 +203,7 @@ async def get_user_skills(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
     ]
 
 
-async def get_user_tasks(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
+async def get_user_tasks(db: AsyncSession, user_id: uuid.UUID, project_ids: list[uuid.UUID] | None = None) -> list[dict]:
     """Get all tasks assigned to a user with project name."""
     result = await db.execute(
         select(Task, Project.name)
@@ -200,6 +213,7 @@ async def get_user_tasks(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
             Assignment.user_id == user_id,
             Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
             Task.is_deleted == False,
+            Task.project_id.in_(project_ids) if project_ids is not None else true(),
         )
         .order_by(Task.status, Task.deadline)
     )
@@ -240,6 +254,7 @@ async def get_users_overview(
     page_size: int = 100,
     search: str = "",
     department: str = "",
+    project_ids: list[uuid.UUID] | None = None,
 ) -> dict:
     users, total = await list_users(db, page, page_size, search, department)
     user_ids = [u.id for u in users]
@@ -273,6 +288,7 @@ async def get_users_overview(
             Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
             Task.is_deleted == False,
             Task.status != TaskStatus.DONE,
+            Task.project_id.in_(project_ids) if project_ids is not None else true(),
         )
         .group_by(Assignment.user_id)
     )).all()
@@ -292,15 +308,15 @@ async def get_users_overview(
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-async def get_user_detail_bundle(db: AsyncSession, user_id: uuid.UUID) -> dict | None:
+async def get_user_detail_bundle(db: AsyncSession, user_id: uuid.UUID, project_ids: list[uuid.UUID] | None = None) -> dict | None:
     user = await get_user(db, user_id)
     if not user:
         return None
     return {
         "user": user,
         "skills": await get_user_skills(db, user_id),
-        "workload": await get_user_workload(db, user_id),
-        "tasks": await get_user_tasks(db, user_id),
+        "workload": await get_user_workload(db, user_id, project_ids),
+        "tasks": await get_user_tasks(db, user_id, project_ids),
         "capability": _capability_to_dict(user),
     }
 

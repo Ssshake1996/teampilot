@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 — 2026-11-04
+
+- Add a team collaboration workspace for accountable owners, collaborators, handover acceptance, acceptance criteria, delivery evidence and designated review/return decisions.
+- Persist blockers with handlers, next actions, deadlines, overdue escalation owners and resolution records; record schedule, effort and responsibility changes with before/after values and reasons.
+- Plan explicit weekly capacity and per-person leaf-task hours, with visible over-allocation and protection against parent/child double counting.
+- Add milestones, dependency cycle checks, immutable planning baselines, weekly commitments and retrospectives that create owned follow-up tasks.
+- Replace personal fast/slow rankings with delivery evidence and items requiring support; retain report versions and historical commitments when tasks are later reopened.
+- Add company/private project visibility, read-only observers, project leadership transfer and checks before removing, demoting or deactivating people who still hold unfinished responsibilities.
+- Enforce project scope across legacy APIs, dashboards, personnel task aggregates, report caches/history/sending and realtime notifications.
+- Add explicit, repeatable database migrations; existing business records remain intact and legacy tasks are marked for responsibility confirmation rather than assigned arbitrary owners.
+
 ## 0.5.0 — 2026-11-03
 
 - Replace the settings Data Connectors tab with model provider configuration, using provider presets, protocol-specific authentication, custom headers, model discovery/manual selection and inference connection tests.

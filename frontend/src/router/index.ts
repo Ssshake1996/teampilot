@@ -52,6 +52,11 @@ const router = createRouter({
           component: () => import('@/views/personnel/PersonnelDetailView.vue'),
         },
         {
+          path: 'management',
+          name: 'TeamManagement',
+          component: () => import('@/views/management/ManagementView.vue'),
+        },
+        {
           path: 'settings',
           name: 'Settings',
           component: () => import('@/views/settings/SettingsView.vue'),

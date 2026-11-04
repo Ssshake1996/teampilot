@@ -216,6 +216,11 @@ async def reopen_ancestors(db: AsyncSession, task_id: uuid.UUID | None, actor_id
             task.completed_at = task.signed_off_at = task.signed_off_by_id = None
             db.add(TaskEvent(task_id=task.id, actor_id=actor_id, event_type=TaskEventType.REOPEN,
                              note="Task reopened; previous signoff retained in audit history"))
+            from app.models.task_management import TaskGovernance
+            governance = await db.get(TaskGovernance, task.id)
+            if governance:
+                governance.review_status = "not_submitted"
+                governance.review_note = None
         task_id = task.parent_task_id
     await db.flush()
 
@@ -341,6 +346,13 @@ async def sync_task_assignees(
     assignee_ids: list[uuid.UUID],
 ) -> None:
     normalized = normalize_assignee_ids(assignee_ids)
+    from app.models.task_management import TaskGovernance
+    governance = await db.get(TaskGovernance, task.id)
+    if governance and governance.owner_id not in normalized:
+        raise ValueError("不能通过协作人列表移除主责，请在团队管理中办理责任交接。")
+    from app.services.project_access_service import validate_project_user
+    for user_id in normalized:
+        await validate_project_user(db, task.project_id, user_id)
     existing_rows = (
         await db.execute(
             select(Assignment).where(
@@ -591,7 +603,7 @@ async def get_task_descendants(db: AsyncSession, task: Task) -> list[Task]:
     return descendants
 
 
-async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) -> Task | None:
+async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate, actor_id: uuid.UUID | None = None) -> Task | None:
     task = await get_task(db, task_id)
     if not task:
         return None
@@ -600,10 +612,22 @@ async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) ->
         return None
 
     update_data = data.model_dump(exclude_unset=True)
+    change_reason = update_data.pop("change_reason", None)
     if "status" in update_data:
         raise ValueError("Task status is automatic. Submit progress and sign off completed tasks.")
 
     assignee_ids = normalize_assignee_ids(update_data.pop("assignee_ids", None)) if "assignee_ids" in update_data else None
+    audit_fields = {field: getattr(task, field) for field in ("deadline", "start_date", "estimated_hours", "actual_hours") if field in update_data}
+    if assignee_ids is not None:
+        audit_fields["assignee_ids"] = sorted(str(item["user_id"]) for item in (await get_task_assignee_map(db, [task]))[task.id])
+    from app.services.task_management_service import serial
+    prospective = {field: update_data[field] for field in audit_fields if field != "assignee_ids"}
+    if assignee_ids is not None:
+        prospective["assignee_ids"] = sorted(str(value) for value in assignee_ids)
+    from app.models.task_management import TaskGovernance
+    is_change = any(serial(value) != serial(prospective[field]) for field, value in audit_fields.items())
+    if is_change and await db.get(TaskGovernance, task_id) and not (change_reason or "").strip():
+        raise ValueError("调整已明确责任任务的排期、工时或人员时，请填写变更原因。")
     has_weight_update = "weight" in update_data
     requested_weight = update_data.pop("weight", None) if has_weight_update else None
     if has_weight_update and requested_weight is None:
@@ -615,6 +639,11 @@ async def update_task(db: AsyncSession, task_id: uuid.UUID, data: TaskUpdate) ->
         await sync_task_assignees(db, task, assignee_ids)
     if has_weight_update:
         await set_sibling_weight(db, task, requested_weight)
+    after = {field: getattr(task, field) for field in audit_fields if field != "assignee_ids"}
+    if assignee_ids is not None:
+        after["assignee_ids"] = sorted(str(value) for value in assignee_ids)
+    from app.services.task_management_service import record_change
+    await record_change(db, task.id, actor_id, audit_fields, after, change_reason)
     await db.flush()
     await db.refresh(task)
     queue_project_event(db, task.project_id)
@@ -694,6 +723,20 @@ async def signoff_task(db: AsyncSession, task_id: uuid.UUID, user_id: uuid.UUID)
     if task.status == TaskStatus.DONE:
         return task
 
+    from app.models.task_management import TaskGovernance, TaskIssue
+    governance = await db.get(TaskGovernance, task_id)
+    if governance:
+        if governance.reviewer_id != user_id:
+            raise ValueError("只有指定验收人可以会签此任务。")
+        if (governance.review_status != "accepted" or not governance.handover_accepted_at
+                or not governance.acceptance_criteria.strip()
+                or not (governance.deliverable_url or (governance.deliverable_note or "").strip())):
+            raise ValueError("请先完成主责交接、提交成果，并通过指定验收。")
+    unresolved = (await db.execute(select(func.count(TaskIssue.id)).where(
+        TaskIssue.task_id == task_id, TaskIssue.state == "open"))).scalar()
+    if unresolved:
+        raise ValueError("仍有未解决的阻塞问题，无法完成验收。")
+
     progress = await get_task_progress_pct(db, task)
     if progress < 100:
         raise ValueError("Task progress must be 100% before signoff.")
@@ -720,6 +763,8 @@ async def assign_task(
     db: AsyncSession,
     task_id: uuid.UUID,
     assignee_ids: list[uuid.UUID],
+    actor_id: uuid.UUID | None = None,
+    change_reason: str | None = None,
 ) -> Task | None:
     task = await get_task(db, task_id)
     if not task:
@@ -727,7 +772,14 @@ async def assign_task(
     await lock_project(db, task)
     if task.is_deleted:
         return None
+    from app.models.task_management import TaskGovernance
+    before = sorted(str(item["user_id"]) for item in (await get_task_assignee_map(db, [task]))[task.id])
+    if before != sorted(str(value) for value in assignee_ids) and await db.get(TaskGovernance, task_id) and not (change_reason or "").strip():
+        raise ValueError("调整协作者时请填写变更原因。")
     await sync_task_assignees(db, task, normalize_assignee_ids(assignee_ids))
+    from app.services.task_management_service import record_change
+    await record_change(db, task_id, actor_id, {"assignee_ids": before},
+                        {"assignee_ids": sorted(str(value) for value in assignee_ids)}, change_reason)
     await db.refresh(task)
     queue_project_event(db, task.project_id)
     return task

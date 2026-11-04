@@ -154,6 +154,7 @@ onMounted(async () => {
           </el-tag>
         </div>
         <div class="header-actions">
+          <el-button type="primary" plain @click="router.push({ path: '/management', query: { project_id: projectId } })">团队协作工作台</el-button>
           <el-button @click="router.push('/projects')">返回列表</el-button>
         </div>
       </div>

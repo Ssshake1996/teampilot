@@ -1,0 +1,36 @@
+import http from './index'
+import type { Allocation, CapacityPlan, Commitment, Dependency, ManagedTask, Milestone, PlanBaseline, ProjectAccess, ReportHistory, Retrospective, TaskManagementDetail } from '@/types/management'
+
+const base = '/management'
+export const managementApi = {
+  tasks: (projectId?: string) => http.get<ManagedTask[]>(`${base}/tasks`, { params: { project_id: projectId || undefined } }),
+  task: (id: string) => http.get<TaskManagementDetail>(`${base}/tasks/${id}`),
+  responsibility: (id: string, data: { owner_id: string; collaborator_ids: string[]; reviewer_id: string; acceptance_criteria: string; change_reason: string }) => http.put<TaskManagementDetail>(`${base}/tasks/${id}/responsibility`, data),
+  handover: (id: string, note: string) => http.post<TaskManagementDetail>(`${base}/tasks/${id}/handover/accept`, { note }),
+  delivery: (id: string, data: { deliverable_url?: string; deliverable_note?: string }) => http.put<TaskManagementDetail>(`${base}/tasks/${id}/delivery`, data),
+  review: (id: string, decision: 'accept' | 'return', note: string) => http.post<TaskManagementDetail>(`${base}/tasks/${id}/review`, { decision, note }),
+  issue: (id: string, data: Record<string, unknown>) => http.post<TaskManagementDetail>(`${base}/tasks/${id}/issues`, data),
+  updateIssue: (id: string, issueId: string, data: Record<string, unknown>) => http.patch<TaskManagementDetail>(`${base}/tasks/${id}/issues/${issueId}`, data),
+  capacity: (week: string) => http.get<CapacityPlan>(`${base}/capacity`, { params: { week_start: week } }),
+  saveCapacity: (week: string, data: { user_id: string; available_hours: number; note: string }) => http.put<CapacityPlan>(`${base}/capacity`, data, { params: { week_start: week } }),
+  allocate: (data: { task_id: string; user_id: string; week_start: string; hours: number }) => http.post<Allocation>(`${base}/allocations`, data),
+  removeAllocation: (id: string) => http.delete(`${base}/allocations/${id}`),
+  milestones: (projectId: string) => http.get<Milestone[]>(`${base}/milestones`, { params: { project_id: projectId } }),
+  saveMilestone: (data: Record<string, unknown>, id?: string) => id ? http.patch<Milestone>(`${base}/milestones/${id}`, data) : http.post<Milestone>(`${base}/milestones`, data),
+  removeMilestone: (id: string) => http.delete(`${base}/milestones/${id}`),
+  dependencies: (projectId: string) => http.get<Dependency[]>(`${base}/dependencies`, { params: { project_id: projectId } }),
+  depend: (predecessorId: string, successorId: string) => http.post<Dependency>(`${base}/dependencies`, { predecessor_id: predecessorId, successor_id: successorId }),
+  removeDependency: (id: string) => http.delete(`${base}/dependencies/${id}`),
+  baselines: (projectId: string) => http.get<PlanBaseline[]>(`${base}/baselines`, { params: { project_id: projectId } }),
+  freeze: (projectId: string, label: string) => http.post<PlanBaseline>(`${base}/projects/${projectId}/baseline`, { label }),
+  commitments: (projectId: string, week: string) => http.get<Commitment[]>(`${base}/commitments`, { params: { project_id: projectId, week_start: week } }),
+  commit: (data: Record<string, unknown>) => http.post<Commitment>(`${base}/commitments`, data),
+  updateCommitment: (id: string, data: { expected_outcome?: string; outcome_note?: string }) => http.patch<Commitment>(`${base}/commitments/${id}`, data),
+  retrospectives: (projectId: string, week: string) => http.get<Retrospective[]>(`${base}/retrospectives`, { params: { project_id: projectId, week_start: week } }),
+  retrospect: (data: Record<string, unknown>) => http.post<Retrospective>(`${base}/retrospectives`, data),
+  reportHistory: (type: string) => http.get<ReportHistory[]>('/reports/history', { params: { report_type: type } }),
+  reportVersion: (id: string) => http.get<{ id: string; report_type: string; generated_at: string; report: Record<string, unknown> }>(`/reports/history/${id}`),
+  access: (projectId: string) => http.get<ProjectAccess>(`${base}/projects/${projectId}/access`),
+  saveAccess: (projectId: string, visibility: ProjectAccess['visibility']) => http.patch<ProjectAccess>(`${base}/projects/${projectId}/access`, { visibility }),
+  transferOwner: (projectId: string, ownerId: string) => http.patch<ProjectAccess>(`${base}/projects/${projectId}/access`, { owner_id: ownerId }),
+}

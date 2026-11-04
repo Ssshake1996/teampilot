@@ -62,6 +62,7 @@ That means:
 
 - Back up the configured database before upgrading; `backend/scripts/backup_database.py` supports local backups
 - Run `python -m alembic upgrade head` from `backend` before starting the upgraded application
+- v0.6.0 adds explicit migrations through `20261104_05` for team governance, planning, report history and project visibility. Existing projects retain company visibility; legacy tasks retain their data and are flagged for responsibility confirmation rather than given an arbitrary owner.
 - Keep a single backend worker while WebSocket state remains in process; see `MAINTENANCE.md` for migration limits and recovery
 - Restore a verified backup to roll back database changes; do not rebuild or clear an existing database as part of an ordinary update
 

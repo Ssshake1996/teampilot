@@ -91,7 +91,7 @@ const canViewInspectionReport = computed(() => auth.isAuthenticated)
 
 // Create project
 const createDialogVisible = ref(false)
-const createForm = ref({ name: '', goal: '', description: '', start_date: '', end_date: '' })
+const createForm = ref({ name: '', goal: '', description: '', start_date: '', end_date: '', visibility: 'company' as 'company' | 'private' })
 const creating = ref(false)
 
 // Add subtask
@@ -135,6 +135,7 @@ const dailyBriefStatus = ref('')
 const dailyBriefResult = ref<any>(null)
 const dailyBriefLoading = ref(false)
 const reportGeneratedAt = ref<string | null>(null)
+const reportHistoryId = ref<string | null>(null)
 const reportType = ref<ReportType>('daily')
 const reportRecipients = ref('')
 const reportSending = ref(false)
@@ -289,22 +290,34 @@ function taskNameIndentStyle(task: any) {
 
 // ── Inline Edit (admin only) ──
 async function handleAssigneeChange(task: any, newIds: string[]) {
+  let changeReason = ''
   try {
-    const res = await tasksApi.assign(task.id, newIds || [])
+    const result = await ElMessageBox.prompt('请说明人员调整与交接原因。', '调整任务执行成员', { inputType: 'textarea', inputValidator: (text: string) => !!text?.trim() || '请填写调整原因', confirmButtonText: '确认调整', cancelButtonText: '取消' })
+    changeReason = result.value.trim()
+  } catch { return }
+  try {
+    const res = await tasksApi.assign(task.id, newIds || [], changeReason)
     Object.assign(task, res.data)
-  } catch { ElMessage.error('更新失败') }
+  } catch (err: unknown) { ElMessage.error(formatApiError(err, '更新失败，请在责任与交付面板检查主责分工')) }
 }
 
 async function handleFieldUpdate(task: any, field: string, value: any) {
+  let changeReason: string | undefined
+  if (['assignee_ids', 'estimated_hours', 'start_date', 'deadline'].includes(field)) {
+    try {
+      const result = await ElMessageBox.prompt('请说明这次人员或计划调整的原因，记录会与变更一起保存。', '关键计划变更', { inputType: 'textarea', inputValidator: (text: string) => !!text?.trim() || '请填写调整原因', confirmButtonText: '确认调整', cancelButtonText: '取消' })
+      changeReason = result.value.trim()
+    } catch { return }
+  }
   try {
     const fieldValue = field === 'weight' ? value : (value || null)
-    const res = await tasksApi.update(task.id, { [field]: fieldValue } as any)
+    const res = await tasksApi.update(task.id, { [field]: fieldValue, ...(changeReason ? { change_reason: changeReason } : {}) } as any)
     Object.assign(task, res.data)
     const projectId = resolveProjectIdForTask(task)
     if (taskDetail.value?.id === task.id) taskDetail.value = { ...taskDetail.value, ...res.data }
     if (field === 'weight' && projectId) await loadTaskTree(projectId, true)
     if (field === 'start_date' && projectId) await refreshProjectSummary(projectId)
-  } catch { ElMessage.error('更新失败') }
+  } catch (err: unknown) { ElMessage.error(formatApiError(err, '更新失败')) }
 }
 
 function canMoveTaskRow(evt: any) {
@@ -600,7 +613,7 @@ async function submitFeedback() {
 
 
 function openCreateProjectDialog() {
-  createForm.value = { name: '', goal: '', description: '', start_date: '', end_date: '' }
+  createForm.value = { name: '', goal: '', description: '', start_date: '', end_date: '', visibility: 'company' }
 
   createDialogVisible.value = true
 }
@@ -610,12 +623,14 @@ async function loadInspectionReport(type: ReportType, silent = false) {
   reportType.value = type
   dailyBriefResult.value = null
   reportGeneratedAt.value = null
+  reportHistoryId.value = null
   dailyBriefStatus.value = '正在读取巡检报告...'
   dailyBriefLoading.value = true
   try {
     const res = await reportsApi.snapshot(type)
     dailyBriefResult.value = res.data.report || null
     reportGeneratedAt.value = res.data.generated_at || null
+    reportHistoryId.value = res.data.history_id || null
     dailyBriefStatus.value = ''
   } catch (err: any) {
     dailyBriefStatus.value = ''
@@ -645,12 +660,14 @@ async function refreshInspectionReport(type: ReportType = reportType.value, sile
   reportType.value = type
   dailyBriefResult.value = null
   reportGeneratedAt.value = null
+  reportHistoryId.value = null
   dailyBriefStatus.value = type === 'weekly' ? '正在刷新周报...' : '正在刷新巡检报告...'
   dailyBriefLoading.value = true
   try {
     const res = await reportsApi.refresh(type)
     dailyBriefResult.value = res.data.report || null
     reportGeneratedAt.value = res.data.generated_at || null
+    reportHistoryId.value = res.data.history_id || null
     dailyBriefStatus.value = ''
     if (!silent) {
       ElMessage.success('巡检报告已刷新')
@@ -688,7 +705,7 @@ async function sendInspectionReport() {
     await reportsApi.sendReport({
       report_type: reportType.value,
       recipients,
-      report: dailyBriefResult.value,
+      ...(reportHistoryId.value ? { history_id: reportHistoryId.value } : {}),
     })
     ElMessage.success('报告邮件已发送')
   } catch (err: any) {
@@ -758,9 +775,10 @@ async function handleCreate() {
       description: createForm.value.description || undefined,
       start_date: createForm.value.start_date || undefined,
       end_date: createForm.value.end_date || undefined,
+      visibility: createForm.value.visibility,
     })
     ElMessage.success('项目已创建'); createDialogVisible.value = false
-    createForm.value = { name: '', goal: '', description: '', start_date: '', end_date: '' }
+    createForm.value = { name: '', goal: '', description: '', start_date: '', end_date: '', visibility: 'company' }
 
     await loadProjects()
   } catch { ElMessage.error('创建失败') } finally { creating.value = false }
@@ -817,6 +835,7 @@ function goToBoard(pid: string) { router.push(`/projects/${pid}/board`) }
 function asList(value: any): any[] { return Array.isArray(value) ? value : [] }
 const reportSectionKeys = computed(() => {
   const base = ['risky_projects', 'overdue_blocked_tasks', 'progress_fast_top3', 'progress_slow_top3', 'priority_tasks', 'signoff_pending']
+  for (const key of ['commitments', 'deviations', 'next_steps']) if (dailyBriefResult.value?.[key]) base.push(key)
   if (dailyBriefResult.value?.completed_tasks) base.push('completed_tasks')
   if (dailyBriefResult.value?.progress_updates) base.push('progress_updates')
   return base
@@ -825,12 +844,15 @@ function dailySectionLabel(section: string): string {
   return ({
     risky_projects: '风险项目',
     overdue_blocked_tasks: '逾期 / 阻塞任务',
-    progress_fast_top3: '进展快 TOP3',
-    progress_slow_top3: '进展慢 TOP3',
+    progress_fast_top3: '本期已验收成果',
+    progress_slow_top3: '需支持事项',
     priority_tasks: '优先推进任务',
     signoff_pending: '待会签任务',
     completed_tasks: '已会签完成',
     progress_updates: '进展记录',
+    commitments: '本周交付承诺',
+    deviations: '承诺偏差',
+    next_steps: '下一步与负责人',
   } as any)[section] || section
 }
 
@@ -842,8 +864,8 @@ async function handleSignoff(task: any, projectId: string) {
     await loadTaskTree(projectId, true)
     await refreshProjectSummary(projectId)
     ElMessage.success('任务已会签完成')
-  } catch {
-    ElMessage.error('会签失败，请确认进度已达到 100%')
+  } catch (err: unknown) {
+    ElMessage.error(formatApiError(err, '会签失败，请检查交付验收要求'))
   }
 }
 
@@ -1134,6 +1156,7 @@ watch([inlineEditor, draggingTaskId], async () => {
     <el-dialog v-model="createDialogVisible" title="新建项目" width="520px" :close-on-click-modal="false">
       <el-form label-width="80px">
         <el-form-item label="项目名称"><el-input v-model="createForm.name" placeholder="请输入项目名称" /></el-form-item>
+        <el-form-item label="访问范围"><el-select v-model="createForm.visibility" style="width:100%"><el-option label="公司内可见" value="company" /><el-option label="仅项目授权成员" value="private" /></el-select></el-form-item>
         <el-form-item label="项目目标"><el-input v-model="createForm.goal" type="textarea" :rows="2" placeholder="请输入项目目标" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="createForm.description" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="开始日期"><el-date-picker v-model="createForm.start_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
@@ -1251,6 +1274,7 @@ watch([inlineEditor, draggingTaskId], async () => {
 
     <el-drawer v-model="taskDetailVisible" :title="'任务详情 — ' + (taskDetail?.title || '')" size="560px" direction="rtl">
       <div v-if="taskDetail" class="task-detail-drawer">
+        <el-button v-if="!taskDetail.is_deleted" type="primary" plain @click="router.push({ path: '/management', query: { project_id: taskDetail.projectId || taskDetail.project_id, task_id: taskDetail.id, tab: 'tasks' } })">责任分工、阻塞与交付验收</el-button>
         <el-alert
           v-if="taskDetail.is_deleted"
           type="warning"

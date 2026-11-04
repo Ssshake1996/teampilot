@@ -144,9 +144,27 @@
 - `manager`、`member` 默认使用代码内置权限；如果 `role_permissions` 中存在同名角色，则使用配置覆盖。
 - 自定义角色只保存在 `role_permissions` JSON 中，不再单独建表。
 
+## v0.6.0 团队管理数据
+
+新增表通过 `20261104_03`、`20261104_04`、`20261104_05` 显式迁移创建，升级不改写旧业务记录：
+
+| 表 | 用途 |
+| --- | --- |
+| `task_governance` | 每个任务的主责、验收人、标准、交接确认、成果和验收状态 |
+| `task_issues` | 持久阻塞、处理人、期限、下一步和解除记录 |
+| `task_changes` | 计划及责任变更前后值、操作者、原因与时间 |
+| `week_capacities` / `week_allocations` | 人员每周可用工时及按任务分摊的计划工时 |
+| `project_milestones` / `task_dependencies` | 关键交付节点与任务前后依赖 |
+| `plan_baselines` | 不可变的原计划快照，读取时对照当前计划 |
+| `week_commitments` / `retrospectives` | 周承诺、偏差及可追溯的复盘改进行动 |
+| `report_versions` | 每次生成的独立报告版本及授权受众 |
+| `project_access_policies` | 私有项目访问范围，缺省沿用公司内可见 |
+
+历史任务不自动猜测主责；旧会签记录保留，配置新治理流程后执行交接及指定验收约束。当前 `system_settings` 最新报告缓存继续保留，历史版本单独存储。读缓存和历史报告时会重新核对当前项目访问权限。
+
 ## 报告邮件配置
 
-日报和周报发送不新增业务表，使用运行环境变量配置 SMTP：
+日报和周报发送使用运行环境变量配置 SMTP：
 
 - `SMTP_HOST`, `SMTP_PORT`
 - `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`

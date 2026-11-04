@@ -16,7 +16,7 @@ import { usersApi } from '@/api/users'
 import { skillsApi } from '@/api/skills'
 import { useAuthStore } from '@/stores/auth'
 import { useUserStore } from '@/stores/user'
-import type { User, UserSkill, CapabilityProfile } from '@/types/models'
+import type { User, UserSkill } from '@/types/models'
 import { UserRole } from '@/types/enums'
 
 use([CanvasRenderer, RadarChart, TitleComponent, TooltipComponent, RadarComponent])
@@ -32,7 +32,6 @@ const canEditBio = computed(() => auth.user?.id === userId.value || auth.can('pe
 
 const user = ref<User | null>(null)
 const skills = ref<UserSkill[]>([])
-const capability = ref<CapabilityProfile | null>(null)
 const workload = ref<any>(null)
 const userTasks = ref<any[]>([])
 const loading = ref(false)
@@ -94,16 +93,6 @@ const radarOption = computed(() => {
   }
 })
 
-const onTimeRateDisplay = computed(() => {
-  if (capability.value?.on_time_rate == null) return '--'
-  return `${Math.min(capability.value.on_time_rate, 100).toFixed(1)}%`
-})
-
-const performanceScoreDisplay = computed(() => {
-  if (capability.value?.performance_score == null) return '--'
-  return capability.value.performance_score.toFixed(1)
-})
-
 const currentTaskCount = computed(() => {
   return workload.value?.assigned_tasks ?? 0
 })
@@ -131,7 +120,6 @@ async function loadData(force = false) {
     user.value = data.user
     bioDraft.value = data.user?.bio || ''
     skills.value = data.skills || []
-    capability.value = data.capability || null
     workload.value = data.workload || null
     userTasks.value = data.tasks || []
     updatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
@@ -287,14 +275,6 @@ onMounted(() => {
             <div class="ts-item"><span class="ts-val" :style="{ color: (workload?.overdue_tasks ?? 0) > 0 ? '#F56C6C' : '#303133' }">{{ workload?.overdue_tasks ?? 0 }}</span><span class="ts-lbl">已逾期</span></div>
           </div>
         </el-card>
-        <el-card class="stat-card">
-          <div class="stat-value">{{ onTimeRateDisplay }}</div>
-          <div class="stat-label">按时完成率</div>
-        </el-card>
-        <el-card class="stat-card">
-          <div class="stat-value">{{ performanceScoreDisplay }}</div>
-          <div class="stat-label">绩效评分</div>
-        </el-card>
       </div>
 
       <!-- Two-column Layout -->
@@ -446,7 +426,7 @@ onMounted(() => {
 
 .stats-row {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   margin-bottom: 20px;
 }

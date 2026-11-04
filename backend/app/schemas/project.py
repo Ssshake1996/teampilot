@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 from datetime import date, datetime
 
 from pydantic import BaseModel, Field
@@ -12,6 +13,7 @@ class ProjectCreate(BaseModel):
     description: str | None = None
     start_date: date | None = None
     end_date: date | None = None
+    visibility: Literal["company", "private"] = "company"
 
 
 class ProjectUpdate(BaseModel):
@@ -38,6 +40,7 @@ class ProjectOut(BaseModel):
     task_count: int = 0
     completed_count: int = 0
     member_count: int = 0
+    visibility: Literal["company", "private"] = "company"
 
     model_config = {"from_attributes": True}
 

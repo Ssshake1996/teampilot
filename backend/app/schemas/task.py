@@ -33,6 +33,7 @@ class TaskUpdate(BaseModel):
     actual_hours: float | None = None
     start_date: datetime | None = None
     deadline: datetime | None = None
+    change_reason: str | None = Field(default=None, max_length=2000)
 
 
 class TaskOut(BaseModel):
@@ -69,6 +70,7 @@ class TaskOut(BaseModel):
 
 class TaskAssign(BaseModel):
     assignee_ids: list[uuid.UUID] = Field(default_factory=list)
+    change_reason: str | None = Field(default=None, max_length=2000)
 
 
 class TaskReorder(BaseModel):

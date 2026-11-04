@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.assignment import Assignment, AssignmentKind
 from app.models.project import Project, ProjectRole, ProjectStatus
+from app.models.project_access import ProjectAccessPolicy
 from app.models.task import Task, TaskStatus
 from app.models.task_event import TaskEvent, TaskEventType
 from app.models.user import User
@@ -121,6 +122,8 @@ async def projects_to_out(db: AsyncSession, projects: list[Project]) -> list[dic
     member_counts = dict((await db.execute(select(members.c.project_id, func.count()).group_by(members.c.project_id))).all())
     names = dict((await db.execute(select(User.id, User.full_name).where(User.id.in_({p.owner_id for p in projects})))).all())
     contact_map = await get_project_contact_map(db, ids)
+    visibility_map = dict((await db.execute(select(ProjectAccessPolicy.project_id, ProjectAccessPolicy.visibility)
+        .where(ProjectAccessPolicy.project_id.in_(ids)))).all())
     items = []
     for project in projects:
         total, done, pending = stats_by_id.get(project.id, (0, 0, 0))
@@ -136,6 +139,7 @@ async def projects_to_out(db: AsyncSession, projects: list[Project]) -> list[dic
             "contact_user_ids": [item["user_id"] for item in contacts],
             "contact_names": [item["full_name"] for item in contacts if item["full_name"]],
             "task_count": total, "completed_count": done, "member_count": member_counts.get(project.id, 0),
+            "visibility": visibility_map.get(project.id, "company"),
         })
     return items
 
@@ -149,8 +153,11 @@ async def list_projects(
     page: int = 1,
     page_size: int = 20,
     include_archived: bool = False,
+    project_ids: list[uuid.UUID] | None = None,
 ) -> tuple[list[dict], int]:
     base_filter = [] if include_archived else [Project.status != ProjectStatus.ARCHIVED]
+    if project_ids is not None:
+        base_filter.append(Project.id.in_(project_ids))
 
     total = (await db.execute(select(func.count(Project.id)).where(*base_filter))).scalar()
     projects = (
@@ -167,9 +174,11 @@ async def list_projects(
 
 
 async def create_project(db: AsyncSession, data: ProjectCreate, owner_id: uuid.UUID) -> Project:
-    project = Project(**data.model_dump(), owner_id=owner_id)
+    project = Project(**data.model_dump(exclude={"visibility"}), owner_id=owner_id)
     db.add(project)
     await db.flush()
+    if data.visibility == "private":
+        db.add(ProjectAccessPolicy(project_id=project.id, visibility="private", updated_by_id=owner_id))
     db.add(Assignment(
         project_id=project.id,
         user_id=owner_id,
@@ -263,7 +272,15 @@ async def add_project_member(
     user_id: uuid.UUID,
     role: str,
 ) -> None:
-    await get_project(db, project_id, lock=True)
+    project = await get_project(db, project_id, lock=True)
+    candidate = await db.get(User, user_id)
+    if not project or not candidate or not candidate.is_active:
+        raise ValueError("请选择有效项目和在职成员")
+    if role == "observer":
+        if project and project.owner_id == user_id:
+            raise ValueError("请先移交项目负责人，再将原负责人设为观察者")
+        from app.services.project_access_service import require_completed_handover
+        await require_completed_handover(db, user_id, project_id)
     existing = (
         await db.execute(
             select(Assignment).where(
@@ -287,7 +304,13 @@ async def add_project_member(
 
 
 async def remove_project_member(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) -> None:
-    await get_project(db, project_id, lock=True)
+    project = await get_project(db, project_id, lock=True)
+    if not project:
+        raise ValueError("Project not found")
+    if project.owner_id == user_id:
+        raise ValueError("不能直接移除项目负责人")
+    from app.services.project_access_service import require_completed_handover
+    await require_completed_handover(db, user_id, project_id)
     await db.execute(
         delete(Assignment).where(
             Assignment.project_id == project_id,
@@ -296,7 +319,7 @@ async def remove_project_member(db: AsyncSession, project_id: uuid.UUID, user_id
         )
     )
     await db.flush()
-    queue_project_event(db, project_id)
+    queue_project_event(db)
 
 
 async def get_project_task_tree(db: AsyncSession, project_id: uuid.UUID) -> list[dict]:

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select, func, case
+from sqlalchemy import select, func, case, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.assignment import Assignment, AssignmentKind
@@ -20,10 +20,11 @@ _active_task = (
 ).correlate(Task)
 
 
-async def get_overview(db: AsyncSession) -> dict:
+async def get_overview(db: AsyncSession, project_ids: list[uuid.UUID] | None = None) -> dict:
     now = datetime.utcnow()
 
-    base = select(func.count(Task.id)).join(Project, Task.project_id == Project.id).where(Project.status != ProjectStatus.ARCHIVED, Task.is_deleted == False)
+    base = select(func.count(Task.id)).join(Project, Task.project_id == Project.id).where(Project.status != ProjectStatus.ARCHIVED, Task.is_deleted == False,
+        Project.id.in_(project_ids) if project_ids is not None else true())
     total = (await db.execute(base)).scalar()
     in_progress = (await db.execute(base.where(effective_status_sql(now) == TaskStatus.IN_PROGRESS.name))).scalar()
     overdue = (await db.execute(base.where(Task.status != TaskStatus.DONE, Task.deadline < now))).scalar()
@@ -38,7 +39,7 @@ async def get_overview(db: AsyncSession) -> dict:
     }
 
 
-async def get_team_workload(db: AsyncSession) -> list[dict]:
+async def get_team_workload(db: AsyncSession, project_ids: list[uuid.UUID] | None = None) -> list[dict]:
     now = datetime.utcnow()
     users = (
         await db.execute(
@@ -52,7 +53,8 @@ async def get_team_workload(db: AsyncSession) -> list[dict]:
         await db.execute(
             select(Task.id, Task.parent_task_id)
             .join(Project, Task.project_id == Project.id)
-            .where(Project.status != ProjectStatus.ARCHIVED, Task.is_deleted == False)
+            .where(Project.status != ProjectStatus.ARCHIVED, Task.is_deleted == False,
+                Project.id.in_(project_ids) if project_ids is not None else true())
         )
     ).all()
     parent_by_id: dict[uuid.UUID, uuid.UUID | None] = {
@@ -108,6 +110,7 @@ async def get_team_workload(db: AsyncSession) -> list[dict]:
                 Assignment.kind == AssignmentKind.TASK_ASSIGNEE,
                 Project.status != ProjectStatus.ARCHIVED,
                 Task.is_deleted == False,
+                Project.id.in_(project_ids) if project_ids is not None else true(),
             )
         )
     ).all()
@@ -145,7 +148,7 @@ async def get_team_workload(db: AsyncSession) -> list[dict]:
     return list(result_by_user.values())
 
 
-async def get_recent_activity(db: AsyncSession, limit: int = 20) -> list[dict]:
+async def get_recent_activity(db: AsyncSession, limit: int = 20, project_ids: list[uuid.UUID] | None = None) -> list[dict]:
     result = await db.execute(
         select(TaskEvent, User.full_name, Task.title, Project.name, Task.project_id)
         .join(User, TaskEvent.actor_id == User.id)
@@ -155,6 +158,7 @@ async def get_recent_activity(db: AsyncSession, limit: int = 20) -> list[dict]:
             Project.status != ProjectStatus.ARCHIVED,
             Task.is_deleted == False,
             TaskEvent.event_type == TaskEventType.PROGRESS,
+            Project.id.in_(project_ids) if project_ids is not None else true(),
         )
         .order_by(TaskEvent.created_at.desc())
         .limit(limit)
@@ -171,7 +175,7 @@ async def get_recent_activity(db: AsyncSession, limit: int = 20) -> list[dict]:
     ]
 
 
-async def get_my_tasks_quadrant(db: AsyncSession, user_id) -> dict:
+async def get_my_tasks_quadrant(db: AsyncSession, user_id, project_ids: list[uuid.UUID] | None = None) -> dict:
     """Get user's undone tasks grouped into 4 quadrants:
     - urgent_important: high/urgent priority, deadline within 3 days or overdue
     - important_not_urgent: high/urgent priority, deadline > 3 days
@@ -196,6 +200,7 @@ async def get_my_tasks_quadrant(db: AsyncSession, user_id) -> dict:
             Task.status != TaskStatus.DONE,
             Task.is_deleted == False,
             Project.status != ProjectStatus.ARCHIVED,
+            Project.id.in_(project_ids) if project_ids is not None else true(),
         )
         .order_by(Task.deadline.asc().nullslast())
     )
@@ -234,10 +239,11 @@ async def get_my_tasks_quadrant(db: AsyncSession, user_id) -> dict:
     return quadrants
 
 
-async def get_project_progress(db: AsyncSession) -> list[dict]:
+async def get_project_progress(db: AsyncSession, project_ids: list[uuid.UUID] | None = None) -> list[dict]:
     """Get all active projects with task completion stats."""
     result = await db.execute(
-        select(Project).where(Project.status != ProjectStatus.ARCHIVED).order_by(Project.created_at.desc())
+        select(Project).where(Project.status != ProjectStatus.ARCHIVED,
+            Project.id.in_(project_ids) if project_ids is not None else true()).order_by(Project.created_at.desc())
     )
     projects = result.scalars().all()
     stats = (await db.execute(select(

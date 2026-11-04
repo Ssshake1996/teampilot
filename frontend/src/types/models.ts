@@ -28,6 +28,7 @@ export interface Project {
   task_count: number
   completed_count: number
   member_count: number
+  visibility?: 'company' | 'private'
 }
 
 export interface Task {

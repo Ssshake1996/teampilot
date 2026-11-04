@@ -58,6 +58,9 @@ id, username, full_name, role, department, bio, avatar_url, is_active, created_a
 | 数据 Skill | `/api/v1/data-connectors`, `/api/v1/tasks/{task_id}/data-skills` | 内部平台 API 连接器、任务数据采集 Skill、执行快照和采纳进展 |
 | 模型配置 | `/api/v1/model-providers` | 供应商管理、三种模型协议、模型获取与实际调用测试 |
 | 权限 | `/api/v1/permissions` | 角色权限管理 |
+| 团队任务治理 | `/api/v1/management/tasks` | 主责协作、交接、成果验收、持久阻塞和关键变更记录 |
+| 团队计划 | `/api/v1/management` | 周容量/分配、里程碑、依赖、计划基线、周承诺和复盘行动 |
+| 项目访问 | `/api/v1/management/projects/{id}/access` | 公司/私有访问范围、只读观察者及项目负责权移交 |
 | WebSocket | `/ws` | 建连后用首条认证消息发送 Token，不放 URL |
 
 权限接口补充：
@@ -87,6 +90,30 @@ curl -X POST http://localhost:8000/api/v1/tasks/$TASK_ID/signoff \
 ## 任务数据 Skill
 
 任务数据 Skill 用于从公司内部平台 API 采集任务完成证据。用户在任务详情里描述数据来源，系统按确定性规则生成 Skill 草稿，测试执行后确认，后续可重复执行。执行结果只有在“采纳进展”后才会写入 `task_events`。
+
+### 团队协作接口
+
+`/management/tasks` 列出当前可见任务及主责、待验收、阻塞统计；`GET /management/tasks/{id}` 返回治理、问题、变更记录和当前用户的操作能力。
+
+| 方法 | 路径（`/api/v1` 后） | 用途 |
+| --- | --- | --- |
+| PUT | `/management/tasks/{id}/responsibility` | 主责、协作者、验收人、标准及变更原因 |
+| POST | `/management/tasks/{id}/handover/accept` | 新主责接受交接 |
+| PUT / POST | `/management/tasks/{id}/delivery`、`/management/tasks/{id}/review` | 提交成果、指定验收人通过或退回 |
+| POST / PATCH | `/management/tasks/{id}/issues`、`/management/tasks/{id}/issues/{issue_id}` | 创建、认领、延期或解除持续阻塞 |
+| GET / PUT | `/management/capacity?week_start=YYYY-MM-DD` | 周一开始周的人员可用工时 |
+| GET / POST / DELETE | `/management/allocations`、`/management/allocations/{id}` | 末级任务按人的周工时分配 |
+| GET / POST / PATCH / DELETE | `/management/milestones`、`/management/milestones/{id}` | 项目里程碑及关联任务 |
+| GET / POST / DELETE | `/management/dependencies`、`/management/dependencies/{id}` | 前后置依赖及防环校验 |
+| POST / GET | `/management/projects/{id}/baseline`、`/management/baselines?project_id={id}` | 冻结基线及当前偏差 |
+| GET / POST / PATCH | `/management/commitments`、`/management/commitments/{id}` | 周承诺与结果/偏差说明 |
+| GET / POST | `/management/retrospectives` | 周复盘和直接生成改进行动任务 |
+| GET / PATCH | `/management/projects/{id}/access` | 访问范围与项目负责人移交 |
+| GET | `/reports/history?report_type=weekly`、`/reports/history/{id}` | 历史版本目录及按当前权限读取 |
+
+容量、分配、承诺中的 `week_start` 必须是周一。分配只接受当前任务的执行成员，同一成员同一任务同一周重复提交更新原分配；父任务不能与子任务重复计入。过去周不能补建或改写承诺目标，可补结果说明。报告发送支持 `history_id`，普通用户不能通过客户端伪造报告范围；私有项目成员撤销后，相关缓存和历史版本会重新拒绝访问。
+
+`ProjectCreate.visibility` 可为 `company`（缺省）或 `private`。私有范围按项目成员、项目负责人及管理员授权，观察者只读。项目访问接口同时返回 `can_write`、`can_manage`、`owner_id`、`can_transfer_owner`；`PATCH` 可提交 `owner_id` 移交负责权。未完成的执行、验收或阻塞责任须交接后才能移除、降只读或停用成员。
 
 ### 模型供应商配置
 

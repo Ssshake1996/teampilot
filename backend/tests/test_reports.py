@@ -104,12 +104,15 @@ async def test_daily_brief_rule_schema(db_session, test_user):
     assert {key: value for key, value in data.items() if key != "summary"} == {
         "risky_projects": ["今天没有发现明显的项目级风险。"],
         "overdue_blocked_tasks": ["今天没有逾期或明显阻塞的任务。"],
-        "progress_fast_top3": ["今天没有足够数据判断进展较快成员。"],
-        "progress_slow_top3": ["今天没有足够数据判断进展较慢成员。"],
+        "progress_fast_top3": ["本期暂无已验收交付成果。"],
+        "progress_slow_top3": ["当前暂无明确的待支持事项。"],
         "priority_tasks": ["今天没有需要额外优先处理的任务。"],
         "signoff_pending": ["今天没有达到 100% 但待会签的任务。"],
         "source": "rules",
         "source_label": "系统规则巡检",
+        "delivered": ["本期暂无已验收交付成果。"],
+        "support_needed": ["当前暂无明确的待支持事项。"],
+        "project_ids": [],
     }
 
 

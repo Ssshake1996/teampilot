@@ -10,6 +10,7 @@ from app.schemas.project import (
     ProjectCreate, ProjectMemberAdd, ProjectMemberOut, ProjectOut, ProjectUpdate,
 )
 from app.services import project_service
+from app.services.project_access_service import get_visible_project_ids
 
 router = APIRouter(prefix="/projects", tags=["项目"])
 
@@ -22,7 +23,8 @@ async def list_projects(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    items, total = await project_service.list_projects(db, page, page_size, include_archived)
+    items, total = await project_service.list_projects(db, page, page_size, include_archived,
+        project_ids=await get_visible_project_ids(db, current_user))
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -99,7 +101,10 @@ async def add_member(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("project.member.manage")),
 ):
-    await project_service.add_project_member(db, project_id, data.user_id, data.role_in_project.value)
+    try:
+        await project_service.add_project_member(db, project_id, data.user_id, data.role_in_project.value)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
     return {"message": "Member added"}
 
 
@@ -110,5 +115,8 @@ async def remove_member(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("project.member.manage")),
 ):
-    await project_service.remove_project_member(db, project_id, user_id)
+    try:
+        await project_service.remove_project_member(db, project_id, user_id)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
     return {"message": "Member removed"}

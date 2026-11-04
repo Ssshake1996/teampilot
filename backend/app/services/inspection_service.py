@@ -1,4 +1,5 @@
 import json
+import uuid
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -63,11 +64,11 @@ async def _active_users(db: AsyncSession) -> list[dict]:
     ]
 
 
-async def _project_snapshot(db: AsyncSession, include_tasks: bool = True) -> list[dict]:
+async def _project_snapshot(db: AsyncSession, include_tasks: bool = True, project_ids=None) -> list[dict]:
     projects = (
         await db.execute(
             select(Project)
-            .where(Project.status != ProjectStatus.ARCHIVED)
+            .where(Project.status != ProjectStatus.ARCHIVED, *([Project.id.in_(project_ids)] if project_ids is not None else []))
             .order_by(Project.created_at.desc())
         )
     ).scalars().all()
@@ -153,8 +154,8 @@ INSPECTION_REPORT_DEFAULTS = {
     "summary": "当前没有生成有效摘要。",
     "risky_projects": ["今天没有发现明显的项目级风险。"],
     "overdue_blocked_tasks": ["今天没有逾期或明显阻塞的任务。"],
-    "progress_fast_top3": ["今天没有足够数据判断进展较快成员。"],
-    "progress_slow_top3": ["今天没有足够数据判断进展较慢成员。"],
+    "progress_fast_top3": ["本期暂无已验收交付成果。"],
+    "progress_slow_top3": ["当前暂无明确的待支持事项。"],
     "priority_tasks": ["今天没有需要额外优先处理的任务。"],
     "signoff_pending": ["今天没有达到 100% 但待会签的任务。"],
 }
@@ -305,8 +306,9 @@ def _rule_based_inspection_report(
 
 async def daily_brief(
     db: AsyncSession,
+    project_ids=None,
 ) -> dict:
-    projects = await _project_snapshot(db, include_tasks=True)
+    projects = await _project_snapshot(db, include_tasks=True, project_ids=project_ids)
     active_users = await _active_users(db)
     recent_rows = (
         await db.execute(
@@ -317,6 +319,7 @@ async def daily_brief(
             .where(
                 Project.status != ProjectStatus.ARCHIVED,
                 TaskEvent.event_type == TaskEventType.PROGRESS,
+                *([Project.id.in_(project_ids)] if project_ids is not None else []),
             )
             .order_by(TaskEvent.created_at.desc())
             .limit(120)
@@ -333,4 +336,15 @@ async def daily_brief(
         }
         for log, task_title, project_name, user_name in recent_rows
     ]
-    return _rule_based_inspection_report(projects, progress, active_users)
+    report = _rule_based_inspection_report(projects, progress, active_users)
+    from app.services.task_management_service import list_open_issues
+    issues = await list_open_issues(db, [uuid.UUID(project["id"]) for project in projects])
+    if issues:
+        lines = [f"{item['project_name']} / {item['task_title']}：{item['title']}；处理人 {item['owner_name']}；下一步 {item['next_action']}" + ("（已超期，需项目负责人协调）" if item['is_overdue'] else "") for item in issues]
+        report["overdue_blocked_tasks"] = lines + [line for line in report["overdue_blocked_tasks"] if "没有逾期" not in line]
+        report["progress_slow_top3"] = lines + [line for line in report["progress_slow_top3"] if "暂无明确" not in line]
+        report["risky_projects"] = list(dict.fromkeys([f"{item['project_name']}：存在未解除阻塞" for item in issues] + [line for line in report["risky_projects"] if "没有发现" not in line]))
+    report["delivered"] = report["progress_fast_top3"]
+    report["support_needed"] = report["progress_slow_top3"]
+    report["project_ids"] = [project["id"] for project in projects]
+    return report

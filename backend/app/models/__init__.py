@@ -32,3 +32,6 @@ from app.models.task_event import TaskEvent  # noqa: E402, F401
 from app.models.system_setting import SystemSetting  # noqa: E402, F401
 from app.models.skill import Skill, UserSkill  # noqa: E402, F401
 from app.models.data_skill import DataConnector, TaskDataSkill, SkillRun  # noqa: E402, F401
+from app.models.project_access import ProjectAccessPolicy  # noqa: E402, F401
+from app.models.task_management import TaskGovernance, TaskIssue, TaskChange  # noqa: E402, F401
+from app.models.team_planning import WeekCapacity, WeekAllocation, ProjectMilestone, TaskDependency, PlanBaseline, WeekCommitment, Retrospective, ReportVersion  # noqa: E402, F401

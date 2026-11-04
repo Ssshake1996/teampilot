@@ -115,6 +115,7 @@ useProjectUpdates(loadDashboard)
           <div class="data-status" role="status"><span v-if="workload.loading">正在读取预计工时…</span><span v-if="workload.updatedAt">更新于 {{ updatedLabel(workload.updatedAt) }}</span></div>
           <el-alert v-if="workload.error" type="error" :closable="false" :title="workload.error + (workload.data ? '，已保留上次数据' : '')"><el-button link @click="workload.load">重试</el-button></el-alert>
           <p class="metric-note">汇总全部未完成任务，不限定本周；条形长度仅在当前人员间比较，不表示容量利用率。无有效工时的任务按层级暂估 8/4/2h；同一任务会计入每位负责人的总工时。</p>
+          <RouterLink class="capacity-entry" :to="{ path: '/management', query: { tab: 'capacity' } }">打开本周容量排期 →</RouterLink>
           <div v-if="workload.data" class="wl-grid"><div v-for="person in sortedWorkload" :key="person.user_id" class="wl-item"><RouterLink v-if="auth.can('personnel.view_detail') || auth.user?.id === person.user_id" class="wl-name" :to="`/personnel/${person.user_id}`">{{ person.full_name }}</RouterLink><span v-else class="wl-name">{{ person.full_name }}</span><div class="wl-bar-wrap" aria-hidden="true"><div class="wl-bar" :style="{ width: workloadPercent(person.workload_hours) + '%' }"></div></div><span class="wl-hours">{{ formatHours(person.workload_hours) }}h</span><div class="wl-detail"><span>未完成 {{ person.assigned_tasks }} · 进行中 {{ person.in_progress_tasks }}</span><span v-if="person.overdue_tasks" class="overdue">{{ person.overdue_tasks }} 项逾期</span><span v-if="person.fallback_task_count">含 {{ person.fallback_task_count }} 项暂估 {{ formatHours(person.fallback_hours) }}h</span></div></div></div>
           <p v-if="workload.data && !sortedWorkload.length" class="compact-empty">暂无已分配的未完成任务。</p>
         </div>
@@ -124,6 +125,7 @@ useProjectUpdates(loadDashboard)
 </template>
 
 <style scoped>
+.capacity-entry { display:inline-block; font-size:13px; color:var(--brand); margin:0 0 14px; }
 .dashboard-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
 .dashboard-title h1 { font-size:22px; margin:0 0 6px; }
 .dashboard-title p,.metric-note { font-size:12px; color:var(--muted); line-height:1.7; }
