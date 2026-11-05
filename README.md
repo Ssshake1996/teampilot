@@ -1,6 +1,6 @@
 # TeamPilot
 
-最近发布版本：[**0.6.0**](https://github.com/Ssshake1996/teampilot/releases/tag/v0.6.0)。提供源码和 Web 构建包，变更见 [CHANGELOG.md](CHANGELOG.md)。
+最近发布版本：[**0.6.1**](https://github.com/Ssshake1996/teampilot/releases/tag/v0.6.1)。提供源码和 Web 构建包，变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 TeamPilot 是一个面向中小团队的独立项目与任务进度管理系统，包含项目管理、任务看板、人员管理、进展汇总、巡检报告和内部平台数据采集。
 

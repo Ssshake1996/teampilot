@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 — 2026-11-05
+
+- Guard nullable task details inside deferred component slots, including responsibility permissions, handover information, delivery evidence and review controls; missing details keep actions unavailable.
+- Run an explicit forced Vue type-check in CI before unit tests and the production build, without weakening TypeScript null checks or adding non-null assertions.
+- Align application and release metadata at `0.6.1`; no database schema or business workflow changes.
+
 ## 0.6.0 — 2026-11-04
 
 - Add a team collaboration workspace for accountable owners, collaborators, handover acceptance, acceptance criteria, delivery evidence and designated review/return decisions.

@@ -128,20 +128,20 @@ watch(() => props.projectId, () => { detail.value = null; issueVisible.value = f
       <el-alert v-if="error" type="error" :title="error" show-icon :closable="false"><el-button v-if="!detail" link @click="load">重试</el-button></el-alert>
       <el-empty v-if="!selected" description="选择一个任务，明确责任与交付要求" />
       <template v-if="detail">
-        <div class="detail-heading"><h3>{{ detail.task.title }}</h3><el-tag>{{ detail.task.progress_pct }}% · {{ reviewLabels[detail.governance?.review_status || 'not_submitted'] }}</el-tag></div>
+        <div class="detail-heading"><h3>{{ detail?.task.title }}</h3><el-tag>{{ detail?.task.progress_pct }}% · {{ reviewLabels[detail?.governance?.review_status || 'not_submitted'] }}</el-tag></div>
         <el-alert v-if="detail.needs_owner" title="此任务尚未明确单一主责，请在下方完成责任分工。" type="warning" :closable="false" />
         <div class="management-card">
           <h4>责任与验收标准</h4>
-          <el-form label-position="top" :disabled="!!working || !detail.can_manage">
+          <el-form label-position="top" :disabled="!!working || !detail?.can_manage">
             <div class="form-grid"><el-form-item label="交付主责" required><el-select v-model="responsibility.owner_id" filterable placeholder="选择一名主责"><el-option v-for="user in users" :key="user.id" :label="user.full_name" :value="user.id" /></el-select></el-form-item>
               <el-form-item label="指定验收人" required><el-select v-model="responsibility.reviewer_id" filterable placeholder="选择验收人"><el-option v-for="user in users" :key="user.id" :label="user.full_name" :value="user.id" /></el-select></el-form-item></div>
             <el-form-item label="协作者"><el-select v-model="responsibility.collaborator_ids" multiple filterable collapse-tags><el-option v-for="user in users.filter(item => item.id !== responsibility.owner_id)" :key="user.id" :label="user.full_name" :value="user.id" /></el-select></el-form-item>
             <el-form-item label="验收标准" required><el-input v-model="responsibility.acceptance_criteria" type="textarea" :rows="3" placeholder="写清交付内容与通过条件" /></el-form-item>
-            <el-form-item v-if="detail.can_manage" label="分工 / 标准变更原因"><el-input v-model="responsibility.change_reason" placeholder="说明调整原因和交接事项" /></el-form-item>
+            <el-form-item v-if="detail?.can_manage" label="分工 / 标准变更原因"><el-input v-model="responsibility.change_reason" placeholder="说明调整原因和交接事项" /></el-form-item>
           </el-form>
-          <div class="card-actions"><el-button v-if="detail.can_manage" type="primary" :loading="working === 'responsibility'" :disabled="!!working" @click="saveResponsibility">保存分工</el-button>
-            <el-button v-if="detail.can_accept_handover && !detail.governance?.handover_accepted_at" :loading="working === 'handover'" :disabled="!!working" @click="mutate('handover', () => managementApi.handover(selected, '已确认交付要求并接受主责'))">我已确认并接受主责</el-button>
-            <span class="muted">{{ detail.governance?.handover_accepted_at ? `主责已接收 · ${displayDate(detail.governance.handover_accepted_at)}` : '主责尚未接收' }}</span></div>
+          <div class="card-actions"><el-button v-if="detail?.can_manage" type="primary" :loading="working === 'responsibility'" :disabled="!!working" @click="saveResponsibility">保存分工</el-button>
+            <el-button v-if="detail?.can_accept_handover && !detail?.governance?.handover_accepted_at" :loading="working === 'handover'" :disabled="!!working" @click="mutate('handover', () => managementApi.handover(selected, '已确认交付要求并接受主责'))">我已确认并接受主责</el-button>
+            <span class="muted">{{ detail?.governance?.handover_accepted_at ? `主责已接收 · ${displayDate(detail?.governance?.handover_accepted_at)}` : '主责尚未接收' }}</span></div>
         </div>
         <div class="management-card">
           <div class="section-heading"><h4>持续阻塞与协助事项</h4><el-button v-if="canWrite && auth.can('progress.submit')" :disabled="!!working" @click="openIssue()">新增阻塞</el-button></div>
@@ -154,16 +154,16 @@ watch(() => props.projectId, () => { detail.value = null; issueVisible.value = f
         </div>
         <div class="management-card">
           <h4>提交成果与验收</h4>
-          <el-form label-position="top" :disabled="!!working || !detail.can_deliver">
+          <el-form label-position="top" :disabled="!!working || !detail?.can_deliver">
             <el-form-item label="成果链接"><el-input v-model="delivery.deliverable_url" placeholder="https://…" /></el-form-item>
             <el-form-item label="成果说明"><el-input v-model="delivery.deliverable_note" type="textarea" :rows="3" placeholder="说明交付内容、验证结果及对应验收标准" /></el-form-item>
           </el-form>
-          <p v-if="safeEvidenceUrl(detail.governance?.deliverable_url)"><a :href="safeEvidenceUrl(detail.governance?.deliverable_url)" target="_blank" rel="noopener noreferrer">打开已提交的成果</a></p>
-          <el-button v-if="detail.can_deliver" type="primary" :disabled="!!working" :loading="working === 'delivery'" @click="submitDelivery">提交成果待验收</el-button>
-          <el-alert v-if="detail.governance?.review_note" :title="`验收意见：${detail.governance.review_note}`" :type="detail.governance.review_status === 'changes_requested' ? 'warning' : 'success'" :closable="false" />
-          <div v-if="detail.can_review" class="review-actions"><el-input v-model="reviewNote" type="textarea" :rows="2" placeholder="验收意见；退回时说明需要补齐的内容" :disabled="!!working" /><div class="card-actions"><el-button type="success" :disabled="!!working || detail.task.progress_pct < 100 || detail.governance?.review_status !== 'submitted'" :loading="working === 'review'" @click="review('accept')">通过验收并完成</el-button><el-button type="warning" :disabled="!!working || detail.governance?.review_status !== 'submitted'" @click="review('return')">退回补充</el-button><span class="muted">通过验收需进度达到 100%。</span></div></div>
+          <p v-if="safeEvidenceUrl(detail?.governance?.deliverable_url)"><a :href="safeEvidenceUrl(detail?.governance?.deliverable_url)" target="_blank" rel="noopener noreferrer">打开已提交的成果</a></p>
+          <el-button v-if="detail?.can_deliver" type="primary" :disabled="!!working" :loading="working === 'delivery'" @click="submitDelivery">提交成果待验收</el-button>
+          <el-alert v-if="detail?.governance?.review_note" :title="`验收意见：${detail?.governance?.review_note}`" :type="detail?.governance?.review_status === 'changes_requested' ? 'warning' : 'success'" :closable="false" />
+          <div v-if="detail?.can_review" class="review-actions"><el-input v-model="reviewNote" type="textarea" :rows="2" placeholder="验收意见；退回时说明需要补齐的内容" :disabled="!!working" /><div class="card-actions"><el-button type="success" :disabled="!!working || (detail?.task.progress_pct ?? 0) < 100 || detail?.governance?.review_status !== 'submitted'" :loading="working === 'review'" @click="review('accept')">通过验收并完成</el-button><el-button type="warning" :disabled="!!working || detail?.governance?.review_status !== 'submitted'" @click="review('return')">退回补充</el-button><span class="muted">通过验收需进度达到 100%。</span></div></div>
         </div>
-        <div v-if="detail.can_manage && (auth.can('task.set_deadline') || auth.can('task.set_hours'))" class="management-card">
+        <div v-if="detail?.can_manage && (auth.can('task.set_deadline') || auth.can('task.set_hours'))" class="management-card">
           <h4>调整计划</h4><el-form label-position="top" :disabled="!!working"><div class="form-grid"><el-form-item v-if="auth.can('task.set_deadline')" label="当前截止日期"><el-date-picker v-model="plan.deadline" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" /></el-form-item><el-form-item v-if="auth.can('task.set_hours')" label="预估工时"><el-input-number v-model="plan.estimated_hours" :min="0" :precision="1" /></el-form-item></div><el-form-item label="变更原因" required><el-input v-model="plan.change_reason" placeholder="说明范围、资源或计划发生了什么变化" /></el-form-item><el-button :loading="working === 'plan'" :disabled="!!working" @click="savePlan">保存计划变更</el-button></el-form>
         </div>
         <div class="management-card"><h4>关键变更记录</h4><p v-if="!detail.changes.length" class="muted">暂无关键变更记录。</p><article v-for="change in detail.changes" :key="change.id" class="change-row"><strong>{{ change.actor_name }} · {{ displayDate(change.created_at) }}</strong><p>{{ change.reason || '未填写原因' }}</p><p v-for="(value, field) in change.after_json" :key="field">{{ changeLabels[field] || '其他调整' }}：{{ changeValue(field, change.before_json[field]) }} → {{ changeValue(field, value) }}</p></article></div>
