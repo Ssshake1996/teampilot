@@ -97,7 +97,9 @@ async def test_milestone_membership_and_immutable_baseline(client, auth_headers,
 
 
 @pytest.mark.asyncio
-async def test_retrospective_action_creates_linked_owned_task(client, auth_headers, test_user):
+async def test_retrospective_action_creates_linked_owned_task(client, auth_headers, test_user, monkeypatch):
+    # Keep the commitment's week current for this fixed-date scenario.
+    monkeypatch.setattr("app.services.team_planning_service.local_today", lambda: date(2026, 11, 4))
     user, _ = test_user
     project, tasks = await setup_project(client, auth_headers)
     commitment = await client.post("/api/v1/management/commitments", headers=auth_headers, json={"task_id": tasks[0]["id"], "owner_id": str(user.id), "week_start": "2026-11-02", "expected_outcome": "Reviewed evidence"})
