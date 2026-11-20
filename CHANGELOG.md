@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2 — 2026-11-20
+
+- Replace the task delivery URL placeholder with plain text to avoid the `vue-tsc 3.3.14` virtual-code generator treating URL slashes as a comment and reporting false nullable-detail errors.
+- Validate forced type checking, unit tests and complete production builds with both the locked `vue-tsc 3.2.6` / TypeScript `6.0.2` toolchain and `vue-tsc 3.3.14` / TypeScript `6.0.3` in CI.
+- Retain existing null guards, runtime permissions, delivery behavior and the application dependency lockfile; align release metadata at `0.6.2` without database schema changes.
+
 ## 0.6.1 — 2026-11-05
 
 - Guard nullable task details inside deferred component slots, including responsibility permissions, handover information, delivery evidence and review controls; missing details keep actions unavailable.

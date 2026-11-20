@@ -155,7 +155,7 @@ watch(() => props.projectId, () => { detail.value = null; issueVisible.value = f
         <div class="management-card">
           <h4>提交成果与验收</h4>
           <el-form label-position="top" :disabled="!!working || !detail?.can_deliver">
-            <el-form-item label="成果链接"><el-input v-model="delivery.deliverable_url" placeholder="https://…" /></el-form-item>
+            <el-form-item label="成果链接"><el-input v-model="delivery.deliverable_url" placeholder="填写成果链接" /></el-form-item>
             <el-form-item label="成果说明"><el-input v-model="delivery.deliverable_note" type="textarea" :rows="3" placeholder="说明交付内容、验证结果及对应验收标准" /></el-form-item>
           </el-form>
           <p v-if="safeEvidenceUrl(detail?.governance?.deliverable_url)"><a :href="safeEvidenceUrl(detail?.governance?.deliverable_url)" target="_blank" rel="noopener noreferrer">打开已提交的成果</a></p>

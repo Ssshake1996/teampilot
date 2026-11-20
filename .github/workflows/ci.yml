@@ -28,7 +28,18 @@ jobs:
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:test-only-password@localhost:5432/teampilot_test
   frontend:
+    name: frontend (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - toolchain: locked
+            vue_tsc: '3.2.6'
+            typescript: '6.0.2'
+          - toolchain: newer
+            vue_tsc: '3.3.14'
+            typescript: '6.0.3'
     defaults:
       run:
         working-directory: frontend
@@ -40,6 +51,17 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - name: Install newer checker without changing the lockfile
+        if: matrix.toolchain == 'newer'
+        run: npm install --no-save vue-tsc@${{ matrix.vue_tsc }} typescript@${{ matrix.typescript }}
+      - run: npm ls vue-tsc typescript
+      - name: Verify checker versions and unchanged dependency files
+        env:
+          EXPECTED_VUE_TSC: ${{ matrix.vue_tsc }}
+          EXPECTED_TYPESCRIPT: ${{ matrix.typescript }}
+        run: |
+          node -e "const assert = require('node:assert/strict'); assert.equal(require('vue-tsc/package.json').version, process.env.EXPECTED_VUE_TSC); assert.equal(require('typescript/package.json').version, process.env.EXPECTED_TYPESCRIPT)"
+          git diff --exit-code -- package.json package-lock.json
       - run: npm run type-check -- --force
       - run: npm run test:unit
       - run: npm run build
